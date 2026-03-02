@@ -2,6 +2,24 @@
 
 A comprehensive school bus tracking and management system built with React (frontend) and Express (backend). The application provides real-time GPS tracking, attendance management, and role-based dashboards for parents, drivers, and administrators. It features comprehensive fleet management capabilities, admin-driver coordination system, and role-based authentication. The system uses shadcn/ui components and integrates with PostgreSQL via Drizzle ORM for data persistence. The project's ambition is to provide a multi-tenant solution for various school districts.
 
+## Native Mobile (Capacitor)
+
+The app is configured for iOS and Android native deployment using Capacitor.
+
+**Key files:**
+- `capacitor.config.ts` — App ID, name, web directory, plugin configuration
+- `scripts/setup-native.sh` — Local setup script for generating ios/android native folders
+
+**Local build flow (run on your machine, not in Replit):**
+1. `git clone https://github.com/shaun-holden/school-bus-tracker`
+2. `npm install`
+3. `bash scripts/setup-native.sh` — builds the app and adds iOS/Android platforms
+4. `PRODUCTION_SERVER_URL=https://your-app.up.railway.app npx cap sync` — point to your deployed backend
+5. `npx cap open ios` (Mac + Xcode required) or `npx cap open android` (Android Studio)
+
+**App ID:** `com.schoolbustracker.app`
+**Plugins installed:** PushNotifications, Geolocation, StatusBar, Keyboard, Haptics
+
 # User Preferences
 
 Preferred communication style: Simple, everyday language.
