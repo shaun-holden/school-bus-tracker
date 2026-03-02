@@ -95,6 +95,14 @@ const busAssignmentSchema = z.object({
   busId: z.string().min(1, "Bus is required"),
 });
 
+// Invite employee schema
+const inviteEmployeeSchema = z.object({
+  firstName: z.string().min(1, "First name is required"),
+  lastName: z.string().min(1, "Last name is required"),
+  email: z.string().email("Invalid email address"),
+  role: z.enum(["driver", "admin"]),
+});
+
 // Notification schema for parent alerts
 const notificationSchema = z.object({
   type: z.enum(["delay", "emergency", "info", "route_change"]),
@@ -1202,6 +1210,7 @@ export default function AdminDashboard() {
   const [deletingBus, setDeletingBus] = useState<any>(null);
   const [isDriverDialogOpen, setIsDriverDialogOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<any>(null);
+  const [isInviteEmployeeDialogOpen, setIsInviteEmployeeDialogOpen] = useState(false);
   const [showSuccessDialog, setShowSuccessDialog] = useState(false);
   const [successMessage, setSuccessMessage] = useState("");
   const [showStudentSuccessDialog, setShowStudentSuccessDialog] = useState(false);
@@ -1459,6 +1468,11 @@ export default function AdminDashboard() {
       emergencyContactName: "",
       emergencyContactPhone: "",
     },
+  });
+
+  const inviteEmployeeForm = useForm<z.infer<typeof inviteEmployeeSchema>>({
+    resolver: zodResolver(inviteEmployeeSchema),
+    defaultValues: { firstName: "", lastName: "", email: "", role: "driver" },
   });
 
   // Form for route assignment
@@ -1968,6 +1982,29 @@ export default function AdminDashboard() {
       toast({
         title: "Error",
         description: error?.message || "Failed to update driver",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const inviteEmployeeMutation = useMutation({
+    mutationFn: async (data: z.infer<typeof inviteEmployeeSchema>) => {
+      return await apiRequest("/api/employees/invite", "POST", data);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/drivers"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/drivers/active"] });
+      inviteEmployeeForm.reset();
+      setIsInviteEmployeeDialogOpen(false);
+      toast({
+        title: "Invitation Sent",
+        description: "The employee has been added and an invitation email has been sent.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error?.message || "Failed to send invitation",
         variant: "destructive",
       });
     },
@@ -4169,13 +4206,103 @@ export default function AdminDashboard() {
                 <CardHeader>
                   <div className="flex justify-between items-center">
                     <CardTitle>Driver Management</CardTitle>
-                    <Dialog open={isDriverDialogOpen} onOpenChange={setIsDriverDialogOpen}>
-                      <DialogTrigger asChild>
-                        <Button data-testid="button-add-driver">
-                          <Plus className="w-4 h-4 mr-2" />
-                          Add Driver
-                        </Button>
-                      </DialogTrigger>
+                    <div className="flex gap-2">
+                      <Dialog open={isInviteEmployeeDialogOpen} onOpenChange={setIsInviteEmployeeDialogOpen}>
+                        <DialogTrigger asChild>
+                          <Button variant="outline" data-testid="button-invite-employee">
+                            <Send className="w-4 h-4 mr-2" />
+                            Invite Employee
+                          </Button>
+                        </DialogTrigger>
+                        <DialogContent className="sm:max-w-[440px]">
+                          <DialogHeader>
+                            <DialogTitle>Invite Employee</DialogTitle>
+                            <DialogDescription>
+                              Enter the employee's details and choose their role. They will receive an email to set up their password.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <Form {...inviteEmployeeForm}>
+                            <form onSubmit={inviteEmployeeForm.handleSubmit((data) => inviteEmployeeMutation.mutate(data))} className="space-y-4">
+                              <div className="grid grid-cols-2 gap-3">
+                                <FormField
+                                  control={inviteEmployeeForm.control}
+                                  name="firstName"
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>First Name</FormLabel>
+                                      <FormControl>
+                                        <Input placeholder="Jane" {...field} />
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                                <FormField
+                                  control={inviteEmployeeForm.control}
+                                  name="lastName"
+                                  render={({ field }) => (
+                                    <FormItem>
+                                      <FormLabel>Last Name</FormLabel>
+                                      <FormControl>
+                                        <Input placeholder="Smith" {...field} />
+                                      </FormControl>
+                                      <FormMessage />
+                                    </FormItem>
+                                  )}
+                                />
+                              </div>
+                              <FormField
+                                control={inviteEmployeeForm.control}
+                                name="email"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Email Address</FormLabel>
+                                    <FormControl>
+                                      <Input type="email" placeholder="jane@example.com" {...field} />
+                                    </FormControl>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <FormField
+                                control={inviteEmployeeForm.control}
+                                name="role"
+                                render={({ field }) => (
+                                  <FormItem>
+                                    <FormLabel>Role</FormLabel>
+                                    <Select onValueChange={field.onChange} defaultValue={field.value}>
+                                      <FormControl>
+                                        <SelectTrigger>
+                                          <SelectValue placeholder="Select a role" />
+                                        </SelectTrigger>
+                                      </FormControl>
+                                      <SelectContent>
+                                        <SelectItem value="driver">Driver</SelectItem>
+                                        <SelectItem value="admin">Administrator</SelectItem>
+                                      </SelectContent>
+                                    </Select>
+                                    <FormMessage />
+                                  </FormItem>
+                                )}
+                              />
+                              <Button type="submit" className="w-full" disabled={inviteEmployeeMutation.isPending}>
+                                {inviteEmployeeMutation.isPending ? (
+                                  <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Sending Invitation...</>
+                                ) : (
+                                  <><Send className="w-4 h-4 mr-2" />Send Invitation</>
+                                )}
+                              </Button>
+                            </form>
+                          </Form>
+                        </DialogContent>
+                      </Dialog>
+                      <Dialog open={isDriverDialogOpen} onOpenChange={setIsDriverDialogOpen}>
+                        <DialogTrigger asChild>
+                          <Button data-testid="button-add-driver">
+                            <Plus className="w-4 h-4 mr-2" />
+                            Add Driver
+                          </Button>
+                        </DialogTrigger>
                       <DialogContent className="sm:max-w-[600px]">
                         <DialogHeader>
                           <DialogTitle>
@@ -4374,6 +4501,7 @@ export default function AdminDashboard() {
                         </Form>
                       </DialogContent>
                     </Dialog>
+                  </div>
                   </div>
                 </CardHeader>
                 <CardContent>

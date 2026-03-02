@@ -6,7 +6,8 @@ import { useAuth } from "@/hooks/use-auth";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
-import { Users, Car, Shield } from "lucide-react";
+import { Users, Car, Shield, Lock } from "lucide-react";
+import { useLocation } from "wouter";
 
 const roles = [
   {
@@ -39,7 +40,36 @@ export default function RoleSelection() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [, setLocation] = useLocation();
   const [selectedRole, setSelectedRole] = useState<string>((user as any)?.role || '');
+
+  const userRole = (user as any)?.role;
+  const isAdmin = userRole === 'admin' || userRole === 'master_admin';
+
+  if (!isAdmin && (userRole === 'parent' || userRole === 'driver')) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <Card className="max-w-md w-full text-center">
+          <CardHeader>
+            <div className="flex justify-center mb-4">
+              <div className="bg-red-100 w-16 h-16 rounded-full flex items-center justify-center">
+                <Lock className="w-8 h-8 text-red-500" />
+              </div>
+            </div>
+            <CardTitle className="text-xl">Access Restricted</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-gray-600 mb-6">
+              Role changes can only be made by an administrator. Please contact your administrator if you need your role updated.
+            </p>
+            <Button onClick={() => setLocation("/")} className="w-full">
+              Go to My Dashboard
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const updateRoleMutation = useMutation({
     mutationFn: async (role: string) => {
@@ -52,20 +82,17 @@ export default function RoleSelection() {
     onSuccess: () => {
       toast({
         title: "Role Updated",
-        description: "Your role has been successfully updated. Redirecting...",
+        description: "Role has been successfully updated. Redirecting...",
       });
-      // Invalidate user data to refresh the role
       queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
-      // Redirect after a short delay
       setTimeout(() => {
         window.location.href = "/";
       }, 1500);
     },
     onError: (error) => {
-      console.error("Role update error:", error);
       toast({
         title: "Error",
-        description: `Failed to update role: ${error.message || 'Please try again.'}`,
+        description: `Failed to update role: ${(error as any).message || 'Please try again.'}`,
         variant: "destructive",
       });
     },
@@ -82,11 +109,10 @@ export default function RoleSelection() {
       <div className="max-w-6xl mx-auto">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-4">
-            Choose Your Role
+            Change User Role
           </h1>
           <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-            Select the role that best describes your position in the school bus tracking system. 
-            You can change this later in your profile settings.
+            As an administrator, you can update your role in the system.
           </p>
         </div>
 
@@ -94,13 +120,13 @@ export default function RoleSelection() {
           {roles.map((role) => {
             const Icon = role.icon;
             const isSelected = selectedRole === role.id;
-            
+
             return (
-              <Card 
-                key={role.id} 
+              <Card
+                key={role.id}
                 className={`cursor-pointer transition-all duration-200 ${
-                  isSelected 
-                    ? 'ring-2 ring-primary border-primary shadow-lg' 
+                  isSelected
+                    ? 'ring-2 ring-primary border-primary shadow-lg'
                     : 'hover:shadow-md border-gray-200'
                 }`}
                 onClick={() => setSelectedRole(role.id)}
@@ -145,7 +171,7 @@ export default function RoleSelection() {
           >
             {updateRoleMutation.isPending ? "Updating..." : "Continue to Dashboard"}
           </Button>
-          
+
           {(user as any)?.role && (
             <div className="mt-4">
               <p className="text-sm text-gray-500 mb-2">

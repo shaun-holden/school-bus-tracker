@@ -49,16 +49,18 @@ export default function Navigation() {
                 </Button>
               </Link>
             )}
-            <Button 
-              variant="ghost"
-              size="sm"
-              className="text-white hover:bg-blue-700"
-              onClick={() => window.location.href = '/select-role'}
-              data-testid="button-change-role"
-            >
-              <UserCog className="w-4 h-4 mr-1" />
-              Change Role
-            </Button>
+            {(user?.role === 'admin' || user?.role === 'master_admin') && (
+              <Button 
+                variant="ghost"
+                size="sm"
+                className="text-white hover:bg-blue-700"
+                onClick={() => window.location.href = '/select-role'}
+                data-testid="button-change-role"
+              >
+                <UserCog className="w-4 h-4 mr-1" />
+                Change Role
+              </Button>
+            )}
             <Button 
               variant="ghost"
               className="text-white hover:bg-blue-700"

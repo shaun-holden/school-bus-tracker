@@ -4,6 +4,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { runMigrations } from 'stripe-replit-sync';
 import { getStripeSync } from './stripeClient';
 import { WebhookHandlers } from './webhookHandlers';
+import { seedMasterAdmin } from '../scripts/seed-master-admin';
 
 const app = express();
 
@@ -113,6 +114,8 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  await seedMasterAdmin().catch(err => console.error('Master admin seed error:', err));
+
   const server = await registerRoutes(app);
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

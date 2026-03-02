@@ -16,7 +16,7 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
-import { sendDriverInvitationEmail } from "./emailService";
+import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup custom email/password authentication
@@ -25,48 +25,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Note: /api/auth/login, /api/auth/register, /api/auth/logout, /api/auth/user 
   // are defined in customAuth.ts
 
-  // Update user role
+  // Update user role — admin only
   app.patch('/api/users/:id/role', isAuthenticated, async (req: any, res) => {
     try {
       const { id } = req.params;
       const { role } = req.body;
-      const userId = req.user?.id;
-      
-      console.log("Role update request:", { id, role, userId, user: req.user });
-      
-      // Only allow users to update their own role
-      if (id !== userId) {
-        console.log("Unauthorized role update attempt:", { id, userId });
-        return res.status(403).json({ message: "Unauthorized: Can only update your own role" });
+      const requestingUser = req.user;
+
+      // Only admins (and master_admin) may change roles
+      if (!requestingUser || (requestingUser.role !== 'admin' && requestingUser.role !== 'master_admin')) {
+        return res.status(403).json({ message: "Unauthorized: Only administrators can change roles" });
       }
-      
+
       // Validate role
       if (!['parent', 'driver', 'admin'].includes(role)) {
-        console.log("Invalid role:", role);
         return res.status(400).json({ message: "Invalid role" });
       }
-      
-      // Check if user exists first
+
+      // Check if user exists
       const existingUser = await storage.getUser(id);
       if (!existingUser) {
-        console.log("User not found:", id);
         return res.status(404).json({ message: "User not found" });
       }
 
       // Prevent changing master_admin role
       if (existingUser.role === 'master_admin') {
-        console.log("Cannot change master_admin role:", id);
         return res.status(403).json({ message: "Cannot change master admin role" });
       }
-      
-      console.log("Updating role for user:", { id, role, existingRole: existingUser.role });
+
       const updatedUser = await storage.updateUserRole(id, role);
       if (!updatedUser) {
-        console.log("Role update failed for user:", id);
         return res.status(404).json({ message: "User not found" });
       }
-      
-      console.log("Role updated successfully:", { id, newRole: updatedUser.role });
+
       res.json(updatedUser);
     } catch (error) {
       console.error("Error updating user role:", error);
@@ -354,6 +345,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid driver data", errors: error.errors });
       }
       res.status(500).json({ message: "Failed to create driver" });
+    }
+  });
+
+  // Invite employee (driver or admin) via email — admin only
+  app.post('/api/employees/invite', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const requestingUser = await storage.getUser(userId);
+      if (!requestingUser || requestingUser.role !== 'admin') {
+        return res.status(403).json({ message: "Unauthorized - admin required" });
+      }
+
+      const { firstName, lastName, email, role } = req.body;
+      if (!firstName || !lastName || !email || !['driver', 'admin'].includes(role)) {
+        return res.status(400).json({ message: "firstName, lastName, email, and role (driver or admin) are required" });
+      }
+
+      // Check plan limits
+      if (requestingUser.companyId) {
+        const canCreate = await storage.canCreateUser(requestingUser.companyId, role);
+        if (!canCreate.allowed) {
+          return res.status(403).json({ message: canCreate.reason });
+        }
+      }
+
+      // Create the employee user
+      const newEmployee = await storage.createEmployee({
+        firstName,
+        lastName,
+        email,
+        role,
+        companyId: requestingUser.companyId,
+      });
+
+      // Send invitation email
+      try {
+        const company = requestingUser.companyId ? await storage.getCompanyById(requestingUser.companyId) : null;
+        const companyName = company?.name || "School Bus Service";
+        const token = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+        await storage.createDriverInvitation(newEmployee.id, email, requestingUser.companyId!, tokenHash, expiresAt);
+
+        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+        const host = req.headers['x-forwarded-host'] || req.get('host');
+        const setupUrl = `${protocol}://${host}/driver/password-setup?token=${token}`;
+
+        await sendEmployeeInvitationEmail(email, `${firstName} ${lastName}`.trim(), role, companyName, setupUrl);
+      } catch (emailError) {
+        console.error("Error sending employee invitation email:", emailError);
+      }
+
+      res.json(newEmployee);
+    } catch (error) {
+      console.error("Error inviting employee:", error);
+      res.status(500).json({ message: "Failed to invite employee" });
     }
   });
 
@@ -4333,6 +4381,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching company:", error);
       res.status(500).json({ message: "Failed to fetch company" });
+    }
+  });
+
+  // Get platform stats for master admin
+  app.get('/api/master-admin/stats', isAuthenticated, isMasterAdmin, async (req: any, res) => {
+    try {
+      const companies = await storage.getAllCompanies();
+      const stats = {
+        total: companies.length,
+        pending: companies.filter(c => c.status === 'pending_approval').length,
+        approved: companies.filter(c => c.status === 'approved').length,
+        suspended: companies.filter(c => c.status === 'suspended').length,
+        rejected: companies.filter(c => c.status === 'rejected').length,
+        billingActive: companies.filter(c => c.billingStatus === 'active').length,
+        billingPastDue: companies.filter(c => c.billingStatus === 'past_due').length,
+        billingTrialing: companies.filter(c => c.billingStatus === 'trialing').length,
+        billingNone: companies.filter(c => !c.billingStatus || c.billingStatus === 'none').length,
+        planStarter: companies.filter(c => (c as any).planType === 'starter').length,
+        planProfessional: companies.filter(c => (c as any).planType === 'professional').length,
+        planEnterprise: companies.filter(c => (c as any).planType === 'enterprise').length,
+      };
+      res.json(stats);
+    } catch (error) {
+      console.error("Error fetching stats:", error);
+      res.status(500).json({ message: "Failed to fetch stats" });
     }
   });
 

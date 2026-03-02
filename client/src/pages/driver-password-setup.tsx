@@ -176,7 +176,7 @@ export default function DriverPasswordSetupPage() {
             </div>
             <CardTitle className="text-2xl">Password Set Up!</CardTitle>
             <CardDescription>
-              Your driver account is now ready. You can log in with your email and password.
+              Your account is now ready. You can log in with your email and password.
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center">
@@ -202,7 +202,7 @@ export default function DriverPasswordSetupPage() {
           </div>
           <CardTitle className="text-2xl">Welcome, {driverName}!</CardTitle>
           <CardDescription>
-            Set up your password to complete your driver account registration.
+            Set up your password to complete your account registration.
           </CardDescription>
         </CardHeader>
         <CardContent>

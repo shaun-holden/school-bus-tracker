@@ -109,7 +109,8 @@ export interface IStorage {
   deactivateDriver(driverId: string, companyId: string): Promise<User | undefined>;
   reactivateDriver(driverId: string, companyId: string): Promise<User | undefined>;
   createDriver(driverData: UpsertUser): Promise<User>;
-  
+  createEmployee(data: { firstName: string; lastName: string; email: string; role: 'driver' | 'admin'; companyId?: string | null }): Promise<User>;
+
   // User count operations for plan limits
   getStaffUserCount(companyId: string): Promise<number>;
   getParentUserCount(companyId: string): Promise<number>;
@@ -491,6 +492,22 @@ export class DatabaseStorage implements IStorage {
       })
       .returning();
     return driver;
+  }
+
+  async createEmployee(data: { firstName: string; lastName: string; email: string; role: 'driver' | 'admin'; companyId?: string | null }): Promise<User> {
+    const [employee] = await db
+      .insert(users)
+      .values({
+        id: crypto.randomUUID(),
+        firstName: data.firstName,
+        lastName: data.lastName,
+        email: data.email,
+        role: data.role,
+        companyId: data.companyId ?? null,
+        isActive: true,
+      })
+      .returning();
+    return employee;
   }
 
   // User count operations for plan limits

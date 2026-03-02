@@ -223,3 +223,52 @@ export async function sendDriverInvitationEmail(
     return { success: false, error };
   }
 }
+
+export async function sendEmployeeInvitationEmail(
+  toEmail: string,
+  employeeName: string,
+  role: string,
+  companyName: string,
+  setupUrl: string
+) {
+  try {
+    const { client, fromEmail } = await getResendClient();
+    const senderEmail = fromEmail || 'noreply@tntgym.org';
+    const roleLabel = role === 'admin' ? 'Administrator' : 'Driver';
+
+    const result = await client.emails.send({
+      from: senderEmail,
+      to: toEmail,
+      subject: `Welcome to ${companyName} - Set Up Your ${roleLabel} Account`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #f97316;">Welcome to SchoolBus Tracker!</h2>
+          <p>Hello ${employeeName},</p>
+          <p>You have been invited to join <strong>${companyName}</strong> as a <strong>${roleLabel}</strong>. Please set up your password to access your dashboard:</p>
+          <p style="margin: 24px 0;">
+            <a href="${setupUrl}" style="background-color: #f97316; color: white; padding: 12px 24px; text-decoration: none; border-radius: 6px; display: inline-block;">
+              Set Up Your Password
+            </a>
+          </p>
+          <p style="color: #666; font-size: 14px;">
+            This link will expire in 24 hours. If you did not expect this invitation, you can safely ignore this email.
+          </p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
+          <p style="color: #999; font-size: 12px;">
+            SchoolBus Tracker - Safe transportation for your children
+          </p>
+        </div>
+      `
+    });
+
+    if (result.error) {
+      console.error('Resend API error:', result.error);
+      return { success: false, error: result.error };
+    }
+
+    return { success: true, data: result };
+  } catch (error) {
+    console.error('Failed to send employee invitation email:', error);
+    return { success: false, error };
+  }
+}
