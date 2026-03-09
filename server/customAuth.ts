@@ -236,6 +236,16 @@ export async function setupCustomAuth(app: Express) {
     if (!req.isAuthenticated()) {
       return res.status(401).json({ message: "Unauthorized" });
     }
+    const user = req.user as any;
+    const impersonatedCompanyId = (req.session as any)?.impersonatedCompanyId;
+    if (user.role === 'master_admin' && impersonatedCompanyId) {
+      return res.json({
+        ...user,
+        companyId: impersonatedCompanyId,
+        role: 'admin',
+        _masterAdminImpersonating: true,
+      });
+    }
     res.json(req.user);
   });
 

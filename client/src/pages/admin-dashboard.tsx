@@ -24,7 +24,8 @@ import {
   Users, UserCheck, Car, Settings, Plus, FileText, Calendar, 
   AlertTriangle, CheckCircle, Fuel, Wrench, Shield, MapPin, Edit, Clock, X, Calculator,
   Trash2, GraduationCap, Route as RouteIcon, Loader2, ChevronUp, ChevronDown, Edit2, Eye,
-  Power, User, MessageSquare, Bell, Send, Archive, RotateCcw, RefreshCw, ClipboardList
+  Power, User, MessageSquare, Bell, Send, Archive, RotateCcw, RefreshCw, ClipboardList,
+  ShieldAlert, ArrowLeft
 } from "lucide-react";
 import { calculateRouteDuration, formatDuration, geocodeAddress, calculateRouteFromStops, type Coordinates } from "@/lib/distanceUtils";
 import { ShiftReports } from "@/components/admin/ShiftReports";
@@ -2566,8 +2567,38 @@ export default function AdminDashboard() {
   const maintenanceBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'maintenance') : [];
   const availableBuses = idleBuses.length;
   
+  const isImpersonating = !!(user as any)?._masterAdminImpersonating;
+
+  const stopImpersonatingMutation = useMutation({
+    mutationFn: () => apiRequest('/api/master-admin/stop-impersonating', 'POST'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
+      window.location.href = '/';
+    },
+  });
+
   return (
     <div className="min-h-screen bg-background">
+      {isImpersonating && (
+        <div className="bg-orange-500 text-white px-4 py-2 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <ShieldAlert className="w-4 h-4" />
+            <span className="text-sm font-medium">
+              Master Admin View — You are managing this company as an admin
+            </span>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            className="text-orange-700 border-orange-200 bg-white hover:bg-orange-50 h-7 text-xs"
+            onClick={() => stopImpersonatingMutation.mutate()}
+            disabled={stopImpersonatingMutation.isPending}
+          >
+            <ArrowLeft className="w-3 h-3 mr-1" />
+            {stopImpersonatingMutation.isPending ? "Exiting..." : "Exit to Master Admin"}
+          </Button>
+        </div>
+      )}
       <Navigation />
       
       {/* Header */}

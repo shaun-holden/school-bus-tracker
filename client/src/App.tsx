@@ -26,8 +26,8 @@ function Router() {
 
   useEffect(() => {
     if (isAuthenticated && user?.id) {
-      // Skip role updates for master_admin users
-      if (user?.role === 'master_admin') {
+      // Skip role updates for master_admin users and impersonated sessions
+      if (user?.role === 'master_admin' || (user as any)?._masterAdminImpersonating) {
         sessionStorage.removeItem('pendingRole');
         return;
       }

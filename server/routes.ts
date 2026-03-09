@@ -25,6 +25,56 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Note: /api/auth/login, /api/auth/register, /api/auth/logout, /api/auth/user 
   // are defined in customAuth.ts
 
+  // ============ MASTER ADMIN IMPERSONATION MIDDLEWARE ============
+  // When a master_admin is impersonating a company, overlay their companyId and role
+  // so all existing admin routes work without modification.
+  app.use((req: any, res, next) => {
+    const impersonatedCompanyId = req.session?.impersonatedCompanyId;
+    if (req.user && req.user.role === 'master_admin' && impersonatedCompanyId) {
+      req.user = {
+        ...req.user,
+        companyId: impersonatedCompanyId,
+        role: 'admin',
+        _masterAdminImpersonating: true,
+      };
+    }
+    next();
+  });
+
+  // Start impersonating a company (master admin only)
+  app.post('/api/master-admin/impersonate/:companyId', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const realUser = await storage.getUser(userId);
+      if (!realUser || realUser.role !== 'master_admin') {
+        return res.status(403).json({ message: "Only master admins can impersonate companies" });
+      }
+      const { companyId } = req.params;
+      const company = await storage.getCompanyById(companyId);
+      if (!company) return res.status(404).json({ message: "Company not found" });
+      req.session.impersonatedCompanyId = companyId;
+      res.json({ success: true, companyId, companyName: company.name });
+    } catch (error) {
+      console.error("Impersonation error:", error);
+      res.status(500).json({ message: "Failed to start impersonation" });
+    }
+  });
+
+  // Stop impersonating — return to master admin view
+  app.post('/api/master-admin/stop-impersonating', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const realUser = await storage.getUser(userId);
+      if (!realUser || realUser.role !== 'master_admin') {
+        return res.status(403).json({ message: "Forbidden" });
+      }
+      delete req.session.impersonatedCompanyId;
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ message: "Failed to stop impersonation" });
+    }
+  });
+
   // Update user role — admin only
   app.patch('/api/users/:id/role', isAuthenticated, async (req: any, res) => {
     try {

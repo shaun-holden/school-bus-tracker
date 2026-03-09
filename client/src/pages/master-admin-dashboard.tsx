@@ -41,6 +41,7 @@ import {
   ShieldAlert,
   Package,
   RefreshCw,
+  Settings,
 } from "lucide-react";
 import type { Company } from "@shared/schema";
 
@@ -66,6 +67,16 @@ export default function MasterAdminDashboard() {
   const { data: stats } = useQuery<any>({
     queryKey: ['/api/master-admin/stats'],
     refetchInterval: 30000,
+  });
+
+  const impersonateMutation = useMutation({
+    mutationFn: (companyId: string) =>
+      apiRequest(`/api/master-admin/impersonate/${companyId}`, 'POST'),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
+      window.location.href = '/';
+    },
+    onError: () => toast({ title: "Failed to switch to admin view", variant: "destructive" }),
   });
 
   const approveMutation = useMutation({
@@ -329,6 +340,7 @@ export default function MasterAdminDashboard() {
                     getBillingBadge={getBillingBadge}
                     getPlanBadge={getPlanBadge}
                     onAction={handleAction}
+                    onImpersonate={(c) => impersonateMutation.mutate(c.id)}
                     showPlan
                   />
                 )}
@@ -356,6 +368,7 @@ export default function MasterAdminDashboard() {
                     getBillingBadge={getBillingBadge}
                     getPlanBadge={getPlanBadge}
                     onAction={handleAction}
+                    onImpersonate={(c) => impersonateMutation.mutate(c.id)}
                     showPlan
                   />
                 )}
@@ -386,6 +399,7 @@ export default function MasterAdminDashboard() {
                     getBillingBadge={getBillingBadge}
                     getPlanBadge={getPlanBadge}
                     onAction={handleAction}
+                    onImpersonate={(c) => impersonateMutation.mutate(c.id)}
                     showPlan
                   />
                 )}
@@ -413,6 +427,7 @@ export default function MasterAdminDashboard() {
                     getBillingBadge={getBillingBadge}
                     getPlanBadge={getPlanBadge}
                     onAction={handleAction}
+                    onImpersonate={(c) => impersonateMutation.mutate(c.id)}
                     showPlan
                     showStatus
                   />
@@ -474,6 +489,7 @@ function CompanyTable({
   getBillingBadge,
   getPlanBadge,
   onAction,
+  onImpersonate,
   showPlan,
   showStatus,
 }: {
@@ -482,6 +498,7 @@ function CompanyTable({
   getBillingBadge: (s: string) => JSX.Element;
   getPlanBadge: (s: string) => JSX.Element;
   onAction: (c: Company, a: "approve" | "reject" | "suspend") => void;
+  onImpersonate: (c: Company) => void;
   showPlan?: boolean;
   showStatus?: boolean;
 }) {
@@ -526,6 +543,12 @@ function CompanyTable({
               </TableCell>
               <TableCell>
                 <div className="flex gap-2 flex-wrap">
+                  {company.status === "approved" && (
+                    <Button size="sm" variant="secondary" onClick={() => onImpersonate(company)}>
+                      <Settings className="w-3 h-3 mr-1" />
+                      Manage as Admin
+                    </Button>
+                  )}
                   {company.status === "pending_approval" && (
                     <>
                       <Button size="sm" onClick={() => onAction(company, "approve")}>
