@@ -1,7 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
-import { runMigrations } from 'stripe-replit-sync';
 import { getStripeSync } from './stripeClient';
 import { WebhookHandlers } from './webhookHandlers';
 import { seedMasterAdmin } from '../scripts/seed-master-admin';
@@ -17,12 +16,17 @@ async function initStripe() {
 
   try {
     console.log('Initializing Stripe schema...');
+    const { runMigrations } = await import('stripe-replit-sync');
     await runMigrations({ databaseUrl });
     console.log('Stripe schema ready');
+  } catch (error) {
+    console.error('Stripe schema migration skipped:', error);
+    return;
+  }
 
+  try {
     const stripeSync = await getStripeSync();
 
-    console.log('Setting up managed webhook...');
     const webhookBaseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
     if (webhookBaseUrl && webhookBaseUrl !== 'https://undefined') {
       try {
@@ -41,16 +45,13 @@ async function initStripe() {
       console.log('Webhook setup skipped - no domain available');
     }
 
-    console.log('Syncing Stripe data...');
     stripeSync.syncBackfill()
       .then(() => console.log('Stripe data synced'))
       .catch((err: any) => console.error('Error syncing Stripe data:', err));
   } catch (error) {
-    console.error('Failed to initialize Stripe:', error);
+    console.error('Stripe sync skipped (no credentials configured):', (error as Error).message);
   }
 }
-
-initStripe().catch(console.error);
 
 app.post(
   '/api/stripe/webhook',
@@ -126,19 +127,12 @@ app.use((req, res, next) => {
     throw err;
   });
 
-  // importantly only setup vite in development and after
-  // setting up all the other routes so the catch-all route
-  // doesn't interfere with the other routes
   if (app.get("env") === "development") {
     await setupVite(app, server);
   } else {
     serveStatic(app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
   const port = parseInt(process.env.PORT || '5000', 10);
   server.listen({
     port,
@@ -146,5 +140,7 @@ app.use((req, res, next) => {
     reusePort: true,
   }, () => {
     log(`serving on port ${port}`);
+    // Initialize Stripe after server is already listening so failures don't crash startup
+    initStripe().catch(err => console.error('Stripe init error (non-fatal):', err));
   });
 })();
