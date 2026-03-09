@@ -1,4 +1,6 @@
 import express, { type Request, Response, NextFunction } from "express";
+import fs from "fs";
+import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { getStripeSync } from './stripeClient';
@@ -127,7 +129,14 @@ app.use((req, res, next) => {
     throw err;
   });
 
-  if (app.get("env") === "development") {
+  // Use Vite in development, static files in production.
+  // Check NODE_ENV first, but also verify built files exist as a fallback.
+  // This handles Replit deployment containers that may not set NODE_ENV reliably.
+  const builtClientPath = path.resolve(process.cwd(), "dist", "public", "index.html");
+  const builtFilesExist = fs.existsSync(builtClientPath);
+  const isDev = process.env.NODE_ENV === "development" || !builtFilesExist;
+
+  if (isDev) {
     await setupVite(app, server);
   } else {
     serveStatic(app);
