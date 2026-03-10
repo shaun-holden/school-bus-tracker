@@ -1028,34 +1028,34 @@ export default function DriverDashboard() {
       <AppNavigation />
       
       {/* Header */}
-      <div className="bg-primary text-white py-6">
+      <div className="bg-primary text-white py-4 sm:py-6">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div>
-              <h1 className="text-2xl font-bold">Driver Management Dashboard</h1>
-              <p className="text-blue-100">Comprehensive bus fleet and student management</p>
+              <h1 className="text-xl sm:text-2xl font-bold">Driver Management Dashboard</h1>
+              <p className="text-blue-100 text-sm sm:text-base">Comprehensive bus fleet and student management</p>
             </div>
-            <div className="flex items-center space-x-4">
+            <div className="flex items-center space-x-3">
               <Button
                 onClick={toggleDutyStatus}
                 disabled={toggleDutyMutation.isPending}
                 size="sm"
-                className={isOnDuty 
-                  ? "bg-green-600 hover:bg-green-700 text-white" 
+                className={isOnDuty
+                  ? "bg-green-600 hover:bg-green-700 text-white"
                   : "bg-gray-600 hover:bg-gray-700 text-white"
                 }
                 data-testid="button-duty-toggle"
               >
                 <Power className="w-4 h-4 mr-2" />
-                {toggleDutyMutation.isPending 
-                  ? "Updating..." 
-                  : isOnDuty 
-                    ? "On Duty" 
+                {toggleDutyMutation.isPending
+                  ? "Updating..."
+                  : isOnDuty
+                    ? "On Duty"
                     : "Off Duty"
                 }
               </Button>
-              <Badge 
-                variant="secondary" 
+              <Badge
+                variant="secondary"
                 className={isOnDuty ? "bg-green-500" : "bg-gray-500"}
               >
                 <CheckCircle className="w-4 h-4 mr-1" />
