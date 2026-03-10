@@ -1193,24 +1193,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/students', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      const user = await storage.getUser(userId);
-      
-      if (!user || !isAdminRole(user.role)) {
-        return res.status(403).json({ message: "Unauthorized" });
-      }
-
-      const validatedData = insertStudentSchema.parse(req.body);
-      const student = await storage.createStudent(validatedData);
-      res.json(student);
-    } catch (error) {
-      console.error("Error creating student:", error);
-      res.status(500).json({ message: "Failed to create student" });
-    }
-  });
-
   // Route management
   app.get('/api/routes', isAuthenticated, async (req: any, res) => {
     try {
@@ -2439,10 +2421,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validatedData = insertStudentSchema.parse(req.body);
-      
+
       // If parent is creating, ensure they're creating for themselves
       if (user.role === 'parent') {
         validatedData.parentId = userId;
+      }
+
+      // Set companyId from the admin's company if not provided
+      if (!validatedData.companyId && user.companyId) {
+        validatedData.companyId = user.companyId;
       }
 
       const student = await storage.createStudent(validatedData);
