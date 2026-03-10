@@ -370,13 +370,13 @@ export default function AuthPage() {
                           <FormLabel>Business ID *</FormLabel>
                           <FormControl>
                             <Input
-                              placeholder="Enter the business ID from your employer"
+                              placeholder="e.g. tnt-gym-transport"
                               data-testid="input-register-business-id"
                               {...field}
                             />
                           </FormControl>
                           <p className="text-xs text-muted-foreground">
-                            Ask your company administrator for the Business ID.
+                            Ask your company administrator for the Business ID (company slug).
                           </p>
                           <FormMessage />
                         </FormItem>

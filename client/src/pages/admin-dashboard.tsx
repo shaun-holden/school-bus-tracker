@@ -26,7 +26,7 @@ import {
   AlertTriangle, CheckCircle, Fuel, Wrench, Shield, MapPin, Edit, Clock, X, Calculator,
   Trash2, GraduationCap, Route as RouteIcon, Loader2, ChevronUp, ChevronDown, Edit2, Eye,
   Power, User, MessageSquare, Bell, Send, Archive, RotateCcw, RefreshCw, ClipboardList,
-  ShieldAlert, ArrowLeft
+  ShieldAlert, ArrowLeft, Building
 } from "lucide-react";
 import { calculateRouteDuration, formatDuration, geocodeAddress, calculateRouteFromStops, type Coordinates } from "@/lib/distanceUtils";
 import { ShiftReports } from "@/components/admin/ShiftReports";
@@ -2862,6 +2862,38 @@ export default function AdminDashboard() {
           {/* Fleet Management Tab */}
           <TabsContent value="fleet">
             <div className="space-y-6">
+              {/* Business ID for driver registration */}
+              {(myCompany as any)?.slug && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <CardTitle className="flex items-center gap-2">
+                      <Building className="w-5 h-5 text-blue-600" />
+                      Business ID
+                    </CardTitle>
+                    <CardDescription>
+                      Share this ID with drivers so they can register and join your company.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="flex items-center gap-3">
+                      <code className="bg-muted px-4 py-2 rounded-md text-lg font-mono font-semibold tracking-wide">
+                        {(myCompany as any).slug}
+                      </code>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          navigator.clipboard.writeText((myCompany as any).slug);
+                          toast({ title: "Copied!", description: "Business ID copied to clipboard" });
+                        }}
+                      >
+                        Copy
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
               {/* Homebase Address Setting */}
               <Card>
                 <CardHeader className="pb-3">
