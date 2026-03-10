@@ -131,7 +131,7 @@ export async function setupCustomAuth(app: Express) {
 
   app.post("/api/auth/register", async (req, res) => {
     try {
-      const { email, password, firstName, lastName, companySlug } = req.body;
+      const { email, password, firstName, lastName, companySlug, role } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
@@ -140,6 +140,9 @@ export async function setupCustomAuth(app: Express) {
       if (password.length < 8) {
         return res.status(400).json({ message: "Password must be at least 8 characters" });
       }
+
+      // Validate role - only parent and driver allowed via self-registration
+      const userRole = (role === 'driver') ? 'driver' : 'parent';
 
       const existingUser = await storage.getUserByEmail(email);
       if (existingUser) {
@@ -150,15 +153,20 @@ export async function setupCustomAuth(app: Express) {
       if (companySlug) {
         const company = await storage.getCompanyBySlug(companySlug);
         if (!company) {
-          return res.status(400).json({ message: "Invalid company" });
+          return res.status(400).json({ message: "Invalid Business ID. Please check with your employer." });
+        }
+        if (company.status !== 'approved') {
+          return res.status(400).json({ message: "This company is not currently active. Please contact your employer." });
         }
         companyId = company.id;
 
-        // Check plan limits for parent registration
-        const canCreate = await storage.canCreateUser(companyId, 'parent');
+        // Check plan limits
+        const canCreate = await storage.canCreateUser(companyId, userRole);
         if (!canCreate.allowed) {
           return res.status(403).json({ message: canCreate.reason });
         }
+      } else if (userRole === 'driver') {
+        return res.status(400).json({ message: "Business ID is required for driver registration" });
       }
 
       const hashedPassword = await hashPassword(password);
@@ -168,7 +176,7 @@ export async function setupCustomAuth(app: Express) {
         firstName: firstName || null,
         lastName: lastName || null,
         companyId,
-        role: 'parent',
+        role: userRole,
       }, hashedPassword);
 
       req.login({

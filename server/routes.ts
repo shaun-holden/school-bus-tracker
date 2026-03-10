@@ -17,6 +17,15 @@ import {
 import { z } from "zod";
 import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
+import { pushService } from "./pushService";
+
+function isAdminRole(role: string | undefined | null): boolean {
+  return role === 'admin' || role === 'master_admin' || role === 'driver_admin';
+}
+
+function isDriverRole(role: string | undefined | null): boolean {
+  return role === 'driver' || role === 'driver_admin';
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup custom email/password authentication
@@ -75,7 +84,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ============================================
+  // DEVICE TOKEN REGISTRATION (Push Notifications)
+  // ============================================
+
+  // Register a device token for push notifications
+  app.post('/api/device-tokens', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      const { token, platform } = req.body;
+      if (!token || !platform) {
+        return res.status(400).json({ message: "Token and platform are required" });
+      }
+
+      if (!['ios', 'android', 'web'].includes(platform)) {
+        return res.status(400).json({ message: "Platform must be ios, android, or web" });
+      }
+
+      const deviceToken = await storage.registerDeviceToken(userId, token, platform);
+      res.json({ success: true, id: deviceToken.id });
+    } catch (error) {
+      console.error("Error registering device token:", error);
+      res.status(500).json({ message: "Failed to register device token" });
+    }
+  });
+
+  // Remove a device token (on logout)
+  app.delete('/api/device-tokens', isAuthenticated, async (req: any, res) => {
+    try {
+      const { token } = req.body;
+      if (!token) {
+        return res.status(400).json({ message: "Token is required" });
+      }
+
+      await storage.removeDeviceToken(token);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error removing device token:", error);
+      res.status(500).json({ message: "Failed to remove device token" });
+
+    }
+  });
+
   // Update user role — admin only
+  // Get all users in the admin's company
+  app.get('/api/company-users', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || !isAdminRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      if (!user.companyId) {
+        return res.json([]);
+      }
+      const companyUsers = await storage.getUsersByCompanyId(user.companyId);
+      res.json(companyUsers);
+    } catch (error) {
+      console.error("Error fetching company users:", error);
+      res.status(500).json({ message: "Failed to fetch company users" });
+    }
+  });
+
+  // Get company info for current user
+  app.get('/api/my-company', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || !isAdminRole(user.role) || !user.companyId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const company = await storage.getCompanyById(user.companyId);
+      res.json(company);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to fetch company" });
+    }
+  });
+
+  // Update company settings (homebase, etc.)
+  app.patch('/api/my-company', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || !isAdminRole(user.role) || !user.companyId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const { homebaseAddress } = req.body;
+      const updated = await storage.updateCompany(user.companyId, { homebaseAddress });
+      res.json(updated);
+    } catch (error) {
+      res.status(500).json({ message: "Failed to update company" });
+    }
+  });
+
   app.patch('/api/users/:id/role', isAuthenticated, async (req: any, res) => {
     try {
       const { id } = req.params;
@@ -83,12 +188,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const requestingUser = req.user;
 
       // Only admins (and master_admin) may change roles
-      if (!requestingUser || (requestingUser.role !== 'admin' && requestingUser.role !== 'master_admin')) {
+      if (!requestingUser || !isAdminRole(requestingUser.role)) {
         return res.status(403).json({ message: "Unauthorized: Only administrators can change roles" });
       }
 
       // Validate role
-      if (!['parent', 'driver', 'admin'].includes(role)) {
+      if (!['parent', 'driver', 'admin', 'driver_admin'].includes(role)) {
         return res.status(400).json({ message: "Invalid role" });
       }
 
@@ -126,7 +231,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -154,7 +259,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -179,7 +284,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -204,7 +309,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -235,7 +340,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -333,7 +438,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -403,7 +508,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const requestingUser = await storage.getUser(userId);
-      if (!requestingUser || requestingUser.role !== 'admin') {
+      if (!requestingUser || !isAdminRole(requestingUser.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -465,7 +570,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -509,7 +614,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -651,7 +756,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -803,7 +908,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
       
@@ -838,7 +943,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -912,7 +1017,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -1075,7 +1180,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             bus: bus ? { id: bus.id, busNumber: bus.busNumber, status: bus.status } : null,
           };
         }));
-      } else if (user.role === 'admin') {
+      } else if (isAdminRole(user.role)) {
         students = await storage.getAllStudents();
       } else {
         return res.status(403).json({ message: "Unauthorized" });
@@ -1093,7 +1198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1268,7 +1373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1328,7 +1433,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1436,7 +1541,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1466,7 +1571,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1476,6 +1581,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error creating school:", error);
       res.status(500).json({ message: "Failed to create school" });
+    }
+  });
+
+  // Update school
+  app.patch('/api/schools/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || !isAdminRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const { id } = req.params;
+      const updated = await storage.updateSchool(id, req.body);
+      if (!updated) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      res.json(updated);
+    } catch (error) {
+      console.error("Error updating school:", error);
+      res.status(500).json({ message: "Failed to update school" });
+    }
+  });
+
+  // Delete school
+  app.delete('/api/schools/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || !isAdminRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const { id } = req.params;
+      await storage.deleteSchool(id);
+      res.json({ message: "School deleted successfully" });
+    } catch (error) {
+      console.error("Error deleting school:", error);
+      res.status(500).json({ message: "Failed to delete school" });
     }
   });
 
@@ -1553,7 +1695,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "User not found" });
       }
       
-      if (user.role !== 'admin') {
+      if (!isAdminRole(user.role)) {
         console.error('User is not admin:', user.role);
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -1657,7 +1799,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -1784,7 +1926,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUser(userId);
       
       // Allow both drivers and admins to update location (admins for testing)
-      if (!user || (user.role !== 'driver' && user.role !== 'admin')) {
+      if (!user || (user.role !== 'driver' && !isAdminRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1842,7 +1984,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let tasks;
       if (user.role === 'driver') {
         tasks = await storage.getTasksByDriverId(userId);
-      } else if (user.role === 'admin') {
+      } else if (isAdminRole(user.role)) {
         tasks = await storage.getAllActiveTasks();
       } else {
         return res.status(403).json({ message: "Unauthorized" });
@@ -1860,11 +2002,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
-      const validatedData = insertDriverTaskSchema.parse({ ...req.body, assignedById: userId });
+      const body = { ...req.body, assignedById: userId };
+      // Convert dueDate string to Date object if present
+      if (body.dueDate && typeof body.dueDate === 'string') {
+        body.dueDate = new Date(body.dueDate);
+      }
+      const validatedData = insertDriverTaskSchema.parse(body);
       const task = await storage.createDriverTask(validatedData);
       res.json(task);
     } catch (error) {
@@ -2153,8 +2300,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (user.companyId) {
           const existingJourney = await storage.getTodayBusJourney(busId);
           if (!existingJourney) {
-            await storage.createBusJourney(busId, driverId, routeId, user.companyId);
-            console.log(`Started journey for bus ${busId} on route ${routeId}`);
+            const company = await storage.getCompanyById(user.companyId);
+            await storage.createBusJourney(busId, driverId, routeId, user.companyId, company?.homebaseAddress || undefined);
+            console.log(`Started journey for bus ${busId} on route ${routeId} from homebase: ${company?.homebaseAddress || 'not set'}`);
           }
         }
       } catch (journeyError) {
@@ -2183,7 +2331,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Drivers can only see their own reports, admins can see all
       let reports;
-      if (user.role === 'admin') {
+      if (isAdminRole(user.role)) {
         reports = await storage.getDriverShiftReports();
       } else if (user.role === 'driver') {
         reports = await storage.getDriverShiftReports(userId);
@@ -2206,7 +2354,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
 
@@ -2225,7 +2373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admins only" });
       }
 
@@ -2252,7 +2400,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       let students;
-      if (user.role === 'admin') {
+      if (isAdminRole(user.role)) {
         students = await storage.getAllStudents();
       } else if (user.role === 'parent') {
         students = await storage.getStudentsByParentId(userId);
@@ -2286,7 +2434,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || (user.role !== 'admin' && user.role !== 'parent')) {
+      if (!user || (!isAdminRole(user.role) && user.role !== 'parent')) {
         return res.status(403).json({ message: "Unauthorized - admin or parent access required" });
       }
 
@@ -2330,7 +2478,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!student || student.parentId !== userId) {
           return res.status(403).json({ message: "Unauthorized - can only update your own students" });
         }
-      } else if (user.role !== 'admin') {
+      } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
       }
 
@@ -2371,7 +2519,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!link) {
           return res.status(403).json({ message: "Unauthorized - can only delete your linked students" });
         }
-      } else if (user.role !== 'admin') {
+      } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
 
@@ -2413,7 +2561,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!link) {
           return res.status(403).json({ message: "Unauthorized - can only view your linked students" });
         }
-      } else if (user.role !== 'admin') {
+      } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
       }
       
@@ -2433,7 +2581,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || (user.role !== 'admin' && user.role !== 'driver')) {
+      if (!user || (!isAdminRole(user.role) && user.role !== 'driver')) {
         return res.status(403).json({ message: "Unauthorized - admin or driver access required" });
       }
 
@@ -2467,7 +2615,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || (user.role !== 'admin' && user.role !== 'driver')) {
+      if (!user || (!isAdminRole(user.role) && user.role !== 'driver')) {
         return res.status(403).json({ message: "Unauthorized - admin or driver access required" });
       }
 
@@ -2488,7 +2636,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -2511,7 +2659,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
 
@@ -2533,7 +2681,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
 
@@ -2581,7 +2729,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
 
@@ -2638,13 +2786,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
       const { schoolId } = req.body;
       const routeId = user.assignedRouteId;
-      
+
       if (!routeId) {
         return res.status(400).json({ message: "No route assigned to driver" });
       }
@@ -2654,6 +2802,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const visit = await storage.recordSchoolArrival(userId, schoolId, routeId);
+
+      // Update bus journey with arrive_school event
+      try {
+        const assignedBus = await storage.getBusByDriverId(userId);
+        if (assignedBus) {
+          const todayJourney = await storage.getTodayBusJourney(assignedBus.id);
+          if (todayJourney && !todayJourney.arriveSchoolAt) {
+            await storage.updateJourneyEvent(todayJourney.id, 'arrive_school', schoolId);
+          }
+        }
+      } catch (journeyError) {
+        console.error("Error updating journey on school arrival:", journeyError);
+      }
+
+      // Notify parents of students at this school
+      try {
+        const school = await storage.getSchoolById(schoolId);
+        const studentsAtSchool = await storage.getStudentsBySchoolId(schoolId);
+        for (const student of studentsAtSchool) {
+          const parents = await storage.getLinkedParentsByStudentId(student.id);
+          for (const parent of parents) {
+            await storage.createSystemNotification({
+              companyId: user.companyId,
+              senderId: userId,
+              senderRole: 'driver',
+              recipientRole: 'parent',
+              recipientId: parent.id,
+              title: 'Bus Arrived at School',
+              message: `The bus has arrived at ${school?.name || 'school'} for ${student.firstName}`,
+              type: 'info',
+            });
+          }
+        }
+      } catch (notifyError) {
+        console.error("Error sending arrival notifications:", notifyError);
+      }
+
       res.json(visit);
     } catch (error) {
       console.error("Error recording school arrival:", error);
@@ -2667,14 +2852,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
-      
+
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
       const { visitId } = req.body;
-      
+
       if (!visitId) {
         return res.status(400).json({ message: "Visit ID is required" });
       }
@@ -2682,6 +2867,44 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const visit = await storage.recordSchoolDeparture(visitId);
       if (!visit) {
         return res.status(404).json({ message: "Visit not found" });
+      }
+
+      // Update bus journey with depart_school event
+      try {
+        const assignedBus = await storage.getBusByDriverId(userId);
+        if (assignedBus) {
+          const todayJourney = await storage.getTodayBusJourney(assignedBus.id);
+          if (todayJourney && !todayJourney.departSchoolAt) {
+            await storage.updateJourneyEvent(todayJourney.id, 'depart_school');
+          }
+        }
+      } catch (journeyError) {
+        console.error("Error updating journey on school departure:", journeyError);
+      }
+
+      // Notify parents of students at this school about departure
+      try {
+        const school = visit.schoolId ? await storage.getSchoolById(visit.schoolId) : null;
+        if (visit.schoolId) {
+          const studentsAtSchool = await storage.getStudentsBySchoolId(visit.schoolId);
+          for (const student of studentsAtSchool) {
+            const parents = await storage.getLinkedParentsByStudentId(student.id);
+            for (const parent of parents) {
+              await storage.createSystemNotification({
+                companyId: user.companyId,
+                senderId: userId,
+                senderRole: 'driver',
+                recipientRole: 'parent',
+                recipientId: parent.id,
+                title: 'Bus Departed from School',
+                message: `The bus has departed from ${school?.name || 'school'}. ${student.firstName} is on the way.`,
+                type: 'info',
+              });
+            }
+          }
+        }
+      } catch (notifyError) {
+        console.error("Error sending departure notifications:", notifyError);
       }
 
       res.json(visit);
@@ -2700,7 +2923,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || (user.role !== 'driver' && user.role !== 'admin')) {
+      if (!user || (user.role !== 'driver' && !isAdminRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - driver or admin required" });
       }
 
@@ -2765,7 +2988,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -2792,7 +3015,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -2932,7 +3155,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -2958,7 +3181,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         estimatedDelay: estimatedDelay || null,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
       });
-      
+
+      // Send push notification to parents
+      if (user.companyId) {
+        pushService.notifyParentsOfAlert(user.companyId, title, message, type).catch((err) => {
+          console.error("Push notification error:", err);
+        });
+      }
+
       res.json(notification);
     } catch (error) {
       console.error("Error creating notification:", error);
@@ -3018,7 +3248,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3049,7 +3279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3133,7 +3363,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let notifications: any[] = [];
       const companyId = user.companyId || '';
 
-      if (user.role === 'admin') {
+      if (isAdminRole(user.role)) {
         notifications = await storage.getSystemNotificationsForAdmin(companyId);
       } else if (user.role === 'driver') {
         notifications = await storage.getSystemNotificationsForDriver(userId, companyId);
@@ -3170,6 +3400,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Delete a system notification
+  app.delete('/api/system-notifications/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const user = await storage.getUser(userId);
+      if (!user || !isAdminRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      const { id } = req.params;
+      const deleted = await storage.deleteSystemNotification(id);
+      if (!deleted) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting system notification:", error);
+      res.status(500).json({ message: "Failed to delete notification" });
+    }
+  });
+
   // Get unread system notification count for current user
   app.get('/api/system-notifications/unread-count', isAuthenticated, async (req: any, res) => {
     try {
@@ -3186,7 +3439,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let count = 0;
       const companyId = user.companyId || '';
 
-      if (user.role === 'admin') {
+      if (isAdminRole(user.role)) {
         count = await storage.getUnreadNotificationCountForAdmin(companyId);
       } else if (user.role === 'driver') {
         count = await storage.getUnreadNotificationCountForDriver(userId, companyId);
@@ -3214,7 +3467,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3261,7 +3514,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3284,7 +3537,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3311,7 +3564,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3338,7 +3591,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3361,7 +3614,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
@@ -3392,18 +3645,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - parent role required" });
       }
 
-      // Check if parent portal is enabled - must have company and portal enabled
-      if (!user.companyId) {
-        return res.status(403).json({ message: "Parent accounts must be linked to a company." });
-      }
-      const company = await storage.getCompanyById(user.companyId);
-      if (!company?.parentPortalEnabled) {
-        return res.status(403).json({ message: "Parent portal is not available on your plan." });
-      }
-
       const { code } = req.body;
       if (!code) {
         return res.status(400).json({ message: "Link code is required" });
+      }
+
+      // Look up the link code first to get company info
+      const linkCodeRecord = await storage.getLinkCodeByCode(code.toUpperCase().trim());
+      if (!linkCodeRecord) {
+        return res.status(400).json({ message: "Invalid code - not found" });
+      }
+
+      // Determine company from the link code or the parent's existing company
+      const companyId = user.companyId || linkCodeRecord.companyId;
+      if (companyId) {
+        const company = await storage.getCompanyById(companyId);
+        if (!company?.parentPortalEnabled) {
+          return res.status(403).json({ message: "Parent portal is not available on this company's plan." });
+        }
       }
 
       const result = await storage.useLinkCode(code.toUpperCase().trim(), userId);
@@ -3412,9 +3671,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: result.error });
       }
 
+      // If parent doesn't have a company, assign them to the link code's company
+      if (!user.companyId && linkCodeRecord.companyId) {
+        await storage.updateUserCompany(userId, linkCodeRecord.companyId);
+      }
+
       const student = await storage.getStudentById(result.link!.studentId);
-      res.json({ 
-        success: true, 
+      res.json({
+        success: true,
         message: "Successfully linked to child",
         student
       });
@@ -3475,11 +3739,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
           }
         }
         if (!effectiveCompanyId) {
-          return res.status(403).json({ message: "Please link a child to your account first to access messaging." });
+          return res.json([]);
         }
         const company = await storage.getCompanyById(effectiveCompanyId);
         if (!company?.parentPortalEnabled) {
-          return res.status(403).json({ message: "Parent portal is not available on your plan. Upgrade to Professional or Enterprise." });
+          return res.json([]);
         }
       }
 
@@ -3640,6 +3904,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         content,
         studentId: studentId || null,
         companyId: effectiveCompanyId,
+      });
+
+      // Send push notification to recipient
+      const senderName = user.firstName && user.lastName
+        ? `${user.firstName} ${user.lastName}`
+        : user.email || "Someone";
+      pushService.notifyNewMessage(recipientId, senderName, content).catch((err) => {
+        console.error("Push notification error:", err);
       });
 
       res.json(message);
@@ -4600,7 +4872,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin' || !user.companyId) {
+      if (!user || !isAdminRole(user.role) || !user.companyId) {
         return res.status(403).json({ message: "Only company admins can create checkout sessions" });
       }
 
@@ -4634,7 +4906,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Create checkout session with 30-day free trial
-      const baseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
+      const baseUrl = process.env.APP_URL || `https://${process.env.RAILWAY_PUBLIC_DOMAIN || 'localhost:5000'}`;
       const session = await stripe.checkout.sessions.create({
         customer: customerId,
         mode: 'subscription',
@@ -4847,7 +5119,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Only admins can view journey reports" });
       }
 
@@ -4886,7 +5158,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         })
       );
 
-      res.json(enrichedJourneys);
+      const company = await storage.getCompanyById(user.companyId!);
+      res.json({ journeys: enrichedJourneys, timezone: company?.timezone || 'America/New_York' });
     } catch (error) {
       console.error("Error fetching journey reports:", error);
       res.status(500).json({ message: "Failed to fetch journey reports" });
@@ -4902,7 +5175,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'admin') {
+      if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Only admins can view journey reports" });
       }
 

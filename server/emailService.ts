@@ -1,58 +1,24 @@
-// Email service using Resend integration
 import { Resend } from 'resend';
 
-let connectionSettings: any;
-
-async function getCredentials() {
-  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
-  const xReplitToken = process.env.REPL_IDENTITY 
-    ? 'repl ' + process.env.REPL_IDENTITY 
-    : process.env.WEB_REPL_RENEWAL 
-    ? 'depl ' + process.env.WEB_REPL_RENEWAL 
-    : null;
-
-  if (!xReplitToken) {
-    throw new Error('X_REPLIT_TOKEN not found for repl/depl');
+function getResendClient() {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    throw new Error('RESEND_API_KEY environment variable is not set');
   }
-
-  connectionSettings = await fetch(
-    'https://' + hostname + '/api/v2/connection?include_secrets=true&connector_names=resend',
-    {
-      headers: {
-        'Accept': 'application/json',
-        'X_REPLIT_TOKEN': xReplitToken
-      }
-    }
-  ).then(res => res.json()).then(data => data.items?.[0]);
-
-  if (!connectionSettings || (!connectionSettings.settings.api_key)) {
-    throw new Error('Resend not connected');
-  }
-  return {
-    apiKey: connectionSettings.settings.api_key, 
-    fromEmail: connectionSettings.settings.from_email
-  };
-}
-
-async function getResendClient() {
-  const { apiKey, fromEmail } = await getCredentials();
+  const fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
   return {
     client: new Resend(apiKey),
-    fromEmail
+    fromEmail,
   };
 }
 
 export async function sendPasswordResetEmail(toEmail: string, resetToken: string, resetUrl: string) {
   try {
     console.log('Attempting to send password reset email to:', toEmail);
-    const { client, fromEmail } = await getResendClient();
-    console.log('Got Resend client, fromEmail:', fromEmail);
-    
-    const senderEmail = fromEmail || 'noreply@tntgym.org';
-    console.log('Using sender email:', senderEmail);
-    
+    const { client, fromEmail } = getResendClient();
+
     const result = await client.emails.send({
-      from: senderEmail,
+      from: fromEmail,
       to: toEmail,
       subject: 'Reset Your Password - SchoolBus Tracker',
       html: `
@@ -74,14 +40,14 @@ export async function sendPasswordResetEmail(toEmail: string, resetToken: string
         </div>
       `
     });
-    
+
     console.log('Email send result:', JSON.stringify(result));
-    
+
     if (result.error) {
       console.error('Resend API error:', result.error);
       return { success: false, error: result.error };
     }
-    
+
     return { success: true, data: result };
   } catch (error) {
     console.error('Failed to send password reset email:', error);
@@ -97,29 +63,27 @@ export async function sendNewBusinessSignupNotification(
   phone?: string
 ) {
   const ADMIN_EMAIL = 'deshaun@tntgym.org';
-  
+
   const planNames: Record<string, string> = {
     'starter': 'Starter ($49/month)',
     'professional': 'Professional ($99/month)',
     'enterprise': 'Enterprise ($249/month)',
     'pending_selection': 'Plan Not Yet Selected',
   };
-  
+
   try {
     console.log('Sending new business signup notification to:', ADMIN_EMAIL);
-    const { client, fromEmail } = await getResendClient();
-    
-    const senderEmail = fromEmail || 'noreply@tntgym.org';
-    
+    const { client, fromEmail } = getResendClient();
+
     const result = await client.emails.send({
-      from: senderEmail,
+      from: fromEmail,
       to: ADMIN_EMAIL,
       subject: `New Business Signup: ${businessName} - ${planNames[selectedPlan] || selectedPlan}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #3b82f6;">New Business Registration</h2>
           <p style="font-size: 16px; color: #333;">A new business has registered and is awaiting your approval.</p>
-          
+
           <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
             <h3 style="margin-top: 0; color: #1f2937;">Business Details</h3>
             <table style="width: 100%; border-collapse: collapse;">
@@ -147,9 +111,9 @@ export async function sendNewBusinessSignupNotification(
               </tr>
             </table>
           </div>
-          
+
           <p style="color: #666;">Log in to the Master Admin Dashboard to review and approve this application.</p>
-          
+
           <hr style="border: none; border-top: 1px solid #eee; margin: 24px 0;" />
           <p style="color: #999; font-size: 12px;">
             SchoolBus Tracker - Platform Admin Notification
@@ -157,14 +121,14 @@ export async function sendNewBusinessSignupNotification(
         </div>
       `
     });
-    
+
     console.log('Notification email send result:', JSON.stringify(result));
-    
+
     if (result.error) {
       console.error('Resend API error:', result.error);
       return { success: false, error: result.error };
     }
-    
+
     return { success: true, data: result };
   } catch (error) {
     console.error('Failed to send new business notification email:', error);
@@ -180,13 +144,10 @@ export async function sendDriverInvitationEmail(
 ) {
   try {
     console.log('Attempting to send driver invitation email to:', toEmail);
-    const { client, fromEmail } = await getResendClient();
-    console.log('Got Resend client, fromEmail:', fromEmail);
-    
-    const senderEmail = fromEmail || 'noreply@tntgym.org';
-    
+    const { client, fromEmail } = getResendClient();
+
     const result = await client.emails.send({
-      from: senderEmail,
+      from: fromEmail,
       to: toEmail,
       subject: `Welcome to ${companyName} - Set Up Your Driver Account`,
       html: `
@@ -209,14 +170,14 @@ export async function sendDriverInvitationEmail(
         </div>
       `
     });
-    
+
     console.log('Driver invitation email send result:', JSON.stringify(result));
-    
+
     if (result.error) {
       console.error('Resend API error:', result.error);
       return { success: false, error: result.error };
     }
-    
+
     return { success: true, data: result };
   } catch (error) {
     console.error('Failed to send driver invitation email:', error);
@@ -232,12 +193,11 @@ export async function sendEmployeeInvitationEmail(
   setupUrl: string
 ) {
   try {
-    const { client, fromEmail } = await getResendClient();
-    const senderEmail = fromEmail || 'noreply@tntgym.org';
+    const { client, fromEmail } = getResendClient();
     const roleLabel = role === 'admin' ? 'Administrator' : 'Driver';
 
     const result = await client.emails.send({
-      from: senderEmail,
+      from: fromEmail,
       to: toEmail,
       subject: `Welcome to ${companyName} - Set Up Your ${roleLabel} Account`,
       html: `

@@ -97,6 +97,9 @@ export const companies = pgTable("companies", {
   parentUserLimit: integer("parent_user_limit").default(0), // NULL = unlimited, 0 = not allowed
   parentPortalEnabled: boolean("parent_portal_enabled").default(false),
   gpsEnabled: boolean("gps_enabled").default(false),
+  // Homebase / depot address
+  homebaseAddress: text("homebase_address"),
+  timezone: varchar("timezone").default('America/New_York'),
   // Approval tracking
   approvedAt: timestamp("approved_at"),
   approvedBy: varchar("approved_by"),
@@ -201,7 +204,7 @@ export const sessions = pgTable(
 );
 
 // User roles enum (master_admin is platform owner, admin is company admin)
-export const userRoleEnum = pgEnum('user_role', ['master_admin', 'parent', 'driver', 'admin']);
+export const userRoleEnum = pgEnum('user_role', ['master_admin', 'parent', 'driver', 'admin', 'driver_admin']);
 
 // User storage table (with multi-tenant support)
 export const users = pgTable("users", {
@@ -939,6 +942,23 @@ export const insertSystemNotificationSchema = createInsertSchema(systemNotificat
   readAt: true,
   isRead: true,
 });
+
+// ============================================
+// PUSH NOTIFICATION DEVICE TOKENS
+// ============================================
+
+export const deviceTokens = pgTable("device_tokens", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: varchar("user_id").notNull(),
+  token: varchar("token", { length: 512 }).notNull(),
+  platform: varchar("platform", { length: 20 }).notNull(), // 'ios', 'android', 'web'
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type DeviceToken = typeof deviceTokens.$inferSelect;
+export type InsertDeviceToken = typeof deviceTokens.$inferInsert;
 
 // ============================================
 // BUS JOURNEY TRACKING (Admin Reports)

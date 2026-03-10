@@ -6,7 +6,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Bus, Clock, MapPin, User, Calendar, Timer, Building } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Bus, Clock, MapPin, User, Calendar, Timer, Building, Filter } from "lucide-react";
 import { format, subDays } from "date-fns";
 
 interface BusJourney {
@@ -29,25 +30,71 @@ interface BusJourney {
   route: { id: string; name: string } | null;
 }
 
+interface JourneyResponse {
+  journeys: BusJourney[];
+  timezone: string;
+}
+
 export function JourneyReports() {
   const [startDate, setStartDate] = useState(format(subDays(new Date(), 7), 'yyyy-MM-dd'));
   const [endDate, setEndDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [driverFilter, setDriverFilter] = useState('all');
+  const [busFilter, setBusFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
 
-  const { data: journeys = [], isLoading, refetch } = useQuery<BusJourney[]>({
+  const { data, isLoading, refetch } = useQuery<JourneyResponse>({
     queryKey: [`/api/reports/journeys?startDate=${startDate}&endDate=${endDate}`],
   });
+
+  const allJourneys = data?.journeys || [];
+  const timezone = data?.timezone || 'America/New_York';
+
+  // Get unique drivers and buses for filter dropdowns
+  const uniqueDrivers = Array.from(
+    new Map(allJourneys.filter(j => j.driver).map(j => [j.driver!.id, j.driver!])).values()
+  );
+  const uniqueBuses = Array.from(
+    new Map(allJourneys.filter(j => j.bus).map(j => [j.bus!.id, j.bus!])).values()
+  );
+
+  // Apply filters
+  const journeys = allJourneys.filter(j => {
+    if (driverFilter !== 'all' && j.driverId !== driverFilter) return false;
+    if (busFilter !== 'all' && j.busId !== busFilter) return false;
+    if (statusFilter === 'completed' && !j.arriveHomebaseAt) return false;
+    if (statusFilter === 'in_progress' && j.arriveHomebaseAt) return false;
+    return true;
+  });
+
+  // Get short timezone label (e.g., "EST", "EDT")
+  const getTimezoneLabel = () => {
+    try {
+      const now = new Date();
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: timezone, timeZoneName: 'short' }).formatToParts(now);
+      const tzPart = parts.find(p => p.type === 'timeZoneName');
+      return tzPart?.value || timezone;
+    } catch {
+      return timezone;
+    }
+  };
 
   const formatTime = (dateStr: string | null) => {
     if (!dateStr) return "-";
     try {
-      return format(new Date(dateStr), "h:mm a");
+      const date = new Date(dateStr);
+      return date.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZone: timezone,
+      });
     } catch {
       return "-";
     }
   };
 
   const formatDuration = (minutes: number | null) => {
-    if (!minutes) return "-";
+    if (!minutes || minutes < 0) return "-";
     const hours = Math.floor(minutes / 60);
     const mins = minutes % 60;
     if (hours === 0) return `${mins}m`;
@@ -79,6 +126,20 @@ export function JourneyReports() {
     return { label: "Pending", variant: "outline" as const };
   };
 
+  const formatJourneyDate = (dateStr: string) => {
+    try {
+      const date = new Date(dateStr);
+      return date.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        timeZone: timezone,
+      });
+    } catch {
+      return dateStr;
+    }
+  };
+
   if (isLoading) {
     return (
       <div className="space-y-4">
@@ -103,7 +164,7 @@ export function JourneyReports() {
             Bus Journey Reports
           </CardTitle>
           <CardDescription>
-            Track bus departure and arrival times between homebase and schools
+            Track bus departure and arrival times between homebase and schools — Times shown in {getTimezoneLabel()}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -132,6 +193,58 @@ export function JourneyReports() {
               <Calendar className="h-4 w-4 mr-2" />
               Update
             </Button>
+          </div>
+
+          <div className="flex flex-wrap gap-3 p-4 bg-gray-50 rounded-lg border mb-6">
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-gray-500" />
+              <Label className="text-sm font-medium">Filters:</Label>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm whitespace-nowrap">Driver:</Label>
+              <Select value={driverFilter} onValueChange={setDriverFilter}>
+                <SelectTrigger className="w-[160px] h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Drivers</SelectItem>
+                  {uniqueDrivers.map(d => (
+                    <SelectItem key={d.id} value={d.id}>
+                      {`${d.firstName || ''} ${d.lastName || ''}`.trim() || 'Unknown'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm whitespace-nowrap">Bus:</Label>
+              <Select value={busFilter} onValueChange={setBusFilter}>
+                <SelectTrigger className="w-[130px] h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Buses</SelectItem>
+                  {uniqueBuses.map(b => (
+                    <SelectItem key={b.id} value={b.id}>
+                      {b.busNumber}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex items-center gap-2">
+              <Label className="text-sm whitespace-nowrap">Status:</Label>
+              <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <SelectTrigger className="w-[140px] h-9">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="completed">Completed</SelectItem>
+                  <SelectItem value="in_progress">In Progress</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
 
           {journeys.length === 0 ? (
@@ -165,7 +278,7 @@ export function JourneyReports() {
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <Calendar className="h-4 w-4 text-muted-foreground" />
-                            {format(new Date(journey.journeyDate), "MMM d, yyyy")}
+                            {formatJourneyDate(journey.journeyDate)}
                           </div>
                         </TableCell>
                         <TableCell>
@@ -177,7 +290,7 @@ export function JourneyReports() {
                         <TableCell>
                           <div className="flex items-center gap-2">
                             <User className="h-4 w-4 text-muted-foreground" />
-                            {journey.driver 
+                            {journey.driver
                               ? `${journey.driver.firstName || ""} ${journey.driver.lastName || ""}`.trim() || "Unknown"
                               : "Unknown"
                             }
@@ -277,9 +390,9 @@ export function JourneyReports() {
                   {formatDuration(
                     Math.round(
                       journeys
-                        .filter(j => j.totalDurationMinutes)
+                        .filter(j => j.totalDurationMinutes && j.totalDurationMinutes > 0)
                         .reduce((sum, j) => sum + (j.totalDurationMinutes || 0), 0) /
-                      Math.max(journeys.filter(j => j.totalDurationMinutes).length, 1)
+                      Math.max(journeys.filter(j => j.totalDurationMinutes && j.totalDurationMinutes > 0).length, 1)
                     )
                   )}
                 </div>

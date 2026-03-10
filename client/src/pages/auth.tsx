@@ -9,8 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Bus, ArrowLeft } from "lucide-react";
+import { Loader2, Bus, ArrowLeft, Users, Car } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -25,9 +26,19 @@ const registerSchema = z.object({
   confirmPassword: z.string().min(1, "Please confirm your password"),
   firstName: z.string().optional(),
   lastName: z.string().optional(),
+  role: z.enum(["parent", "driver"]).default("parent"),
+  businessId: z.string().optional(),
 }).refine((data) => data.password === data.confirmPassword, {
   message: "Passwords don't match",
   path: ["confirmPassword"],
+}).refine((data) => {
+  if (data.role === "driver" && (!data.businessId || data.businessId.trim() === "")) {
+    return false;
+  }
+  return true;
+}, {
+  message: "Business ID is required for driver registration",
+  path: ["businessId"],
 });
 
 const forgotPasswordSchema = z.object({
@@ -62,8 +73,12 @@ export default function AuthPage() {
       confirmPassword: "",
       firstName: "",
       lastName: "",
+      role: "parent",
+      businessId: "",
     },
   });
+
+  const selectedRole = registerForm.watch("role");
 
   const forgotPasswordForm = useForm<ForgotPasswordFormValues>({
     resolver: zodResolver(forgotPasswordSchema),
@@ -112,6 +127,8 @@ export default function AuthPage() {
         password: values.password,
         firstName: values.firstName,
         lastName: values.lastName,
+        role: values.role,
+        companySlug: values.role === "driver" ? values.businessId : undefined,
       });
       toast({
         title: "Account created!",
@@ -305,6 +322,68 @@ export default function AuthPage() {
             <TabsContent value="register" className="mt-4">
               <Form {...registerForm}>
                 <form onSubmit={registerForm.handleSubmit(onRegister)} className="space-y-4">
+                  {/* Role Selection */}
+                  <FormField
+                    control={registerForm.control}
+                    name="role"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>I am a...</FormLabel>
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            onClick={() => field.onChange("parent")}
+                            className={`flex flex-col items-center p-4 rounded-lg border-2 transition-all ${
+                              field.value === "parent"
+                                ? "border-orange-500 bg-orange-50 text-orange-700"
+                                : "border-gray-200 hover:border-gray-300"
+                            }`}
+                          >
+                            <Users className="w-6 h-6 mb-1" />
+                            <span className="font-medium text-sm">Parent</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => field.onChange("driver")}
+                            className={`flex flex-col items-center p-4 rounded-lg border-2 transition-all ${
+                              field.value === "driver"
+                                ? "border-blue-500 bg-blue-50 text-blue-700"
+                                : "border-gray-200 hover:border-gray-300"
+                            }`}
+                          >
+                            <Car className="w-6 h-6 mb-1" />
+                            <span className="font-medium text-sm">Bus Driver</span>
+                          </button>
+                        </div>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  {/* Business ID - only shown for drivers */}
+                  {selectedRole === "driver" && (
+                    <FormField
+                      control={registerForm.control}
+                      name="businessId"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel>Business ID *</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="Enter the business ID from your employer"
+                              data-testid="input-register-business-id"
+                              {...field}
+                            />
+                          </FormControl>
+                          <p className="text-xs text-muted-foreground">
+                            Ask your company administrator for the Business ID.
+                          </p>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  )}
+
                   <div className="grid grid-cols-2 gap-4">
                     <FormField
                       control={registerForm.control}

@@ -1120,9 +1120,9 @@ export default function DriverDashboard() {
 
         {/* Main Content Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="grid w-full grid-cols-7">
-            <TabsTrigger value="overview">Overview</TabsTrigger>
-            <TabsTrigger value="admin-requests">
+          <TabsList className="flex w-full overflow-x-auto no-scrollbar h-auto p-1">
+            <TabsTrigger value="overview" className="shrink-0">Overview</TabsTrigger>
+            <TabsTrigger value="admin-requests" className="shrink-0">
               Admin Requests
               {Array.isArray(adminRequests) && adminRequests.length > 0 && (
                 <Badge className="ml-1 h-4 w-4 p-0 text-xs bg-red-500">
@@ -1130,7 +1130,7 @@ export default function DriverDashboard() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="students" data-testid="tab-students">
+            <TabsTrigger value="students" className="shrink-0" data-testid="tab-students">
               Students
               {Array.isArray(routeStudents) && routeStudents.length > 0 && (
                 <Badge className="ml-1 h-4 w-4 p-0 text-xs bg-blue-500">
@@ -1138,7 +1138,7 @@ export default function DriverDashboard() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="messages" className="flex items-center gap-2" data-testid="tab-messages">
+            <TabsTrigger value="messages" className="shrink-0 flex items-center gap-2" data-testid="tab-messages">
               <MessageCircle className="w-4 h-4" />
               Messages
               {unreadMessagesData?.unreadCount && unreadMessagesData.unreadCount > 0 && (
@@ -1147,9 +1147,9 @@ export default function DriverDashboard() {
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="routes">Routes</TabsTrigger>
-            <TabsTrigger value="assignments">My Assignments</TabsTrigger>
-            <TabsTrigger value="tasks">
+            <TabsTrigger value="routes" className="shrink-0">Routes</TabsTrigger>
+            <TabsTrigger value="assignments" className="shrink-0">My Assignments</TabsTrigger>
+            <TabsTrigger value="tasks" className="shrink-0">
               Tasks
               {pendingTasksCount > 0 && (
                 <Badge className="ml-1 h-4 w-4 p-0 text-xs bg-orange-500">
@@ -1775,87 +1775,69 @@ export default function DriverDashboard() {
                       </Card>
                     )}
 
-                    {/* School Stops Section */}
+                    {/* All Stops - Merged School + Route Stops */}
                     <div>
                       <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
-                        <School className="w-5 h-5 text-blue-500" />
-                        School Stops
-                        {Array.isArray(routeSchools) && routeSchools.length > 0 && (
-                          <Badge variant="secondary" className="ml-2">
-                            {routeSchools.length} schools
-                          </Badge>
-                        )}
+                        <MapPin className="w-5 h-5 text-blue-500" />
+                        All Stops
+                        <Badge variant="secondary" className="ml-2">
+                          {(Array.isArray(routeSchools) ? routeSchools.length : 0) + (Array.isArray(routeStops) ? routeStops.length : 0)} stops
+                        </Badge>
                       </h3>
-                      
-                      {Array.isArray(routeSchools) && routeSchools.length > 0 ? (
+
+                      {((Array.isArray(routeSchools) && routeSchools.length > 0) || (Array.isArray(routeStops) && routeStops.length > 0)) ? (
                         <div className="grid gap-4">
-                          {routeSchools.map((school: any, index: number) => {
-                            // Find if there's a visit record for this school today
-                            const schoolVisit = Array.isArray(schoolVisits) 
+                          {/* School Stops */}
+                          {Array.isArray(routeSchools) && routeSchools.map((school: any, index: number) => {
+                            const schoolVisit = Array.isArray(schoolVisits)
                               ? schoolVisits.find((visit: any) => visit.schoolId === school.id)
                               : null;
-                            
+                            const isDeparted = schoolVisit?.departedAt;
+
+                            // Hide departed stops
+                            if (isDeparted) return null;
+
                             return (
-                              <Card key={school.id} className="hover:shadow-md transition-shadow">
+                              <Card key={`school-${school.id}`} className={`hover:shadow-md transition-shadow ${schoolVisit?.arrivedAt ? 'border-green-300 bg-green-50' : ''}`}>
                                 <CardContent className="p-4">
                                   <div className="flex items-start justify-between mb-3">
                                     <div className="flex items-center gap-3">
-                                      <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                                        <span className="text-blue-600 font-medium text-sm">{index + 1}</span>
+                                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${schoolVisit?.arrivedAt ? 'bg-green-100' : 'bg-blue-100'}`}>
+                                        {schoolVisit?.arrivedAt ? (
+                                          <CheckCircle className="w-5 h-5 text-green-600" />
+                                        ) : (
+                                          <School className="w-4 h-4 text-blue-600" />
+                                        )}
                                       </div>
                                       <div>
                                         <h4 className="font-medium text-lg">{school.name}</h4>
                                         <p className="text-gray-600 text-sm">{school.address}</p>
                                       </div>
                                     </div>
-                                    <Badge variant="outline" className="bg-blue-50 text-blue-700">
-                                      School Stop
+                                    <Badge variant="outline" className="bg-blue-50 text-blue-700 shrink-0">
+                                      School
                                     </Badge>
                                   </div>
-                                  
-                                  <div className="flex items-center gap-4 text-sm text-gray-600 mb-4">
-                                    <div className="flex items-center gap-1">
-                                      <MapPin className="w-4 h-4" />
-                                      <span>Stop #{index + 1}</span>
-                                    </div>
-                                    {school.latitude && school.longitude && (
-                                      <div className="flex items-center gap-1">
-                                        <Navigation className="w-4 h-4" />
-                                        <span>GPS: {parseFloat(school.latitude).toFixed(4)}, {parseFloat(school.longitude).toFixed(4)}</span>
+
+                                  <div className="space-y-2">
+                                    {schoolVisit?.arrivedAt && (
+                                      <div className="flex items-center gap-2 text-green-600 text-sm">
+                                        <CheckCircle className="w-4 h-4" />
+                                        <span>Arrived: {new Date(schoolVisit.arrivedAt).toLocaleTimeString()}</span>
                                       </div>
                                     )}
-                                  </div>
-
-                                  {/* Arrival/Departure Controls */}
-                                  <div className="space-y-2">
-                                    {schoolVisit ? (
-                                      <div className="space-y-2">
-                                        {schoolVisit.arrivedAt && (
-                                          <div className="flex items-center gap-2 text-green-600 text-sm">
-                                            <CheckCircle className="w-4 h-4" />
-                                            <span>Arrived: {new Date(schoolVisit.arrivedAt).toLocaleTimeString()}</span>
-                                          </div>
-                                        )}
-                                        {schoolVisit.departedAt && (
-                                          <div className="flex items-center gap-2 text-blue-600 text-sm">
-                                            <CheckCircle className="w-4 h-4" />
-                                            <span>Departed: {new Date(schoolVisit.departedAt).toLocaleTimeString()}</span>
-                                          </div>
-                                        )}
-                                        {schoolVisit.arrivedAt && !schoolVisit.departedAt && (
-                                          <Button
-                                            size="sm"
-                                            onClick={() => schoolDepartureMutation.mutate(schoolVisit.id)}
-                                            disabled={schoolDepartureMutation.isPending}
-                                            className="w-full bg-orange-600 hover:bg-orange-700"
-                                            data-testid={`button-depart-${school.id}`}
-                                          >
-                                            <Timer className="w-4 h-4 mr-2" />
-                                            {schoolDepartureMutation.isPending ? "Recording..." : "Mark Departure"}
-                                          </Button>
-                                        )}
-                                      </div>
-                                    ) : (
+                                    {schoolVisit?.arrivedAt && !schoolVisit.departedAt ? (
+                                      <Button
+                                        size="sm"
+                                        onClick={() => schoolDepartureMutation.mutate(schoolVisit.id)}
+                                        disabled={schoolDepartureMutation.isPending}
+                                        className="w-full bg-orange-600 hover:bg-orange-700"
+                                        data-testid={`button-depart-${school.id}`}
+                                      >
+                                        <Timer className="w-4 h-4 mr-2" />
+                                        {schoolDepartureMutation.isPending ? "Recording..." : "Mark Departure"}
+                                      </Button>
+                                    ) : !schoolVisit ? (
                                       <Button
                                         size="sm"
                                         onClick={() => schoolArrivalMutation.mutate(school.id)}
@@ -1866,55 +1848,28 @@ export default function DriverDashboard() {
                                         <Timer className="w-4 h-4 mr-2" />
                                         {schoolArrivalMutation.isPending ? "Recording..." : "Mark Arrival"}
                                       </Button>
-                                    )}
+                                    ) : null}
                                   </div>
                                 </CardContent>
                               </Card>
                             );
                           })}
-                        </div>
-                      ) : (
-                        <Card className="border-dashed">
-                          <CardContent className="flex flex-col items-center justify-center py-12">
-                            <School className="w-12 h-12 text-gray-300 mb-4" />
-                            <h4 className="font-medium text-gray-900 mb-2">No School Stops</h4>
-                            <p className="text-gray-500 text-center">
-                              No schools are currently assigned to this route
-                            </p>
-                          </CardContent>
-                        </Card>
-                      )}
-                    </div>
 
-                    {/* Regular Stops Section */}
-                    <div>
-                      <h3 className="text-lg font-medium mb-4 flex items-center gap-2">
-                        <MapPin className="w-5 h-5 text-orange-500" />
-                        Route Stops
-                        {Array.isArray(routeStops) && routeStops.length > 0 && (
-                          <Badge variant="secondary" className="ml-2">
-                            {routeStops.length} stops
-                          </Badge>
-                        )}
-                      </h3>
-                      
-                      {Array.isArray(routeStops) && routeStops.length > 0 ? (
-                        <div className="grid gap-4">
-                          {routeStops.map((stop: any, index: number) => {
+                          {/* Regular Route Stops */}
+                          {Array.isArray(routeStops) && routeStops.map((stop: any, index: number) => {
                             const isStopCompleted = Array.isArray(completedStops) && completedStops.some((cs: any) => cs.routeStopId === stop.id);
                             const stopSequence = stop.order || index + 1;
-                            
+
+                            // Hide completed stops
+                            if (isStopCompleted) return null;
+
                             return (
-                              <Card key={stop.id} className={`hover:shadow-md transition-shadow ${isStopCompleted ? 'border-green-300 bg-green-50' : ''}`}>
+                              <Card key={`stop-${stop.id}`} className="hover:shadow-md transition-shadow">
                                 <CardContent className="p-4">
                                   <div className="flex items-start justify-between mb-3">
                                     <div className="flex items-center gap-3">
-                                      <div className={`w-8 h-8 rounded-full flex items-center justify-center ${isStopCompleted ? 'bg-green-100' : 'bg-orange-100'}`}>
-                                        {isStopCompleted ? (
-                                          <CheckCircle className="w-5 h-5 text-green-600" />
-                                        ) : (
-                                          <span className="text-orange-600 font-medium text-sm">{stopSequence}</span>
-                                        )}
+                                      <div className="w-8 h-8 bg-orange-100 rounded-full flex items-center justify-center">
+                                        <span className="text-orange-600 font-medium text-sm">{stopSequence}</span>
                                       </div>
                                       <div>
                                         <h4 className="font-medium text-lg">{stop.name}</h4>
@@ -1922,37 +1877,9 @@ export default function DriverDashboard() {
                                       </div>
                                     </div>
                                     <div className="flex flex-col gap-1 items-end">
-                                      {isStopCompleted ? (
-                                        <Badge className="bg-green-100 text-green-700 border-green-300">
-                                          <CheckCircle className="w-3 h-3 mr-1" />
-                                          Arrived
-                                        </Badge>
-                                      ) : (
-                                        <>
-                                          <Badge variant="outline" className="bg-orange-50 text-orange-700">
-                                            Regular Stop
-                                          </Badge>
-                                          {isOnDuty && assignedRouteId && (
-                                            <Button
-                                              size="sm"
-                                              className="mt-2 bg-blue-600 hover:bg-blue-700"
-                                              onClick={() => markStopCompletedMutation.mutate({
-                                                routeStopId: stop.id,
-                                                routeId: assignedRouteId,
-                                                stopSequence,
-                                              })}
-                                              disabled={markStopCompletedMutation.isPending}
-                                            >
-                                              {markStopCompletedMutation.isPending ? (
-                                                <Loader2 className="w-4 h-4 mr-1 animate-spin" />
-                                              ) : (
-                                                <MapPin className="w-4 h-4 mr-1" />
-                                              )}
-                                              Mark Arrived
-                                            </Button>
-                                          )}
-                                        </>
-                                      )}
+                                      <Badge variant="outline" className="bg-orange-50 text-orange-700 shrink-0">
+                                        Stop
+                                      </Badge>
                                       {stop.scheduledTime && (
                                         <Badge variant="secondary" className="text-xs">
                                           {stop.scheduledTime}
@@ -1960,25 +1887,26 @@ export default function DriverDashboard() {
                                       )}
                                     </div>
                                   </div>
-                                  
-                                  <div className="flex items-center gap-4 text-sm text-gray-600">
-                                    <div className="flex items-center gap-1">
-                                      <Clock className="w-4 h-4" />
-                                      <span>Order: {stopSequence}</span>
-                                    </div>
-                                    {stop.estimatedPickupTime && (
-                                      <div className="flex items-center gap-1">
-                                        <Timer className="w-4 h-4" />
-                                        <span>{stop.estimatedPickupTime} min from start</span>
-                                      </div>
-                                    )}
-                                    {stop.latitude && stop.longitude && (
-                                      <div className="flex items-center gap-1">
-                                        <Navigation className="w-4 h-4" />
-                                        <span>GPS: {parseFloat(stop.latitude).toFixed(4)}, {parseFloat(stop.longitude).toFixed(4)}</span>
-                                      </div>
-                                    )}
-                                  </div>
+
+                                  {isOnDuty && assignedRouteId && (
+                                    <Button
+                                      size="sm"
+                                      className="w-full bg-green-600 hover:bg-green-700"
+                                      onClick={() => markStopCompletedMutation.mutate({
+                                        routeStopId: stop.id,
+                                        routeId: assignedRouteId,
+                                        stopSequence,
+                                      })}
+                                      disabled={markStopCompletedMutation.isPending}
+                                    >
+                                      {markStopCompletedMutation.isPending ? (
+                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                                      ) : (
+                                        <MapPin className="w-4 h-4 mr-2" />
+                                      )}
+                                      Mark Arrived
+                                    </Button>
+                                  )}
                                 </CardContent>
                               </Card>
                             );
@@ -1988,9 +1916,9 @@ export default function DriverDashboard() {
                         <Card className="border-dashed">
                           <CardContent className="flex flex-col items-center justify-center py-12">
                             <MapPin className="w-12 h-12 text-gray-300 mb-4" />
-                            <h4 className="font-medium text-gray-900 mb-2">No Route Stops</h4>
+                            <h4 className="font-medium text-gray-900 mb-2">No Stops Assigned</h4>
                             <p className="text-gray-500 text-center">
-                              No regular stops are currently assigned to this route
+                              No stops are currently assigned to this route
                             </p>
                           </CardContent>
                         </Card>

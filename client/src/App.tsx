@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import AuthPage from "@/pages/auth";
@@ -15,7 +16,6 @@ import ParentDashboard from "@/pages/parent-dashboard";
 import ParentNotifications from "@/pages/parent-notifications";
 import DriverDashboard from "@/pages/driver-dashboard";
 import AdminDashboard from "@/pages/admin-dashboard";
-import MasterAdminDashboard from "@/pages/master-admin-dashboard";
 import BusinessSignup from "@/pages/business-signup";
 import OnboardingPlans from "@/pages/onboarding-plans";
 import OnboardingSuccess from "@/pages/onboarding-success";
@@ -72,8 +72,7 @@ function Router() {
           {user?.role === 'parent' && <Route path="/parent" component={ParentDashboard} />}
           {user?.role === 'parent' && <Route path="/parent/notifications" component={ParentNotifications} />}
           {user?.role === 'driver' && <Route path="/" component={DriverDashboard} />}
-          {user?.role === 'admin' && <Route path="/" component={AdminDashboard} />}
-          {user?.role === 'master_admin' && <Route path="/" component={MasterAdminDashboard} />}
+          {(user?.role === 'admin' || user?.role === 'master_admin' || user?.role === 'driver_admin') && <Route path="/" component={AdminDashboard} />}
         </>
       )}
       <Route component={NotFound} />
@@ -83,12 +82,14 @@ function Router() {
 
 function App() {
   return (
-    <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Toaster />
-        <Router />
-      </TooltipProvider>
-    </QueryClientProvider>
+    <ErrorBoundary>
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>
+          <Toaster />
+          <Router />
+        </TooltipProvider>
+      </QueryClientProvider>
+    </ErrorBoundary>
   );
 }
 

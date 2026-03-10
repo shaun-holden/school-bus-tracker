@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -29,6 +30,7 @@ import {
 } from "lucide-react";
 import { calculateRouteDuration, formatDuration, geocodeAddress, calculateRouteFromStops, type Coordinates } from "@/lib/distanceUtils";
 import { ShiftReports } from "@/components/admin/ShiftReports";
+import { MasterAdminPanel } from "@/components/admin/MasterAdminPanel";
 import { JourneyReports } from "@/components/admin/JourneyReports";
 import { LinkCodeButton } from "@/components/admin/LinkCodeManager";
 
@@ -585,6 +587,26 @@ function NotificationsTab({ routes, buses }: { routes: any; buses: any }) {
     },
   });
 
+  const deleteSystemNotificationMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return apiRequest(`/api/system-notifications/${id}`, "DELETE");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/system-notifications"] });
+      toast({
+        title: "Success",
+        description: "Notification deleted",
+      });
+    },
+    onError: () => {
+      toast({
+        title: "Error",
+        description: "Failed to delete notification",
+        variant: "destructive",
+      });
+    },
+  });
+
   const createTaskFromNotificationMutation = useMutation({
     mutationFn: async (data: any) => {
       return apiRequest("/api/driver-tasks", "POST", data);
@@ -988,6 +1010,16 @@ function NotificationsTab({ routes, buses }: { routes: any; buses: any }) {
                           </p>
                         </div>
                       </div>
+                      <div className="flex items-center space-x-1">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteSystemNotificationMutation.mutate(notification.id)}
+                          disabled={deleteSystemNotificationMutation.isPending}
+                        >
+                          <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-500" />
+                        </Button>
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -1062,6 +1094,14 @@ function NotificationsTab({ routes, buses }: { routes: any; buses: any }) {
                             Mark Read
                           </Button>
                         )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => deleteSystemNotificationMutation.mutate(notification.id)}
+                          disabled={deleteSystemNotificationMutation.isPending}
+                        >
+                          <Trash2 className="w-4 h-4 text-gray-400 hover:text-red-500" />
+                        </Button>
                       </div>
                     </div>
                   </CardContent>
@@ -1223,6 +1263,10 @@ export default function AdminDashboard() {
     { name: '', address: '', scheduledTime: '' }
   ]);
   const [isAddSchoolDialogOpen, setIsAddSchoolDialogOpen] = useState(false);
+  const [isEditSchoolDialogOpen, setIsEditSchoolDialogOpen] = useState(false);
+  const [editingSchool, setEditingSchool] = useState<any>(null);
+  const [isDeleteSchoolDialogOpen, setIsDeleteSchoolDialogOpen] = useState(false);
+  const [schoolToDelete, setSchoolToDelete] = useState<any>(null);
   const [isStudentDialogOpen, setIsStudentDialogOpen] = useState(false);
   const [isEditStudentDialogOpen, setIsEditStudentDialogOpen] = useState(false);
   const [editingStudent, setEditingStudent] = useState<any>(null);
@@ -1238,6 +1282,10 @@ export default function AdminDashboard() {
   const [driverViewMode, setDriverViewMode] = useState<'active' | 'archived'>('active');
   const [isDeactivateDriverDialogOpen, setIsDeactivateDriverDialogOpen] = useState(false);
   const [driverToDeactivate, setDriverToDeactivate] = useState<any>(null);
+  const [attendanceStatusFilter, setAttendanceStatusFilter] = useState('all');
+  const [attendanceRouteFilter, setAttendanceRouteFilter] = useState('all');
+  const [attendanceDriverFilter, setAttendanceDriverFilter] = useState('all');
+  const [attendanceSearchFilter, setAttendanceSearchFilter] = useState('');
 
   // School reordering functions
   const moveSchoolUp = async (schoolId: string, currentIndex: number) => {
@@ -1300,37 +1348,38 @@ export default function AdminDashboard() {
   const calculateRouteDurationFromStops = async (routeId: string) => {
     try {
       setIsCalculatingDuration(true);
-      
-      // Fetch route stops
-      const response = await fetch(`/api/routes/${routeId}/stops`);
-      const stops = await response.json();
-      
-      console.log("Route stops fetched:", stops);
-      console.log("Number of stops found:", stops.length);
-      
-      // Also fetch route schools for comparison
-      const schoolsResponse = await fetch(`/api/routes/${routeId}/schools`);
-      const schools = await schoolsResponse.json();
-      console.log("Route schools fetched:", schools);
-      console.log("Number of schools found:", schools.length);
-      
-      if (!Array.isArray(stops) || stops.length < 2) {
-        toast({
-          title: "Info",
-          description: `Route needs at least 2 stops to calculate duration. Found ${stops?.length || 0} stops.`,
-        });
-        return;
-      }
 
-      // For now, let's try using schools as stops if we don't have enough route stops
-      let routeData = stops;
-      if (stops.length < schools.length && Array.isArray(schools)) {
-        console.log("Using schools as stops because we have more schools than stops");
-        routeData = schools.map((school: any) => ({
+      // Fetch both route stops and route schools
+      const [stopsResponse, schoolsResponse] = await Promise.all([
+        fetch(`/api/routes/${routeId}/stops`, { credentials: 'include' }),
+        fetch(`/api/routes/${routeId}/schools`, { credentials: 'include' }),
+      ]);
+      const stops = await stopsResponse.json();
+      const routeSchoolsList = await schoolsResponse.json();
+
+      console.log("Route stops fetched:", stops?.length || 0);
+      console.log("Route schools fetched:", routeSchoolsList?.length || 0);
+
+      // Use schools as stops if we have more schools than route_stops, or if stops are empty
+      let routeData: any[] = [];
+      if (Array.isArray(routeSchoolsList) && routeSchoolsList.length >= 2) {
+        routeData = routeSchoolsList.map((school: any, i: number) => ({
           name: school.name,
           address: school.address,
-          order: school.order || 0
+          latitude: school.latitude,
+          longitude: school.longitude,
+          order: school.order ?? i
         }));
+      } else if (Array.isArray(stops) && stops.length >= 2) {
+        routeData = stops;
+      }
+
+      if (routeData.length < 2) {
+        toast({
+          title: "Info",
+          description: `Route needs at least 2 stops/schools to calculate duration. Found ${Math.max(stops?.length || 0, routeSchoolsList?.length || 0)}.`,
+        });
+        return;
       }
 
       // Calculate duration from addresses
@@ -2131,6 +2180,70 @@ export default function AdminDashboard() {
     },
   });
 
+  // Edit school mutation
+  const editSchoolMutation = useMutation({
+    mutationFn: async (data: { id: string; name: string; address: string }) => {
+      const { id, ...updateData } = data;
+      return await apiRequest(`/api/schools/${id}`, "PATCH", updateData);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schools"] });
+      setIsEditSchoolDialogOpen(false);
+      setEditingSchool(null);
+      toast({ title: "Success", description: "School updated successfully." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error?.message || "Failed to update school", variant: "destructive" });
+    },
+  });
+
+  // Delete school mutation
+  const deleteSchoolMutation = useMutation({
+    mutationFn: async (id: string) => {
+      return await apiRequest(`/api/schools/${id}`, "DELETE");
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/schools"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/students"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/routes"] });
+      setIsDeleteSchoolDialogOpen(false);
+      setSchoolToDelete(null);
+      toast({ title: "Success", description: "School deleted successfully." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error?.message || "Failed to delete school", variant: "destructive" });
+    },
+  });
+
+  // Update company homebase mutation
+  const updateHomebaseMutation = useMutation({
+    mutationFn: async (homebaseAddress: string) => {
+      return await apiRequest("/api/my-company", "PATCH", { homebaseAddress });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/my-company"] });
+      toast({ title: "Success", description: "Homebase address updated." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error?.message || "Failed to update homebase", variant: "destructive" });
+    },
+  });
+
+  // Change user role mutation
+  const changeRoleMutation = useMutation({
+    mutationFn: async ({ userId, role }: { userId: string; role: string }) => {
+      return await apiRequest(`/api/users/${userId}/role`, "PATCH", { role });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/company-users"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/drivers"] });
+      toast({ title: "Success", description: "User role updated successfully." });
+    },
+    onError: (error: any) => {
+      toast({ title: "Error", description: error?.message || "Failed to update role", variant: "destructive" });
+    },
+  });
+
   // Edit bus mutation
   const editBusMutation = useMutation({
     mutationFn: async (data: z.infer<typeof addBusSchema> & { id: string }) => {
@@ -2373,11 +2486,10 @@ export default function AdminDashboard() {
     queryKey: ["/api/buses"],
     enabled: !!user,
     retry: false,
-    staleTime: 0, // Always fetch fresh data
-    gcTime: 0, // Don't cache data (updated from cacheTime)
+    staleTime: 0,
     refetchOnWindowFocus: true,
     refetchOnMount: true,
-    refetchInterval: 30000, // Auto-refresh every 30 seconds
+    refetchInterval: 30000,
   });
 
   const { data: students } = useQuery({
@@ -2411,6 +2523,18 @@ export default function AdminDashboard() {
   const { data: schools } = useQuery({
     queryKey: ["/api/schools"],
     enabled: !!user,
+    retry: false,
+  });
+
+  const { data: companyUsers } = useQuery({
+    queryKey: ["/api/company-users"],
+    enabled: !!user && (user?.role === 'admin' || user?.role === 'master_admin'),
+    retry: false,
+  });
+
+  const { data: myCompany } = useQuery({
+    queryKey: ["/api/my-company"],
+    enabled: !!user && (user?.role === 'admin' || user?.role === 'master_admin' || user?.role === 'driver_admin'),
     retry: false,
   });
 
@@ -2547,6 +2671,16 @@ export default function AdminDashboard() {
     },
   });
 
+  // Calculate assignedBuses for driver operations (must be before conditional returns for hooks rules)
+  const assignedBuses = useMemo(() => {
+    if (!Array.isArray(buses)) return [];
+    return buses;
+  }, [buses]);
+  const activeBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'on_route') : [];
+  const idleBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'idle') : [];
+  const maintenanceBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'maintenance') : [];
+  const availableBuses = idleBuses.length;
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -2556,16 +2690,6 @@ export default function AdminDashboard() {
   }
 
   console.log('Admin Dashboard - Buses data:', buses?.length || 0, 'buses loaded');
-
-  // Calculate assignedBuses for driver operations
-  const assignedBuses = useMemo(() => {
-    if (!Array.isArray(buses)) return [];
-    return buses;
-  }, [buses]);
-  const activeBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'on_route') : [];
-  const idleBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'idle') : [];
-  const maintenanceBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'maintenance') : [];
-  const availableBuses = idleBuses.length;
   
   const isImpersonating = !!(user as any)?._masterAdminImpersonating;
 
@@ -2727,11 +2851,62 @@ export default function AdminDashboard() {
                 </Badge>
               )}
             </TabsTrigger>
+            {user?.role === "master_admin" && (
+              <TabsTrigger value="master-admin" className="flex items-center">
+                <Shield className="w-4 h-4 mr-1" />
+                Master Admin
+              </TabsTrigger>
+            )}
           </TabsList>
 
           {/* Fleet Management Tab */}
           <TabsContent value="fleet">
             <div className="space-y-6">
+              {/* Homebase Address Setting */}
+              <Card>
+                <CardHeader className="pb-3">
+                  <CardTitle className="flex items-center gap-2">
+                    <MapPin className="w-5 h-5 text-orange-600" />
+                    Homebase / Depot Address
+                  </CardTitle>
+                  <CardDescription>
+                    Set your company's homebase address. This is recorded when drivers start and end their journeys.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex gap-3">
+                    <Input
+                      id="homebase-address"
+                      placeholder="e.g. 123 Main Street, Atlanta, GA 30301"
+                      defaultValue={(myCompany as any)?.homebaseAddress || ''}
+                      className="flex-1"
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          updateHomebaseMutation.mutate((e.target as HTMLInputElement).value);
+                        }
+                      }}
+                    />
+                    <Button
+                      onClick={() => {
+                        const input = document.getElementById('homebase-address') as HTMLInputElement;
+                        if (input?.value) {
+                          updateHomebaseMutation.mutate(input.value);
+                        }
+                      }}
+                      disabled={updateHomebaseMutation.isPending}
+                    >
+                      {updateHomebaseMutation.isPending ? "Saving..." : "Save"}
+                    </Button>
+                  </div>
+                  {(myCompany as any)?.homebaseAddress && (
+                    <p className="text-sm text-green-600 mt-2 flex items-center gap-1">
+                      <CheckCircle className="w-3 h-3" />
+                      Current: {(myCompany as any).homebaseAddress}
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+
               {/* Fleet Overview Cards */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <Card>
@@ -3769,41 +3944,6 @@ export default function AdminDashboard() {
                               )}
                             />
 
-                            <FormField
-                              control={routeForm.control}
-                              name="schoolId"
-                              render={({ field }) => (
-                                <FormItem>
-                                  <FormLabel>Associated School (Optional)</FormLabel>
-                                  <div className="flex space-x-2">
-                                    <Select onValueChange={field.onChange} value={field.value}>
-                                      <FormControl>
-                                        <SelectTrigger data-testid="select-route-school">
-                                          <SelectValue placeholder="Select a school" />
-                                        </SelectTrigger>
-                                      </FormControl>
-                                      <SelectContent>
-                                        {Array.isArray(schools) && schools.map((school: any) => (
-                                          <SelectItem key={school.id} value={school.id}>
-                                            {school.name}
-                                          </SelectItem>
-                                        ))}
-                                      </SelectContent>
-                                    </Select>
-                                    <Button
-                                      type="button"
-                                      variant="outline"
-                                      onClick={() => setIsAddSchoolDialogOpen(true)}
-                                      data-testid="button-add-school-route"
-                                    >
-                                      <Plus className="w-4 h-4" />
-                                    </Button>
-                                  </div>
-                                  <FormMessage />
-                                </FormItem>
-                              )}
-                            />
-
                             <div>
                               <div className="flex justify-between items-center mb-4">
                                 <h4 className="text-lg font-medium">Route Stops</h4>
@@ -3831,6 +3971,33 @@ export default function AdminDashboard() {
                                           <X className="w-4 h-4" />
                                         </Button>
                                       )}
+                                    </div>
+                                    <div className="mb-3">
+                                      <label className="text-sm font-medium">Quick Fill from School</label>
+                                      <Select
+                                        value=""
+                                        onValueChange={(schoolId) => {
+                                          const school = Array.isArray(schools) ? schools.find((s: any) => s.id === schoolId) : null;
+                                          if (school) {
+                                            const updatedStops = routeStops.map((s, i) =>
+                                              i === index ? { ...s, name: school.name, address: school.address || '' } : s
+                                            );
+                                            setRouteStops(updatedStops);
+                                            calculateDurationFromStops(updatedStops);
+                                          }
+                                        }}
+                                      >
+                                        <SelectTrigger data-testid={`select-school-stop-${index}`}>
+                                          <SelectValue placeholder="Select a school to auto-fill..." />
+                                        </SelectTrigger>
+                                        <SelectContent>
+                                          {Array.isArray(schools) && schools.map((school: any) => (
+                                            <SelectItem key={school.id} value={school.id}>
+                                              {school.name} {school.address ? `- ${school.address}` : ''}
+                                            </SelectItem>
+                                          ))}
+                                        </SelectContent>
+                                      </Select>
                                     </div>
                                     <div className="grid grid-cols-2 gap-4">
                                       <div>
@@ -3862,7 +4029,7 @@ export default function AdminDashboard() {
                                         className="mt-1"
                                       />
                                       <p className="text-xs text-gray-500 mt-1">
-                                        Include street address, city, state, and ZIP code
+                                        Include street address, city, state, and ZIP code — or select a school above
                                       </p>
                                     </div>
                                   </Card>
@@ -3909,7 +4076,6 @@ export default function AdminDashboard() {
                       <TableRow>
                         <TableHead>Route Name</TableHead>
                         <TableHead>Assigned Bus</TableHead>
-                        <TableHead>School</TableHead>
                         <TableHead>Duration</TableHead>
                         <TableHead>Stops</TableHead>
                         <TableHead>Status</TableHead>
@@ -3926,40 +4092,6 @@ export default function AdminDashboard() {
                             </TableCell>
                             <TableCell>
                               {route.busNumber ? `Bus #${route.busNumber}` : 'Unassigned'}
-                            </TableCell>
-                            <TableCell>
-                              {route.schoolId ? (
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center space-x-2">
-                                    <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
-                                    <span className="text-sm">
-                                      {Array.isArray(schools) ? 
-                                        schools.find((s: any) => s.id === route.schoolId)?.name || 'Unknown School' : 
-                                        'Loading...'
-                                      }
-                                    </span>
-                                  </div>
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => {
-                                      const schoolName = Array.isArray(schools) ? 
-                                        schools.find((s: any) => s.id === route.schoolId)?.name || 'Unknown School' : 
-                                        'School';
-                                      if (window.confirm(`Remove ${schoolName} from this route? This will also remove associated stops.`)) {
-                                        handleRemoveSchoolFromRoute(route.id, route.schoolId);
-                                      }
-                                    }}
-                                    className="text-red-500 hover:text-red-700 hover:bg-red-50 p-1 h-auto"
-                                    data-testid={`button-remove-school-${route.id}`}
-                                    title="Remove school from route"
-                                  >
-                                    <X className="w-3 h-3" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <span className="text-gray-400 text-sm">No school assigned</span>
-                              )}
                             </TableCell>
                             <TableCell>
                               <div className="flex items-center space-x-1">
@@ -3995,7 +4127,7 @@ export default function AdminDashboard() {
                         ))
                       ) : (
                         <TableRow>
-                          <TableCell colSpan={7} className="text-center text-gray-500 py-8">
+                          <TableCell colSpan={6} className="text-center text-gray-500 py-8">
                             No routes created yet. Create your first route to get started.
                           </TableCell>
                         </TableRow>
@@ -4057,6 +4189,84 @@ export default function AdminDashboard() {
                   </CardContent>
                 </Card>
               </div>
+
+              {/* School Management */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center space-x-2">
+                      <GraduationCap className="w-5 h-5" />
+                      <span>School Management</span>
+                    </CardTitle>
+                    <Button onClick={() => {
+                      schoolForm.reset({ name: '', address: '' });
+                      setIsAddSchoolDialogOpen(true);
+                    }}>
+                      <Plus className="w-4 h-4 mr-2" />
+                      Add School
+                    </Button>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>School Name</TableHead>
+                        <TableHead>Address</TableHead>
+                        <TableHead>Students</TableHead>
+                        <TableHead>Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {Array.isArray(schools) && schools.length > 0 ? (
+                        schools.map((school: any) => (
+                          <TableRow key={school.id}>
+                            <TableCell className="font-medium">{school.name}</TableCell>
+                            <TableCell className="max-w-[300px]">
+                              <span className="text-sm text-gray-600 whitespace-pre-wrap">{school.address}</span>
+                            </TableCell>
+                            <TableCell>
+                              {Array.isArray(students) ? students.filter((s: any) => s.schoolId === school.id).length : 0}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex space-x-2">
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    setEditingSchool(school);
+                                    schoolForm.reset({ name: school.name, address: school.address });
+                                    setIsEditSchoolDialogOpen(true);
+                                  }}
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-red-600 hover:text-red-700"
+                                  onClick={() => {
+                                    setSchoolToDelete(school);
+                                    setIsDeleteSchoolDialogOpen(true);
+                                  }}
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-center text-gray-500 py-8">
+                            No schools added yet. Click "Add School" to get started.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
 
               {/* Student Management */}
               <Card>
@@ -4832,6 +5042,87 @@ export default function AdminDashboard() {
                   </AlertDialogFooter>
                 </AlertDialogContent>
               </AlertDialog>
+
+              {/* Team Members & Role Management */}
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="flex items-center space-x-2">
+                      <Shield className="w-5 h-5" />
+                      <span>Team Members & Roles</span>
+                    </CardTitle>
+                  </div>
+                  <CardDescription>
+                    Manage user roles for all members in your company. Change roles between Parent, Driver, and Admin.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Current Role</TableHead>
+                        <TableHead>Change Role</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {Array.isArray(companyUsers) && companyUsers.length > 0 ? (
+                        companyUsers.map((member: any) => (
+                          <TableRow key={member.id}>
+                            <TableCell className="font-medium">
+                              {member.firstName} {member.lastName}
+                            </TableCell>
+                            <TableCell>{member.email}</TableCell>
+                            <TableCell>
+                              <Badge variant={
+                                member.role === 'admin' || member.role === 'driver_admin' ? 'default' :
+                                member.role === 'master_admin' ? 'default' :
+                                member.role === 'driver' ? 'secondary' : 'outline'
+                              }>
+                                {member.role === 'master_admin' ? 'Master Admin' :
+                                 member.role === 'driver_admin' ? 'Driver + Admin' :
+                                 member.role === 'admin' ? 'Admin' :
+                                 member.role === 'driver' ? 'Driver' : 'Parent'}
+                              </Badge>
+                            </TableCell>
+                            <TableCell>
+                              {member.role === 'master_admin' ? (
+                                <span className="text-sm text-gray-400">Protected</span>
+                              ) : (
+                                <Select
+                                  value={member.role}
+                                  onValueChange={(newRole) => {
+                                    if (newRole !== member.role) {
+                                      changeRoleMutation.mutate({ userId: member.id, role: newRole });
+                                    }
+                                  }}
+                                >
+                                  <SelectTrigger className="w-[180px]">
+                                    <SelectValue />
+                                  </SelectTrigger>
+                                  <SelectContent>
+                                    <SelectItem value="parent">Parent</SelectItem>
+                                    <SelectItem value="driver">Driver</SelectItem>
+                                    <SelectItem value="admin">Administrator</SelectItem>
+                                    <SelectItem value="driver_admin">Driver + Admin</SelectItem>
+                                  </SelectContent>
+                                </Select>
+                              )}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={4} className="text-center text-gray-500 py-8">
+                            No team members found.
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                </CardContent>
+              </Card>
             </div>
           </TabsContent>
 
@@ -5378,6 +5669,62 @@ export default function AdminDashboard() {
                       </Card>
                     </div>
 
+                    {/* Filters */}
+                    <div className="flex flex-wrap gap-3 p-4 bg-gray-50 rounded-lg border">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm font-medium whitespace-nowrap">Status:</Label>
+                        <Select value={attendanceStatusFilter} onValueChange={setAttendanceStatusFilter}>
+                          <SelectTrigger className="w-[130px] h-9">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All</SelectItem>
+                            <SelectItem value="present">Present</SelectItem>
+                            <SelectItem value="absent">Absent</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm font-medium whitespace-nowrap">Route:</Label>
+                        <Select value={attendanceRouteFilter} onValueChange={setAttendanceRouteFilter}>
+                          <SelectTrigger className="w-[160px] h-9">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Routes</SelectItem>
+                            {Array.isArray(routes) && routes.map((route: any) => (
+                              <SelectItem key={route.id} value={route.id}>{route.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm font-medium whitespace-nowrap">Driver:</Label>
+                        <Select value={attendanceDriverFilter} onValueChange={setAttendanceDriverFilter}>
+                          <SelectTrigger className="w-[170px] h-9">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="all">All Drivers</SelectItem>
+                            {Array.isArray(drivers) && drivers.map((driver: any) => (
+                              <SelectItem key={driver.id} value={driver.id}>
+                                {driver.firstName} {driver.lastName}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-sm font-medium whitespace-nowrap">Search:</Label>
+                        <Input
+                          placeholder="Student name..."
+                          value={attendanceSearchFilter}
+                          onChange={(e) => setAttendanceSearchFilter(e.target.value)}
+                          className="w-[170px] h-9"
+                        />
+                      </div>
+                    </div>
+
                     <Table>
                       <TableHeader>
                         <TableRow>
@@ -5389,7 +5736,19 @@ export default function AdminDashboard() {
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {attendanceData.map((record: any) => {
+                        {attendanceData
+                          .filter((record: any) => {
+                            if (attendanceStatusFilter !== 'all' && record.status !== attendanceStatusFilter) return false;
+                            if (attendanceRouteFilter !== 'all' && record.routeId !== attendanceRouteFilter) return false;
+                            if (attendanceDriverFilter !== 'all' && record.driverId !== attendanceDriverFilter) return false;
+                            if (attendanceSearchFilter) {
+                              const student = Array.isArray(students) ? students.find((s: any) => s.id === record.studentId) : null;
+                              const name = student ? `${student.firstName} ${student.lastName}`.toLowerCase() : '';
+                              if (!name.includes(attendanceSearchFilter.toLowerCase())) return false;
+                            }
+                            return true;
+                          })
+                          .map((record: any) => {
                           const student = Array.isArray(students) ? students.find((s: any) => s.id === record.studentId) : null;
                           const route = Array.isArray(routes) ? routes.find((r: any) => r.id === record.routeId) : null;
                           // Get driver from attendance record's driverId field
@@ -5519,6 +5878,12 @@ export default function AdminDashboard() {
           <TabsContent value="notifications">
             <NotificationsTab routes={routes} buses={buses} />
           </TabsContent>
+
+          {user?.role === "master_admin" && (
+            <TabsContent value="master-admin">
+              <MasterAdminPanel />
+            </TabsContent>
+          )}
         </Tabs>
       </div>
 
@@ -5592,41 +5957,6 @@ export default function AdminDashboard() {
                         data-testid="edit-textarea-description" 
                       />
                     </FormControl>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={editRouteForm.control}
-                name="schoolId"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Associated School (Optional)</FormLabel>
-                    <div className="flex space-x-2">
-                      <Select onValueChange={field.onChange} value={field.value}>
-                        <FormControl>
-                          <SelectTrigger data-testid="select-edit-route-school">
-                            <SelectValue placeholder="Select a school" />
-                          </SelectTrigger>
-                        </FormControl>
-                        <SelectContent>
-                          {Array.isArray(schools) && schools.map((school: any) => (
-                            <SelectItem key={school.id} value={school.id}>
-                              {school.name}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() => setIsAddSchoolDialogOpen(true)}
-                        data-testid="button-add-school-edit-route"
-                      >
-                        <Plus className="w-4 h-4" />
-                      </Button>
-                    </div>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -5992,6 +6322,100 @@ export default function AdminDashboard() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      {/* Edit School Dialog */}
+      <Dialog open={isEditSchoolDialogOpen} onOpenChange={(open) => {
+        setIsEditSchoolDialogOpen(open);
+        if (!open) setEditingSchool(null);
+      }}>
+        <DialogContent className="sm:max-w-[500px]">
+          <DialogHeader>
+            <DialogTitle>Edit School</DialogTitle>
+            <DialogDescription>
+              Update the school name or address.
+            </DialogDescription>
+          </DialogHeader>
+          <Form {...schoolForm}>
+            <form onSubmit={schoolForm.handleSubmit((data) => {
+              if (editingSchool) {
+                editSchoolMutation.mutate({ id: editingSchool.id, ...data });
+              }
+            })} className="space-y-6">
+              <FormField
+                control={schoolForm.control}
+                name="name"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>School Name *</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder="e.g. Springfield Elementary School" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={schoolForm.control}
+                name="address"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>School Address *</FormLabel>
+                    <FormControl>
+                      <Textarea
+                        {...field}
+                        placeholder="e.g. 123 School Street, Springfield, IL 62701"
+                        className="min-h-[80px]"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="flex justify-end space-x-2">
+                <Button type="button" variant="outline" onClick={() => {
+                  setIsEditSchoolDialogOpen(false);
+                  setEditingSchool(null);
+                }}>
+                  Cancel
+                </Button>
+                <Button type="submit" disabled={editSchoolMutation.isPending}>
+                  {editSchoolMutation.isPending ? "Saving..." : "Save Changes"}
+                </Button>
+              </div>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete School Confirmation Dialog */}
+      <AlertDialog open={isDeleteSchoolDialogOpen} onOpenChange={setIsDeleteSchoolDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete School</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete <strong>{schoolToDelete?.name}</strong>? This will remove it from all routes and unlink it from all students. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <Button variant="outline" onClick={() => {
+              setIsDeleteSchoolDialogOpen(false);
+              setSchoolToDelete(null);
+            }}>
+              Cancel
+            </Button>
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              onClick={() => {
+                if (schoolToDelete) {
+                  deleteSchoolMutation.mutate(schoolToDelete.id);
+                }
+              }}
+            >
+              {deleteSchoolMutation.isPending ? "Deleting..." : "Delete School"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Add Student Dialog */}
       <Dialog open={isStudentDialogOpen} onOpenChange={setIsStudentDialogOpen}>

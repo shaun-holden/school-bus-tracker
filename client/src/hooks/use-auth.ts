@@ -13,6 +13,7 @@ interface RegisterCredentials {
   firstName?: string;
   lastName?: string;
   companySlug?: string;
+  role?: string;
 }
 
 export function useAuth() {

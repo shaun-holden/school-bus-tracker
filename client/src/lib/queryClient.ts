@@ -33,22 +33,26 @@ export const getQueryFn: <T>(options: {
       credentials: "include",
     });
 
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
+    if (unauthorizedBehavior === "returnNull" && (res.status === 401 || res.status === 403)) {
       return null;
     }
 
-    await throwIfResNotOk(res);
+    if (!res.ok) {
+      const text = (await res.text()) || res.statusText;
+      throw new Error(`${res.status}: ${text}`);
+    }
+
     return await res.json();
   };
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      queryFn: getQueryFn({ on401: "throw" }),
-      refetchInterval: false,
+      queryFn: getQueryFn({ on401: "returnNull" }),
+      refetchInterval: 15000,
       refetchOnWindowFocus: true,
-      staleTime: 0, // Always treat data as stale for real-time updates
-      gcTime: 0, // Don't cache data
+      staleTime: 5000,
+      gcTime: 300000,
       retry: false,
     },
     mutations: {

@@ -74,11 +74,48 @@ export default function ParentDashboard() {
     <div className="font-inter bg-background text-gray-800 min-h-screen">
       <Navigation />
       
-      <RoleHeader 
+      <RoleHeader
         user={user}
         title="Parent Dashboard"
         stats={[
-          { label: "Next Pickup", value: "3:25 PM" }
+          { label: "Next Pickup", value: (() => {
+            if (!Array.isArray(students) || students.length === 0) return "No students";
+            // Find the next upcoming pickup from all students' route stops
+            const now = new Date();
+            const currentMinutes = now.getHours() * 60 + now.getMinutes();
+            let nextTime: string | null = null;
+            let nextMinutes = Infinity;
+            for (const student of students) {
+              const time = (student as any).stop?.scheduledTime;
+              if (time) {
+                const [h, m] = time.split(':').map(Number);
+                const stopMinutes = h * 60 + m;
+                if (stopMinutes >= currentMinutes && stopMinutes < nextMinutes) {
+                  nextMinutes = stopMinutes;
+                  nextTime = time;
+                }
+              }
+            }
+            if (!nextTime) {
+              // If no upcoming stop today, show the earliest stop time
+              for (const student of students) {
+                const time = (student as any).stop?.scheduledTime;
+                if (time) {
+                  const [h, m] = time.split(':').map(Number);
+                  const stopMinutes = h * 60 + m;
+                  if (stopMinutes < nextMinutes) {
+                    nextMinutes = stopMinutes;
+                    nextTime = time;
+                  }
+                }
+              }
+            }
+            if (!nextTime) return "Not scheduled";
+            const [h, m] = nextTime.split(':').map(Number);
+            const period = h >= 12 ? 'PM' : 'AM';
+            const hour12 = h % 12 || 12;
+            return `${hour12}:${m.toString().padStart(2, '0')} ${period}`;
+          })() }
         ]}
       />
 

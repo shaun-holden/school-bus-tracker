@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import {
   users,
   students,
@@ -87,6 +88,9 @@ import {
   systemNotifications,
   type SystemNotification,
   type InsertSystemNotification,
+  deviceTokens,
+  type DeviceToken,
+  type InsertDeviceToken,
   busJourneys,
   type BusJourney,
   type InsertBusJourney,
@@ -102,6 +106,8 @@ export interface IStorage {
   getUser(id: string): Promise<User | undefined>;
   upsertUser(user: UpsertUser): Promise<User>;
   updateUserRole(id: string, role: string): Promise<User | undefined>;
+  updateUserCompany(id: string, companyId: string): Promise<User | undefined>;
+  getUsersByCompanyId(companyId: string): Promise<User[]>;
   updateDriverProfile(id: string, updates: Partial<User>): Promise<User | undefined>;
   getAllDrivers(companyId: string): Promise<User[]>;
   getActiveDrivers(companyId: string): Promise<User[]>;
@@ -119,7 +125,9 @@ export interface IStorage {
   // School operations
   getAllSchools(): Promise<School[]>;
   createSchool(school: InsertSchool): Promise<School>;
-  
+  updateSchool(id: string, data: Partial<InsertSchool>): Promise<School | undefined>;
+  deleteSchool(id: string): Promise<boolean>;
+
   // Route operations
   getAllRoutes(): Promise<Route[]>;
   getRouteById(id: string): Promise<Route | undefined>;
@@ -149,6 +157,7 @@ export interface IStorage {
   getStudentsByParentId(parentId: string): Promise<Student[]>;
   getStudentsByRouteId(routeId: string): Promise<Student[]>;
   getStudentsByStopId(stopId: string): Promise<Student[]>;
+  getStudentsBySchoolId(schoolId: string): Promise<Student[]>;
   createStudent(student: InsertStudent): Promise<Student>;
   updateStudent(id: string, updates: Partial<InsertStudent>): Promise<Student | undefined>;
   deleteStudent(id: string): Promise<boolean>;
@@ -303,6 +312,7 @@ export interface IStorage {
   getSystemNotificationsForDriver(driverId: string, companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForParent(parentId: string, companyId: string): Promise<SystemNotification[]>;
   markSystemNotificationAsRead(notificationId: string): Promise<SystemNotification | undefined>;
+  deleteSystemNotification(id: string): Promise<boolean>;
   getUnreadNotificationCountForAdmin(companyId: string): Promise<number>;
   getUnreadNotificationCountForDriver(driverId: string, companyId: string): Promise<number>;
   getUnreadNotificationCountForParent(parentId: string, companyId: string): Promise<number>;
@@ -319,6 +329,12 @@ export interface IStorage {
   getTodayCompletedStops(routeId: string): Promise<RouteStopCompletion[]>;
   getLastCompletedStop(routeId: string): Promise<RouteStopCompletion | undefined>;
   resetRouteStops(routeId: string): Promise<void>;
+
+  // Device token operations (push notifications)
+  registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken>;
+  removeDeviceToken(token: string): Promise<void>;
+  getDeviceTokensForUser(userId: string): Promise<DeviceToken[]>;
+  getDeviceTokensForUsers(userIds: string[]): Promise<DeviceToken[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -352,6 +368,19 @@ export class DatabaseStorage implements IStorage {
     return updatedUser;
   }
 
+  async updateUserCompany(id: string, companyId: string): Promise<User | undefined> {
+    const [updatedUser] = await db
+      .update(users)
+      .set({ companyId, updatedAt: new Date() })
+      .where(eq(users.id, id))
+      .returning();
+    return updatedUser;
+  }
+
+  async getUsersByCompanyId(companyId: string): Promise<User[]> {
+    return await db.select().from(users).where(eq(users.companyId, companyId)).orderBy(asc(users.firstName));
+  }
+
   async updateDriverProfile(id: string, updates: Partial<User>): Promise<User | undefined> {
     const [user] = await db
       .update(users)
@@ -367,7 +396,7 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(
         and(
-          eq(users.role, 'driver'),
+          or(eq(users.role, 'driver'), eq(users.role, 'driver_admin')),
           eq(users.companyId, companyId)
         )
       )
@@ -380,7 +409,7 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(
         and(
-          eq(users.role, 'driver'),
+          or(eq(users.role, 'driver'), eq(users.role, 'driver_admin')),
           eq(users.companyId, companyId),
           eq(users.isActive, true)
         )
@@ -394,7 +423,7 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(
         and(
-          eq(users.role, 'driver'),
+          or(eq(users.role, 'driver'), eq(users.role, 'driver_admin')),
           eq(users.companyId, companyId),
           eq(users.isActive, false)
         )
@@ -405,7 +434,7 @@ export class DatabaseStorage implements IStorage {
   async deactivateDriver(driverId: string, companyId: string): Promise<User | undefined> {
     // Verify driver belongs to company
     const driver = await this.getUser(driverId);
-    if (!driver || driver.role !== 'driver' || driver.companyId !== companyId) {
+    if (!driver || (driver.role !== 'driver' && driver.role !== 'driver_admin') || driver.companyId !== companyId) {
       return undefined;
     }
 
@@ -453,7 +482,7 @@ export class DatabaseStorage implements IStorage {
   async reactivateDriver(driverId: string, companyId: string): Promise<User | undefined> {
     // Verify driver belongs to company
     const driver = await this.getUser(driverId);
-    if (!driver || driver.role !== 'driver' || driver.companyId !== companyId) {
+    if (!driver || (driver.role !== 'driver' && driver.role !== 'driver_admin') || driver.companyId !== companyId) {
       return undefined;
     }
 
@@ -470,7 +499,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getOnDutyDrivers(companyId?: string): Promise<User[]> {
-    const conditions = [eq(users.role, 'driver'), eq(users.isOnDuty, true)];
+    const conditions = [or(eq(users.role, 'driver'), eq(users.role, 'driver_admin'))!, eq(users.isOnDuty, true)];
     if (companyId) {
       conditions.push(eq(users.companyId, companyId));
     }
@@ -518,7 +547,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(users.companyId, companyId),
-          or(eq(users.role, 'admin'), eq(users.role, 'driver'))
+          or(eq(users.role, 'admin'), eq(users.role, 'driver'), eq(users.role, 'driver_admin'))
         )
       );
     return Number(result[0]?.count) || 0;
@@ -547,8 +576,8 @@ export class DatabaseStorage implements IStorage {
     const staffLimit = company.staffUserLimit;
     const parentLimit = company.parentUserLimit;
 
-    // Check if this is a staff role (admin or driver)
-    if (role === 'admin' || role === 'driver') {
+    // Check if this is a staff role (admin or driver or driver_admin)
+    if (role === 'admin' || role === 'driver' || role === 'driver_admin') {
       // Null means unlimited
       if (staffLimit === null) {
         return { allowed: true };
@@ -603,6 +632,23 @@ export class DatabaseStorage implements IStorage {
   async getSchoolById(id: string): Promise<School | undefined> {
     const [school] = await db.select().from(schools).where(eq(schools.id, id));
     return school;
+  }
+
+  async updateSchool(id: string, data: Partial<InsertSchool>): Promise<School | undefined> {
+    const [updated] = await db.update(schools).set(data).where(eq(schools.id, id)).returning();
+    return updated;
+  }
+
+  async deleteSchool(id: string): Promise<boolean> {
+    // Remove from route_schools first
+    await db.delete(routeSchools).where(eq(routeSchools.schoolId, id));
+    // Remove from route_stops
+    await db.delete(routeStops).where(eq(routeStops.schoolId, id));
+    // Unlink students (set schoolId to null)
+    await db.update(students).set({ schoolId: null }).where(eq(students.schoolId, id));
+    // Delete the school
+    await db.delete(schools).where(eq(schools.id, id));
+    return true;
   }
 
   // Route operations
@@ -790,6 +836,14 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(students)
       .where(eq(students.stopId, stopId))
+      .orderBy(asc(students.lastName));
+  }
+
+  async getStudentsBySchoolId(schoolId: string): Promise<Student[]> {
+    return await db
+      .select()
+      .from(students)
+      .where(eq(students.schoolId, schoolId))
       .orderBy(asc(students.lastName));
   }
 
@@ -2449,6 +2503,11 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
+  async deleteSystemNotification(id: string): Promise<boolean> {
+    const result = await db.delete(systemNotifications).where(eq(systemNotifications.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
+  }
+
   async getUnreadNotificationCountForAdmin(companyId: string): Promise<number> {
     const result = await db
       .select({ count: sql<number>`count(*)::int` })
@@ -2684,6 +2743,35 @@ export class DatabaseStorage implements IStorage {
           sql`DATE(${routeStopCompletions.completionDate}) = DATE(${today})`
         )
       );
+  }
+  // Device token operations (push notifications)
+  async registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken> {
+    // Upsert: deactivate any existing token for this device, then insert
+    await db.update(deviceTokens)
+      .set({ isActive: false })
+      .where(eq(deviceTokens.token, token));
+
+    const [deviceToken] = await db.insert(deviceTokens)
+      .values({ userId, token, platform, isActive: true })
+      .returning();
+    return deviceToken;
+  }
+
+  async removeDeviceToken(token: string): Promise<void> {
+    await db.update(deviceTokens)
+      .set({ isActive: false })
+      .where(eq(deviceTokens.token, token));
+  }
+
+  async getDeviceTokensForUser(userId: string): Promise<DeviceToken[]> {
+    return await db.select().from(deviceTokens)
+      .where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.isActive, true)));
+  }
+
+  async getDeviceTokensForUsers(userIds: string[]): Promise<DeviceToken[]> {
+    if (userIds.length === 0) return [];
+    return await db.select().from(deviceTokens)
+      .where(and(inArray(deviceTokens.userId, userIds), eq(deviceTokens.isActive, true)));
   }
 }
 
