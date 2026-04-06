@@ -6,7 +6,7 @@ function isAdminRole(role: string | undefined | null): boolean {
 }
 
 function isDriverRole(role: string | undefined | null): boolean {
-  return role === 'driver' || role === 'driver_admin';
+  return role === 'driver' || role === 'driver_admin' || role === 'master_admin';
 }
 
 describe('Role-Based Access Control - Admin Role Check', () => {
@@ -69,8 +69,8 @@ describe('Role-Based Access Control - Driver Role Check', () => {
     expect(isDriverRole('parent')).toBe(false);
   });
 
-  it('should deny driver access to master_admin role', () => {
-    expect(isDriverRole('master_admin')).toBe(false);
+  it('should grant driver access to master_admin role', () => {
+    expect(isDriverRole('master_admin')).toBe(true);
   });
 
   it('should deny driver access to undefined role', () => {
@@ -103,9 +103,9 @@ describe('Role-Based Access Control - Role Hierarchy', () => {
     expect(isDriverRole('parent')).toBe(false);
   });
 
-  it('master_admin should have admin access but not driver access', () => {
+  it('master_admin should have both admin and driver access', () => {
     expect(isAdminRole('master_admin')).toBe(true);
-    expect(isDriverRole('master_admin')).toBe(false);
+    expect(isDriverRole('master_admin')).toBe(true);
   });
 });
 

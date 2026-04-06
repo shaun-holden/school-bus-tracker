@@ -19,12 +19,24 @@ import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
 
+function isMasterAdmin(role: string | undefined | null): boolean {
+  return role === 'master_admin';
+}
+
 function isAdminRole(role: string | undefined | null): boolean {
   return role === 'admin' || role === 'master_admin' || role === 'driver_admin';
 }
 
 function isDriverRole(role: string | undefined | null): boolean {
-  return role === 'driver' || role === 'driver_admin';
+  return role === 'driver' || role === 'driver_admin' || role === 'master_admin';
+}
+
+function isParentRole(role: string | undefined | null): boolean {
+  return role === 'parent' || role === 'master_admin';
+}
+
+function canAccessMessaging(role: string | undefined | null): boolean {
+  return role === 'parent' || role === 'driver' || role === 'master_admin';
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -400,7 +412,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver access required" });
       }
 
@@ -1051,7 +1063,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
@@ -1105,7 +1117,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
@@ -1223,7 +1235,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -1242,7 +1254,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -1278,7 +1290,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -1312,7 +1324,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -1334,7 +1346,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -1621,7 +1633,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1813,7 +1825,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver access required" });
       }
 
@@ -1860,7 +1872,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver access required" });
       }
 
@@ -1908,7 +1920,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await storage.getUser(userId);
       
       // Allow both drivers and admins to update location (admins for testing)
-      if (!user || (user.role !== 'driver' && !isAdminRole(user.role))) {
+      if (!user || (!isDriverRole(user.role) && !isAdminRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -1940,7 +1952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -2007,7 +2019,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -2028,7 +2040,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
@@ -2066,7 +2078,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -2094,7 +2106,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -2212,7 +2224,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
       
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
@@ -2416,7 +2428,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || (!isAdminRole(user.role) && user.role !== 'parent')) {
+      if (!user || (!isAdminRole(user.role) && !isParentRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - admin or parent access required" });
       }
 
@@ -2568,7 +2580,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || (!isAdminRole(user.role) && user.role !== 'driver')) {
+      if (!user || (!isAdminRole(user.role) && !isDriverRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - admin or driver access required" });
       }
 
@@ -2602,7 +2614,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || (!isAdminRole(user.role) && user.role !== 'driver')) {
+      if (!user || (!isAdminRole(user.role) && !isDriverRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - admin or driver access required" });
       }
 
@@ -2748,7 +2760,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
@@ -2910,7 +2922,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || (user.role !== 'driver' && !isAdminRole(user.role))) {
+      if (!user || (!isDriverRole(user.role) && !isAdminRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - driver or admin required" });
       }
 
@@ -2940,7 +2952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
@@ -3023,7 +3035,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
@@ -3044,7 +3056,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
@@ -3065,7 +3077,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
@@ -3192,7 +3204,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
@@ -3214,7 +3226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
@@ -3304,7 +3316,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
@@ -3628,7 +3640,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent role required" });
       }
 
@@ -3684,7 +3696,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent role required" });
       }
 
@@ -3711,7 +3723,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (user.role !== 'parent' && user.role !== 'driver') {
+      if (!canAccessMessaging(user.role)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -3772,7 +3784,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (user.role !== 'parent' && user.role !== 'driver') {
+      if (!canAccessMessaging(user.role)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -3806,7 +3818,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (user.role !== 'parent' && user.role !== 'driver') {
+      if (!canAccessMessaging(user.role)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -3847,7 +3859,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (user.role !== 'parent' && user.role !== 'driver') {
+      if (!canAccessMessaging(user.role)) {
         return res.status(403).json({ message: "Only parents and drivers can send messages" });
       }
 
@@ -3971,7 +3983,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can update location" });
       }
 
@@ -4021,7 +4033,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can access this" });
       }
 
@@ -4047,7 +4059,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can mark stops" });
       }
 
@@ -4132,7 +4144,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can access this" });
       }
 
@@ -4202,7 +4214,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can reset stops" });
       }
 
@@ -4230,7 +4242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can enable check-in" });
       }
 
@@ -4264,7 +4276,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can disable check-in" });
       }
 
@@ -4297,7 +4309,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can view check-in status" });
       }
 
@@ -4341,7 +4353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can view attendance" });
       }
 
@@ -4378,7 +4390,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'parent') {
+      if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can set check-in status" });
       }
 
@@ -4433,7 +4445,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can confirm boarding" });
       }
 
@@ -4510,7 +4522,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can confirm drop-off" });
       }
 
@@ -4563,7 +4575,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can view waiting check-ins" });
       }
 
@@ -5004,7 +5016,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can start journeys" });
       }
 
@@ -5053,7 +5065,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
-      if (!user || user.role !== 'driver') {
+      if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can update journey events" });
       }
 
