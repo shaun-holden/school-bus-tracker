@@ -1197,19 +1197,26 @@ export default function DriverDashboard() {
                 ) : Array.isArray(routeStudents) && routeStudents.length > 0 ? (
                   <div className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                      {routeStudents.map((student: any) => (
-                        <Card key={student.id} className={`hover:shadow-md transition-shadow border-l-4 ${
-                          (() => {
-                            const attendance = Array.isArray(studentAttendanceData) 
-                              ? studentAttendanceData.find((att: any) => att.studentId === student.id)
-                              : null;
-                            return attendance?.status === "present" 
-                              ? "border-l-green-500 bg-green-50" 
-                              : attendance?.status === "absent" 
-                                ? "border-l-blue-500 bg-blue-50" 
-                                : "border-l-gray-300";
-                          })()
-                        }`}>
+                      {routeStudents.map((student: any) => {
+                        const attendance = Array.isArray(studentAttendanceData)
+                          ? studentAttendanceData.find((att: any) => att.studentId === student.id)
+                          : null;
+                        const isMarked = !!attendance;
+                        return (
+                        <Card
+                          key={student.id}
+                          onClick={() => {
+                            if (!isMarked && !markAttendanceMutation.isPending) {
+                              markAttendanceMutation.mutate({ studentId: student.id, status: "present" });
+                            }
+                          }}
+                          className={`hover:shadow-md transition-all border-l-4 ${!isMarked ? 'cursor-pointer active:scale-95 active:shadow-inner' : ''} ${
+                            attendance?.status === "present"
+                              ? "border-l-green-500 bg-green-50"
+                              : attendance?.status === "absent"
+                                ? "border-l-blue-500 bg-blue-50"
+                                : "border-l-gray-300 hover:border-l-green-400"
+                          }`}>
                           <CardContent className="p-4">
                             <div className="flex items-start justify-between mb-3">
                               <div>
@@ -1263,63 +1270,59 @@ export default function DriverDashboard() {
                               </div>
                             </div>
 
-                            <div className="mt-4 pt-3 border-t">
-                              {/* Check for attendance record */}
-                              {(() => {
-                                const attendance = Array.isArray(studentAttendanceData) 
-                                  ? studentAttendanceData.find((att: any) => att.studentId === student.id)
-                                  : null;
-                                
-                                return (
-                                  <div className="space-y-2">
-                                    {attendance && (
-                                      <div className={`text-xs font-medium p-2 rounded ${
-                                        attendance.status === "present" 
-                                          ? "bg-green-100 text-green-700" 
-                                          : "bg-blue-100 text-blue-700"
-                                      }`}>
-                                        Marked {attendance.status} at {new Date(attendance.createdAt).toLocaleTimeString()}
-                                      </div>
-                                    )}
-                                    <div className="flex gap-2">
-                                      <Button
-                                        size="sm"
-                                        variant={attendance?.status === "present" ? "default" : "outline"}
-                                        className={`flex-1 ${
-                                          attendance?.status === "present" 
-                                            ? "bg-green-600 hover:bg-green-700 text-white" 
-                                            : "hover:bg-green-50 hover:text-green-700 hover:border-green-300"
-                                        }`}
-                                        onClick={() => markAttendanceMutation.mutate({ studentId: student.id, status: "present" })}
-                                        disabled={markAttendanceMutation.isPending}
-                                        data-testid={`button-mark-present-${student.id}`}
-                                      >
-                                        <CheckCircle className="w-4 h-4 mr-1" />
-                                        {markAttendanceMutation.isPending ? "Marking..." : "Present"}
-                                      </Button>
-                                      <Button
-                                        size="sm"
-                                        variant={attendance?.status === "absent" ? "default" : "outline"}
-                                        className={`flex-1 ${
-                                          attendance?.status === "absent" 
-                                            ? "bg-blue-600 hover:bg-blue-700 text-white" 
-                                            : "hover:bg-blue-50 hover:text-blue-700 hover:border-blue-300"
-                                        }`}
-                                        onClick={() => markAttendanceMutation.mutate({ studentId: student.id, status: "absent" })}
-                                        disabled={markAttendanceMutation.isPending}
-                                        data-testid={`button-mark-absent-${student.id}`}
-                                      >
-                                        <AlertTriangle className="w-4 h-4 mr-1" />
-                                        {markAttendanceMutation.isPending ? "Marking..." : "Absent"}
-                                      </Button>
-                                    </div>
+                            <div className="mt-4 pt-3 border-t" onClick={(e) => e.stopPropagation()}>
+                              <div className="space-y-2">
+                                {attendance ? (
+                                  <div className={`text-sm font-semibold p-3 rounded-lg text-center ${
+                                    attendance.status === "present"
+                                      ? "bg-green-100 text-green-700"
+                                      : "bg-blue-100 text-blue-700"
+                                  }`}>
+                                    {attendance.status === "present" ? "Present" : "Absent"} at {new Date(attendance.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                   </div>
-                                );
-                              })()}
+                                ) : (
+                                  <p className="text-xs text-center text-gray-500 italic">Tap card to mark Present</p>
+                                )}
+                                <div className="flex gap-2">
+                                  <Button
+                                    size="lg"
+                                    variant={attendance?.status === "present" ? "default" : "outline"}
+                                    className={`flex-1 h-12 text-base ${
+                                      attendance?.status === "present"
+                                        ? "bg-green-600 hover:bg-green-700 text-white"
+                                        : "hover:bg-green-50 hover:text-green-700 hover:border-green-300"
+                                    }`}
+                                    onClick={() => markAttendanceMutation.mutate({ studentId: student.id, status: "present" })}
+                                    disabled={markAttendanceMutation.isPending}
+                                    data-testid={`button-mark-present-${student.id}`}
+                                    aria-label={`Mark ${student.firstName} ${student.lastName} present`}
+                                  >
+                                    <CheckCircle className="w-5 h-5 mr-1" />
+                                    Present
+                                  </Button>
+                                  <Button
+                                    size="lg"
+                                    variant={attendance?.status === "absent" ? "default" : "outline"}
+                                    className={`flex-1 h-12 text-base ${
+                                      attendance?.status === "absent"
+                                        ? "bg-blue-600 hover:bg-blue-700 text-white"
+                                        : "hover:bg-blue-50 hover:text-blue-700 hover:border-blue-300"
+                                    }`}
+                                    onClick={() => markAttendanceMutation.mutate({ studentId: student.id, status: "absent" })}
+                                    disabled={markAttendanceMutation.isPending}
+                                    data-testid={`button-mark-absent-${student.id}`}
+                                    aria-label={`Mark ${student.firstName} ${student.lastName} absent`}
+                                  >
+                                    <AlertTriangle className="w-5 h-5 mr-1" />
+                                    Absent
+                                  </Button>
+                                </div>
+                              </div>
                             </div>
                           </CardContent>
                         </Card>
-                      ))}
+                        );
+                      })}
                     </div>
 
                     {/* Student Summary */}
