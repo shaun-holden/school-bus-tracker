@@ -303,6 +303,13 @@ export default function DriverDashboard() {
   const [showDutyDialog, setShowDutyDialog] = useState(false);
   const [showCheckInDialog, setShowCheckInDialog] = useState(false);
   const [selectedDriverId, setSelectedDriverId] = useState("");
+  const [shiftSummary, setShiftSummary] = useState<{
+    durationMinutes: number;
+    studentsPresent: number;
+    studentsAbsent: number;
+    schoolsVisited: number;
+    issuesReported: number;
+  } | null>(null);
 
   // Update duty status when user data changes
   useEffect(() => {
@@ -754,6 +761,21 @@ export default function DriverDashboard() {
   // Duty status toggle mutation - ties all duty actions together
   const toggleDutyMutation = useMutation({
     mutationFn: async (onDutyStatus: boolean) => {
+      // Capture shift summary data BEFORE going off-duty
+      if (!onDutyStatus && isOnDuty) {
+        const attendance = Array.isArray(studentAttendanceData) ? studentAttendanceData : [];
+        const visits = Array.isArray(schoolVisits) ? schoolVisits : [];
+        const issues: any[] = [];
+        const startTime = (user as any)?.dutyStartTime ? new Date((user as any).dutyStartTime) : new Date();
+        const durationMinutes = Math.floor((Date.now() - startTime.getTime()) / (1000 * 60));
+        setShiftSummary({
+          durationMinutes,
+          studentsPresent: attendance.filter((a: any) => a.status === 'present').length,
+          studentsAbsent: attendance.filter((a: any) => a.status === 'absent').length,
+          schoolsVisited: visits.length,
+          issuesReported: issues.length,
+        });
+      }
       // Update duty status
       const result = await apiRequest("/api/driver/duty-status", "PATCH", {
         isOnDuty: onDutyStatus
@@ -2548,7 +2570,40 @@ export default function DriverDashboard() {
         </DialogContent>
       </Dialog>
 
-
+      {/* Shift Summary Dialog */}
+      <Dialog open={!!shiftSummary} onOpenChange={(open) => !open && setShiftSummary(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Shift Complete</DialogTitle>
+            <DialogDescription>Here's your shift summary:</DialogDescription>
+          </DialogHeader>
+          {shiftSummary && (
+            <div className="grid grid-cols-2 gap-4 py-4">
+              <div className="bg-blue-50 rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-blue-600">
+                  {Math.floor(shiftSummary.durationMinutes / 60)}h {shiftSummary.durationMinutes % 60}m
+                </p>
+                <p className="text-sm text-gray-600 mt-1">Duration</p>
+              </div>
+              <div className="bg-green-50 rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-green-600">{shiftSummary.schoolsVisited}</p>
+                <p className="text-sm text-gray-600 mt-1">Schools Visited</p>
+              </div>
+              <div className="bg-purple-50 rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-purple-600">{shiftSummary.studentsPresent}</p>
+                <p className="text-sm text-gray-600 mt-1">Students Present</p>
+              </div>
+              <div className="bg-orange-50 rounded-lg p-4 text-center">
+                <p className="text-3xl font-bold text-orange-600">{shiftSummary.studentsAbsent}</p>
+                <p className="text-sm text-gray-600 mt-1">Students Absent</p>
+              </div>
+            </div>
+          )}
+          <Button onClick={() => setShiftSummary(null)} className="w-full">
+            Done
+          </Button>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
