@@ -38,7 +38,7 @@ export default function ParentQuickActions() {
 
   const reportAbsenceMutation = useMutation({
     mutationFn: async (data: z.infer<typeof absenceSchema>) => {
-      await apiRequest("POST", `/api/students/${data.studentId}/absence`, {
+      await apiRequest(`/api/students/${data.studentId}/absence`, "POST", {
         date: data.date,
         notes: data.notes,
       });
@@ -73,12 +73,39 @@ export default function ParentQuickActions() {
     });
   };
 
+  const studentsList = Array.isArray(students) ? students : [];
+  const hasSingleChild = studentsList.length === 1;
+
+  const handleQuickAbsentToday = () => {
+    if (hasSingleChild) {
+      reportAbsenceMutation.mutate({
+        studentId: studentsList[0].id,
+        date: new Date().toISOString().split('T')[0],
+        notes: "",
+      });
+    } else {
+      setIsAbsenceDialogOpen(true);
+      form.setValue("date", new Date().toISOString().split('T')[0]);
+    }
+  };
+
   return (
     <Card>
       <CardHeader>
         <CardTitle className="text-lg font-semibold">Quick Actions</CardTitle>
       </CardHeader>
       <CardContent>
+        {hasSingleChild && (
+          <Button
+            className="w-full mb-3 bg-warning hover:bg-warning/90 text-white h-12"
+            onClick={handleQuickAbsentToday}
+            disabled={reportAbsenceMutation.isPending}
+            data-testid="button-quick-absent-today"
+          >
+            <i className="fas fa-user-times mr-2"></i>
+            Mark {studentsList[0].firstName} Absent Today
+          </Button>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <Dialog open={isAbsenceDialogOpen} onOpenChange={setIsAbsenceDialogOpen}>
             <DialogTrigger asChild>
@@ -126,6 +153,32 @@ export default function ParentQuickActions() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Date</FormLabel>
+                        <div className="flex gap-2 mb-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => field.onChange(new Date().toISOString().split('T')[0])}
+                            data-testid="button-absent-today"
+                          >
+                            Today
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              const tomorrow = new Date();
+                              tomorrow.setDate(tomorrow.getDate() + 1);
+                              field.onChange(tomorrow.toISOString().split('T')[0]);
+                            }}
+                            data-testid="button-absent-tomorrow"
+                          >
+                            Tomorrow
+                          </Button>
+                        </div>
                         <FormControl>
                           <input
                             type="date"
