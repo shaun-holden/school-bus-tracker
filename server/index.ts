@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import fs from "fs";
 import path from "path";
@@ -125,8 +126,8 @@ app.use((req, res, next) => {
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 
+    console.error('Unhandled error:', err);
     res.status(status).json({ message });
-    throw err;
   });
 
   // Use Vite in development, static files in production.
@@ -143,11 +144,7 @@ app.use((req, res, next) => {
   }
 
   const port = parseInt(process.env.PORT || '5000', 10);
-  server.listen({
-    port,
-    host: "0.0.0.0",
-    reusePort: true,
-  }, () => {
+  server.listen(port, "0.0.0.0", () => {
     log(`serving on port ${port}`);
     // Initialize Stripe after server is already listening so failures don't crash startup
     initStripe().catch(err => console.error('Stripe init error (non-fatal):', err));

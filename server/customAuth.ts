@@ -5,9 +5,27 @@ import session from "express-session";
 import bcrypt from "bcryptjs";
 import connectPg from "connect-pg-simple";
 import crypto from "crypto";
+import rateLimit from "express-rate-limit";
 import { storage } from "./storage";
 import { User } from "@shared/schema";
 import { sendPasswordResetEmail } from "./emailService";
+
+// Rate limiters for auth endpoints
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 attempts per window
+  message: { message: "Too many attempts, please try again in 15 minutes" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+const registerLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5, // 5 registrations per hour
+  message: { message: "Too many accounts created, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -49,7 +67,13 @@ export function getSession() {
   });
   
   return session({
-    secret: process.env.SESSION_SECRET || 'dev-secret-change-in-production',
+    secret: (() => {
+      if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('SESSION_SECRET must be set in production');
+      }
+      return 'dev-secret-change-in-production';
+    })(),
     store: sessionStore,
     resave: false,
     saveUninitialized: false,
@@ -129,7 +153,7 @@ export async function setupCustomAuth(app: Express) {
     }
   });
 
-  app.post("/api/auth/register", async (req, res) => {
+  app.post("/api/auth/register", registerLimiter, async (req, res) => {
     try {
       const { email, password, firstName, lastName, companySlug, role } = req.body;
 
@@ -207,7 +231,7 @@ export async function setupCustomAuth(app: Express) {
     }
   });
 
-  app.post("/api/auth/login", (req, res, next) => {
+  app.post("/api/auth/login", authLimiter, (req, res, next) => {
     passport.authenticate('local', (err: any, user: any, info: any) => {
       if (err) {
         return res.status(500).json({ message: "Login failed" });
@@ -257,7 +281,7 @@ export async function setupCustomAuth(app: Express) {
     res.json(req.user);
   });
 
-  app.post("/api/auth/forgot-password", async (req, res) => {
+  app.post("/api/auth/forgot-password", authLimiter, async (req, res) => {
     try {
       const { email } = req.body;
 
@@ -306,7 +330,7 @@ export async function setupCustomAuth(app: Express) {
     }
   });
 
-  app.post("/api/auth/reset-password", async (req, res) => {
+  app.post("/api/auth/reset-password", authLimiter, async (req, res) => {
     try {
       const { token, password } = req.body;
 
