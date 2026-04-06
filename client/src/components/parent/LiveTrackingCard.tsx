@@ -381,16 +381,24 @@ export default function LiveTrackingCard() {
                           </div>
                         );
                       } else if (stopProgress.stopsAway > 0) {
+                        // Simple ETA: ~3 minutes per stop average
+                        const etaMinutes = stopProgress.stopsAway * 3;
+                        const etaTime = new Date(Date.now() + etaMinutes * 60000);
+                        const etaString = etaTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                         return (
                           <div className="mb-4 p-4 bg-blue-100 border border-blue-300 rounded-lg">
                             <div className="flex items-center gap-3">
                               <Bus className="w-8 h-8 text-blue-600" />
-                              <div>
+                              <div className="flex-1">
                                 <div className="text-lg font-semibold text-blue-800">
                                   Bus is {stopProgress.stopsAway} stop{stopProgress.stopsAway > 1 ? 's' : ''} away
                                 </div>
                                 <div className="text-sm text-blue-700">
                                   Your stop: {stopProgress.studentStopAddress} (Stop #{stopProgress.studentStopSequence} of {stopProgress.totalStops})
+                                </div>
+                                <div className="mt-2 inline-flex items-center gap-1 px-2 py-1 bg-blue-200 rounded text-sm font-medium text-blue-900">
+                                  <Clock className="w-3 h-3" />
+                                  ETA ~{etaMinutes} min ({etaString})
                                 </div>
                               </div>
                             </div>
