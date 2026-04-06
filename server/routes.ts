@@ -19,24 +19,38 @@ import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
 
-function isMasterAdmin(role: string | undefined | null): boolean {
-  return role === 'master_admin';
+function isMasterAdmin(user: any): boolean {
+  return user?.role === 'master_admin' || user?._masterAdminImpersonating === true;
 }
 
 function isAdminRole(role: string | undefined | null): boolean {
   return role === 'admin' || role === 'master_admin' || role === 'driver_admin';
 }
 
-function isDriverRole(role: string | undefined | null): boolean {
-  return role === 'driver' || role === 'driver_admin' || role === 'master_admin';
+function isDriverRole(roleOrUser: any): boolean {
+  // Accept either a role string (legacy) or a user object
+  if (typeof roleOrUser === 'string' || roleOrUser == null) {
+    return roleOrUser === 'driver' || roleOrUser === 'driver_admin' || roleOrUser === 'master_admin';
+  }
+  // User object
+  const role = roleOrUser.role;
+  return role === 'driver' || role === 'driver_admin' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
 }
 
-function isParentRole(role: string | undefined | null): boolean {
-  return role === 'parent' || role === 'master_admin';
+function isParentRole(roleOrUser: any): boolean {
+  if (typeof roleOrUser === 'string' || roleOrUser == null) {
+    return roleOrUser === 'parent' || roleOrUser === 'master_admin';
+  }
+  const role = roleOrUser.role;
+  return role === 'parent' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
 }
 
-function canAccessMessaging(role: string | undefined | null): boolean {
-  return role === 'parent' || role === 'driver' || role === 'master_admin';
+function canAccessMessaging(roleOrUser: any): boolean {
+  if (typeof roleOrUser === 'string' || roleOrUser == null) {
+    return roleOrUser === 'parent' || roleOrUser === 'driver' || roleOrUser === 'master_admin';
+  }
+  const role = roleOrUser.role;
+  return role === 'parent' || role === 'driver' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
@@ -55,7 +69,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       req.user = {
         ...req.user,
         companyId: impersonatedCompanyId,
-        role: 'admin',
+        // Keep role as master_admin so role checks still allow access to everything
         _masterAdminImpersonating: true,
       };
     }

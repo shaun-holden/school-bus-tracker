@@ -274,7 +274,7 @@ export async function setupCustomAuth(app: Express) {
       return res.json({
         ...user,
         companyId: impersonatedCompanyId,
-        role: 'admin',
+        // Keep role as master_admin so frontend allows access to all views
         _masterAdminImpersonating: true,
       });
     }
