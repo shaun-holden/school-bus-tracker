@@ -44,10 +44,11 @@ export default function Navigation() {
           <div className="flex items-center space-x-2">
             {user?.role === "parent" && (
               <Link href="/parent/notifications">
-                <Button 
+                <Button
                   variant="ghost"
                   size="sm"
                   className="text-white hover:bg-blue-700 relative"
+                  aria-label={`Notifications${(unreadCount?.unreadCount || 0) > 0 ? ` (${unreadCount?.unreadCount} unread)` : ''}`}
                   data-testid="button-notifications"
                 >
                   <Bell className="w-5 h-5" />
