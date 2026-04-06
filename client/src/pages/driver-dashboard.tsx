@@ -1851,6 +1851,25 @@ export default function DriverDashboard() {
                                         <span>Arrived: {new Date(schoolVisit.arrivedAt).toLocaleTimeString()}</span>
                                       </div>
                                     )}
+                                    {!schoolVisit?.arrivedAt && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="w-full"
+                                        onClick={() => {
+                                          const query = encodeURIComponent(school.address || school.name || "");
+                                          const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+                                          const url = isIOS
+                                            ? `https://maps.apple.com/?daddr=${query}`
+                                            : `https://www.google.com/maps/dir/?api=1&destination=${query}`;
+                                          window.open(url, "_blank");
+                                        }}
+                                        aria-label={`Navigate to ${school.name}`}
+                                      >
+                                        <Navigation className="w-4 h-4 mr-1" />
+                                        Navigate
+                                      </Button>
+                                    )}
                                     {schoolVisit?.arrivedAt && !schoolVisit.departedAt ? (
                                       <Button
                                         size="sm"
@@ -1914,23 +1933,42 @@ export default function DriverDashboard() {
                                   </div>
 
                                   {isOnDuty && assignedRouteId && (
-                                    <Button
-                                      size="sm"
-                                      className="w-full bg-green-600 hover:bg-green-700"
-                                      onClick={() => markStopCompletedMutation.mutate({
-                                        routeStopId: stop.id,
-                                        routeId: assignedRouteId,
-                                        stopSequence,
-                                      })}
-                                      disabled={markStopCompletedMutation.isPending}
-                                    >
-                                      {markStopCompletedMutation.isPending ? (
-                                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                                      ) : (
-                                        <MapPin className="w-4 h-4 mr-2" />
-                                      )}
-                                      Mark Arrived
-                                    </Button>
+                                    <div className="flex gap-2">
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="flex-1"
+                                        onClick={() => {
+                                          const query = encodeURIComponent(stop.address || stop.name || "");
+                                          const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+                                          const url = isIOS
+                                            ? `https://maps.apple.com/?daddr=${query}`
+                                            : `https://www.google.com/maps/dir/?api=1&destination=${query}`;
+                                          window.open(url, "_blank");
+                                        }}
+                                        aria-label={`Navigate to ${stop.name}`}
+                                      >
+                                        <Navigation className="w-4 h-4 mr-1" />
+                                        Navigate
+                                      </Button>
+                                      <Button
+                                        size="sm"
+                                        className="flex-1 bg-green-600 hover:bg-green-700"
+                                        onClick={() => markStopCompletedMutation.mutate({
+                                          routeStopId: stop.id,
+                                          routeId: assignedRouteId,
+                                          stopSequence,
+                                        })}
+                                        disabled={markStopCompletedMutation.isPending}
+                                      >
+                                        {markStopCompletedMutation.isPending ? (
+                                          <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+                                        ) : (
+                                          <MapPin className="w-4 h-4 mr-1" />
+                                        )}
+                                        Arrived
+                                      </Button>
+                                    </div>
                                   )}
                                 </CardContent>
                               </Card>
