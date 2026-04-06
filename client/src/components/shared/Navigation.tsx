@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
+import { useTheme } from "@/hooks/use-theme";
 import { useQuery } from "@tanstack/react-query";
-import { UserCog, Bell, Eye } from "lucide-react";
+import { UserCog, Bell, Eye, Sun, Moon } from "lucide-react";
 import { Link } from "wouter";
 import {
   DropdownMenu,
@@ -14,6 +15,7 @@ import {
 
 export default function Navigation() {
   const { user, logout } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   const { data: unreadCount } = useQuery<{ unreadCount: number }>({
     queryKey: ["/api/parent-notifications/unread-count"],
@@ -97,7 +99,17 @@ export default function Navigation() {
                 Change Role
               </Button>
             )}
-            <Button 
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-white hover:bg-blue-700"
+              onClick={toggleTheme}
+              aria-label="Toggle theme"
+              data-testid="button-theme-toggle"
+            >
+              {theme === "light" ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
+            </Button>
+            <Button
               variant="ghost"
               className="text-white hover:bg-blue-700"
               onClick={handleLogout}
