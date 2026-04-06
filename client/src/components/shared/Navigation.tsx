@@ -1,8 +1,16 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import { useQuery } from "@tanstack/react-query";
-import { UserCog, Bell } from "lucide-react";
+import { UserCog, Bell, Eye } from "lucide-react";
 import { Link } from "wouter";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
 
 export default function Navigation() {
   const { user, logout } = useAuth();
@@ -49,8 +57,36 @@ export default function Navigation() {
                 </Button>
               </Link>
             )}
-            {(user?.role === 'admin' || user?.role === 'master_admin') && (
-              <Button 
+            {user?.role === 'master_admin' && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="text-white hover:bg-blue-700"
+                    data-testid="button-view-as"
+                  >
+                    <Eye className="w-4 h-4 mr-1" />
+                    View As
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuLabel>Switch Dashboard View</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => window.location.href = '/admin'}>
+                    Administrator
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => window.location.href = '/driver'}>
+                    Driver
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => window.location.href = '/parent'}>
+                    Parent
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+            {user?.role === 'admin' && (
+              <Button
                 variant="ghost"
                 size="sm"
                 className="text-white hover:bg-blue-700"
