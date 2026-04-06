@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import {
   CheckCircle, XCircle, Ban, Clock, CreditCard, TrendingUp,
   Eye, Power, PowerOff, Search, Loader2, AlertTriangle, ClipboardList,
-  CheckCircle2
+  CheckCircle2, UserCog
 } from "lucide-react";
 
 interface Company {
@@ -75,6 +75,7 @@ function CompanyCard({
   onSuspend,
   onReactivate,
   onView,
+  onImpersonate,
   isPending,
 }: {
   company: Company;
@@ -83,6 +84,7 @@ function CompanyCard({
   onSuspend: () => void;
   onReactivate: () => void;
   onView: () => void;
+  onImpersonate: () => void;
   isPending: boolean;
 }) {
   return (
@@ -106,6 +108,17 @@ function CompanyCard({
           <Button variant="outline" size="sm" onClick={onView}>
             <Eye className="w-3.5 h-3.5 mr-1" /> Details
           </Button>
+
+          {company.status === "approved" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-blue-600 border-blue-200 hover:bg-blue-50"
+              onClick={onImpersonate}
+            >
+              <UserCog className="w-3.5 h-3.5 mr-1" /> Impersonate
+            </Button>
+          )}
 
           {company.status === "pending_approval" && (
             <>
@@ -224,6 +237,25 @@ export function MasterAdminPanel() {
     queryClient.invalidateQueries({ queryKey: ["/api/master-admin/companies"] });
     queryClient.invalidateQueries({ queryKey: ["/api/master-admin/stats"] });
   };
+
+  const impersonateMutation = useMutation({
+    mutationFn: async (companyId: string) => {
+      return await apiRequest(`/api/master-admin/impersonate/${companyId}`, "POST");
+    },
+    onSuccess: (data: any) => {
+      toast({
+        title: "Impersonating Company",
+        description: `Now viewing as ${data?.companyName || 'company'}. Redirecting...`,
+      });
+      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 1000);
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Failed to impersonate company.", variant: "destructive" });
+    },
+  });
 
   const approveMutation = useMutation({
     mutationFn: async (companyId: string) => {
@@ -421,6 +453,7 @@ export function MasterAdminPanel() {
                           setSelectedCompany(company);
                           setDetailsOpen(true);
                         }}
+                        onImpersonate={() => impersonateMutation.mutate(company.id)}
                         isPending={anyPending}
                       />
                     ))}
