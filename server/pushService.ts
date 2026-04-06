@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import https from "https";
+import admin from "firebase-admin";
 import { storage } from "./storage";
 
 // APNs Configuration - set these in Railway environment variables:
@@ -7,6 +8,24 @@ import { storage } from "./storage";
 // APNS_TEAM_ID       - Your Apple Developer Team ID
 // APNS_PRIVATE_KEY   - Contents of your .p8 key file
 // APNS_BUNDLE_ID     - Your app bundle ID (e.g., com.yourcompany.SchoolBusTracker)
+//
+// Firebase Configuration (for Android + Web Push):
+// FIREBASE_SERVICE_ACCOUNT - JSON string of your Firebase service account key
+
+// Initialize Firebase Admin SDK (for FCM - Android & Web)
+let firebaseInitialized = false;
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT && admin.apps.length === 0) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+    firebaseInitialized = true;
+    console.log("Firebase Admin SDK initialized for FCM");
+  }
+} catch (err) {
+  console.error("Failed to initialize Firebase Admin SDK:", err);
+}
 
 interface APNsPayload {
   title: string;
@@ -138,13 +157,64 @@ class PushService {
     });
   }
 
+  // Send via FCM (Android & Web)
+  private async sendToFCM(
+    deviceToken: string,
+    payload: APNsPayload
+  ): Promise<boolean> {
+    if (!firebaseInitialized) {
+      return false;
+    }
+    try {
+      await admin.messaging().send({
+        token: deviceToken,
+        notification: {
+          title: payload.title,
+          body: payload.body,
+        },
+        data: Object.fromEntries(
+          Object.entries(payload.data || {}).map(([k, v]) => [k, String(v)])
+        ),
+        webpush: {
+          notification: {
+            title: payload.title,
+            body: payload.body,
+            icon: "/icon-192.png",
+            badge: "/icon-192.png",
+          },
+          fcmOptions: {
+            link: "/",
+          },
+        },
+        android: {
+          priority: "high",
+          notification: {
+            sound: payload.sound === "critical" ? "critical" : "default",
+          },
+        },
+      });
+      return true;
+    } catch (err: any) {
+      console.error("FCM send error:", err.message);
+      // Remove invalid tokens
+      if (
+        err.code === "messaging/registration-token-not-registered" ||
+        err.code === "messaging/invalid-registration-token"
+      ) {
+        storage.removeDeviceToken(deviceToken).catch(() => {});
+      }
+      return false;
+    }
+  }
+
   // Send push notification to a specific user (all their devices)
   async sendToUser(userId: string, payload: APNsPayload): Promise<void> {
     const tokens = await storage.getDeviceTokensForUser(userId);
-    const iosTokens = tokens.filter((t) => t.platform === "ios");
-
     await Promise.allSettled(
-      iosTokens.map((t) => this.sendToAPNs(t.token, payload))
+      tokens.map((t) => {
+        if (t.platform === "ios") return this.sendToAPNs(t.token, payload);
+        return this.sendToFCM(t.token, payload);
+      })
     );
   }
 
@@ -153,10 +223,11 @@ class PushService {
     if (userIds.length === 0) return;
 
     const tokens = await storage.getDeviceTokensForUsers(userIds);
-    const iosTokens = tokens.filter((t) => t.platform === "ios");
-
     await Promise.allSettled(
-      iosTokens.map((t) => this.sendToAPNs(t.token, payload))
+      tokens.map((t) => {
+        if (t.platform === "ios") return this.sendToAPNs(t.token, payload);
+        return this.sendToFCM(t.token, payload);
+      })
     );
   }
 

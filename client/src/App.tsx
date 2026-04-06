@@ -5,6 +5,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
+import { useWebPush } from "@/hooks/use-web-push";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
@@ -23,6 +24,9 @@ import OnboardingPending from "@/pages/onboarding-pending";
 
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
+
+  // Register for web push notifications once authenticated
+  useWebPush(!!isAuthenticated && !!user?.id);
 
   useEffect(() => {
     if (isAuthenticated && user?.id) {
