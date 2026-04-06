@@ -73,6 +73,11 @@ function Router() {
           {user?.role === 'parent' && <Route path="/parent/notifications" component={ParentNotifications} />}
           {user?.role === 'driver' && <Route path="/" component={DriverDashboard} />}
           {(user?.role === 'admin' || user?.role === 'master_admin' || user?.role === 'driver_admin') && <Route path="/" component={AdminDashboard} />}
+          {/* Master admin can view any dashboard */}
+          {user?.role === 'master_admin' && <Route path="/driver" component={DriverDashboard} />}
+          {user?.role === 'master_admin' && <Route path="/parent" component={ParentDashboard} />}
+          {user?.role === 'master_admin' && <Route path="/parent/notifications" component={ParentNotifications} />}
+          {user?.role === 'master_admin' && <Route path="/admin" component={AdminDashboard} />}
         </>
       )}
       <Route component={NotFound} />
