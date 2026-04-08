@@ -2797,7 +2797,7 @@ export default function AdminDashboard() {
 
         {/* Main Content Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="flex flex-wrap gap-1 h-auto p-1">
+          <TabsList className="flex flex-wrap gap-1 h-auto p-1 sticky top-16 z-40 bg-background shadow-sm">
             <TabsTrigger value="fleet">Fleet Management</TabsTrigger>
             <TabsTrigger value="live-map" className="flex items-center">
               <MapPin className="w-4 h-4 mr-1" />
