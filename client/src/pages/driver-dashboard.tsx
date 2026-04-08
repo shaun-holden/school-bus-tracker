@@ -2259,7 +2259,7 @@ export default function DriverDashboard() {
                                 {task.priority}
                               </Badge>
                             </TableCell>
-                            <TableCell>{task.dueDate}</TableCell>
+                            <TableCell>{task.dueDate ? new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "No date"}</TableCell>
                             <TableCell>
                               <Badge 
                                 variant={task.status === 'completed' ? 'default' : 'outline'}
