@@ -4967,7 +4967,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       const plans = prices.data
-        .filter((price: any) => price.product && typeof price.product === 'object' && price.product.active)
+        .filter((price: any) => price.product && typeof price.product === 'object' && price.product.active && ['starter', 'professional', 'enterprise'].includes(price.product.metadata?.plan_type))
         .map((price: any) => ({
           id: price.id,
           productId: price.product.id,
