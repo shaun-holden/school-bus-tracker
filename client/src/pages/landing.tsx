@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Users, Car, Shield } from "lucide-react";
+import { Users, Car, Shield, MapPin, ClipboardCheck } from "lucide-react";
 
 const roles = [
   {
@@ -176,7 +176,7 @@ export default function Landing() {
           <Card className="text-center">
             <CardHeader>
               <div className="w-16 h-16 bg-primary rounded-full flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-map-marker-alt text-white text-2xl"></i>
+                <MapPin className="w-8 h-8 text-white" />
               </div>
               <CardTitle>Real-Time Tracking</CardTitle>
             </CardHeader>
@@ -191,7 +191,7 @@ export default function Landing() {
           <Card className="text-center">
             <CardHeader>
               <div className="w-16 h-16 bg-success rounded-full flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-clipboard-check text-white text-2xl"></i>
+                <ClipboardCheck className="w-8 h-8 text-white" />
               </div>
               <CardTitle>Attendance Management</CardTitle>
             </CardHeader>
@@ -206,7 +206,7 @@ export default function Landing() {
           <Card className="text-center">
             <CardHeader>
               <div className="w-16 h-16 bg-secondary rounded-full flex items-center justify-center mx-auto mb-4">
-                <i className="fas fa-users text-white text-2xl"></i>
+                <Users className="w-8 h-8 text-white" />
               </div>
               <CardTitle>Multi-Role Access</CardTitle>
             </CardHeader>
