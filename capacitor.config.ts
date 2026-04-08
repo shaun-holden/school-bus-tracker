@@ -3,7 +3,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 // Set PRODUCTION_SERVER_URL to your deployed Railway URL
 // e.g. https://your-app.up.railway.app
 // Leave empty to use bundled web assets (requires API calls to same server)
-const PRODUCTION_SERVER_URL = process.env.PRODUCTION_SERVER_URL || '';
+const PRODUCTION_SERVER_URL = process.env.PRODUCTION_SERVER_URL || 'https://www.schoolbustracker.org';
 
 const config: CapacitorConfig = {
   appId: 'com.TopNotchTrainingCenter.SchoolBusTracker',
