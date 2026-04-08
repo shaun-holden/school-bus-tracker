@@ -53,7 +53,8 @@ export default function AuthPage() {
   const [activeTab, setActiveTab] = useState<string>("login");
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [forgotPasswordSent, setForgotPasswordSent] = useState(false);
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
+  const redirectTo = new URLSearchParams(location.split("?")[1] || "").get("redirect") || "/";
   const { loginAsync, registerAsync, isLoggingIn, isRegistering } = useAuth();
   const { toast } = useToast();
 
@@ -110,7 +111,7 @@ export default function AuthPage() {
         title: "Welcome back!",
         description: "You have successfully logged in.",
       });
-      setLocation("/");
+      setLocation(redirectTo);
     } catch (error: any) {
       toast({
         title: "Login failed",
@@ -134,7 +135,7 @@ export default function AuthPage() {
         title: "Account created!",
         description: "Welcome to SchoolBus Tracker.",
       });
-      setLocation("/");
+      setLocation(redirectTo);
     } catch (error: any) {
       toast({
         title: "Registration failed",
