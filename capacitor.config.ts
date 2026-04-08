@@ -6,7 +6,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 const PRODUCTION_SERVER_URL = process.env.PRODUCTION_SERVER_URL || '';
 
 const config: CapacitorConfig = {
-  appId: 'com.schoolbustracker.app',
+  appId: 'com.TopNotchTrainingCenter.SchoolBusTracker',
   appName: 'School Bus Tracker',
   webDir: 'dist/public',
   server: {
