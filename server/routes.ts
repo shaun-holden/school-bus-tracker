@@ -3173,6 +3173,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Status must be 'present' or 'absent'" });
       }
 
+      // Verify the student is actually on this driver's route. Without this,
+      // a driver could write bogus attendance for any student in the system
+      // by POSTing an arbitrary studentId. Also subsumes a tenant check,
+      // since the driver's assignedRouteId is already scoped to their company.
+      const student = await storage.getStudentById(studentId);
+      if (!student || student.routeId !== routeId) {
+        return res.status(404).json({ message: "Student not found on your route" });
+      }
+
       const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status);
       res.json(attendance);
     } catch (error) {
