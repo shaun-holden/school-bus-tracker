@@ -918,28 +918,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Create maintenance request
-  app.post('/api/maintenance-requests', isAuthenticated, async (req, res) => {
-    try {
-      const { busNumber, issue, description } = req.body;
-      
-      // Mock creating maintenance request
-      const newRequest = {
-        id: Date.now().toString(),
-        busNumber,
-        issue,
-        description,
-        status: 'pending',
-        requestedAt: new Date().toISOString(),
-        requestedBy: (req.user as any)?.claims?.sub,
-      };
-      
-      res.status(201).json(newRequest);
-    } catch (error) {
-      console.error("Error creating maintenance request:", error);
-      res.status(500).json({ message: "Failed to create maintenance request" });
-    }
-  });
-
   // Acknowledge admin request
   app.patch('/api/admin-requests/:id/acknowledge', isAuthenticated, async (req, res) => {
     try {
@@ -979,21 +957,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
-      
+
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
-      
+
       const { title, description, priority, driverId } = req.body;
-      
+
+      // If a driver is specified, verify they belong to this admin's company
+      // before creating a request against them.
+      if (driverId) {
+        const targetDriver = await storage.getUser(driverId);
+        if (!targetDriver) {
+          return res.status(404).json({ message: "Driver not found" });
+        }
+        if (!isMasterAdminUser(user) && targetDriver.companyId !== user.companyId) {
+          return res.status(404).json({ message: "Driver not found" });
+        }
+      }
+
       const newRequest = await storage.createAdminRequest({
         title,
         description,
         priority: priority || 'medium',
         status: 'pending',
         driverId: driverId || null,
+        // Force tenant scope from session (was previously unset, producing
+        // rows with companyId=null that bypass the new getAllAdminRequests
+        // filter).
+        companyId: user.companyId ?? null,
       });
-      
+
       res.status(201).json(newRequest);
     } catch (error) {
       console.error("Error creating admin request:", error);
@@ -3682,11 +3676,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
       }
+      // Verify the student belongs to this admin's company before issuing a
+      // link code — otherwise an admin in Company A could hand out a code that
+      // grants a parent live tracking of Company B's student.
+      if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Student not found" });
+      }
 
       const linkCode = await storage.generateLinkCode(
-        studentId, 
-        userId, 
-        maxUses, 
+        studentId,
+        userId,
+        maxUses,
         expiresInDays,
         user.companyId || undefined
       );
