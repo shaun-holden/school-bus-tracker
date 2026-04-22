@@ -1417,8 +1417,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       try {
         const validatedData = insertRouteSchema.parse(req.body);
+        // Force tenant scope from session; never trust client-supplied companyId.
+        validatedData.companyId = user.companyId ?? null;
         console.log('Validated route data:', JSON.stringify(validatedData, null, 2));
-        
+
         const route = await storage.createRoute(validatedData);
         console.log('Created route successfully:', route.id);
         
@@ -1578,12 +1580,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
-      
+
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
       const { routeId } = req.params;
+
+      // Verify the parent route belongs to caller's company before adding a stop.
+      const route = await storage.getRouteById(routeId);
+      if (!route) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
       const validatedData = insertRouteStopSchema.parse({ ...req.body, routeId });
       const stop = await storage.createRouteStop(validatedData);
       res.json(stop);
@@ -1608,12 +1620,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
     try {
       const userId = req.user?.id;
       const user = await storage.getUser(userId);
-      
+
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
       const validatedData = insertSchoolSchema.parse(req.body);
+      // Force tenant scope from session; never trust client-supplied companyId.
+      validatedData.companyId = user.companyId ?? null;
       const school = await storage.createSchool(validatedData);
       res.json(school);
     } catch (error) {
@@ -1696,6 +1710,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validatedData = insertAttendanceSchema.parse(req.body);
+      // Force tenant scope from session; never trust client-supplied companyId.
+      validatedData.companyId = user.companyId ?? null;
       const attendance = await storage.createAttendance(validatedData);
       res.json(attendance);
     } catch (error) {
@@ -1766,6 +1782,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       let validatedData;
       try {
         validatedData = insertBusSchema.parse(req.body);
+        // Force tenant scope from session; never trust client-supplied companyId.
+        validatedData.companyId = user.companyId ?? null;
         console.log('Validated data:', JSON.stringify(validatedData, null, 2));
       } catch (zodError: any) {
         console.error('Validation error:', zodError.errors);
@@ -2045,6 +2063,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validatedData = insertVehicleIssueSchema.parse({ ...req.body, driverId: userId });
+      // Force tenant scope from session; never trust client-supplied companyId.
+      validatedData.companyId = user.companyId ?? null;
       const issue = await storage.createVehicleIssue(validatedData);
       res.json(issue);
     } catch (error) {
@@ -2094,6 +2114,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         body.dueDate = new Date(body.dueDate);
       }
       const validatedData = insertDriverTaskSchema.parse(body);
+      // Force tenant scope from session; never trust client-supplied companyId.
+      validatedData.companyId = user.companyId ?? null;
       const task = await storage.createDriverTask(validatedData);
       res.json(task);
     } catch (error) {
@@ -2527,10 +2549,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         validatedData.parentId = userId;
       }
 
-      // Set companyId from the admin's company if not provided
-      if (!validatedData.companyId && user.companyId) {
-        validatedData.companyId = user.companyId;
-      }
+      // Force tenant scope from session; never trust client-supplied companyId.
+      // (Previously this only set companyId when absent — attacker could supply
+      // a foreign companyId and have it accepted.)
+      validatedData.companyId = user.companyId ?? null;
 
       const student = await storage.createStudent(validatedData);
       console.log("Student created successfully:", student.id);
@@ -2781,7 +2803,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { routeId, schoolId } = req.params;
-      
+
+      // Verify both sides of the link belong to caller's company before attaching.
+      const [parentRoute, parentSchool] = await Promise.all([
+        storage.getRouteById(routeId),
+        storage.getSchoolById(schoolId),
+      ]);
+      if (!parentRoute) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (!parentSchool) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      if (!isMasterAdminUser(user)) {
+        if (parentRoute.companyId !== user.companyId) {
+          return res.status(404).json({ message: "Route not found" });
+        }
+        if (parentSchool.companyId !== user.companyId) {
+          return res.status(404).json({ message: "School not found" });
+        }
+      }
+
       // Add school to route
       const routeSchool = await storage.addSchoolToRoute(routeId, schoolId);
       
