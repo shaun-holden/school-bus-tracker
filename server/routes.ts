@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { storage } from "./storage";
-import { setupCustomAuth, isAuthenticated } from "./customAuth";
+import { setupCustomAuth, isAuthenticated, authLimiter, registerLimiter } from "./customAuth";
 import { 
   insertStudentSchema,
   insertRouteSchema,
@@ -19,7 +19,7 @@ import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
 
-function isMasterAdmin(user: any): boolean {
+function isMasterAdminUser(user: any): boolean {
   return user?.role === 'master_admin' || user?._masterAdminImpersonating === true;
 }
 
@@ -600,8 +600,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
+      const targetDriver = await storage.getUser(id);
+      if (!targetDriver) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+      if (!isMasterAdminUser(user) && targetDriver.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+
       const validatedData = updateDriverProfileSchema.partial().parse(req.body);
-      
+
       // Convert date strings to Date objects for database storage
       const processedData = {
         ...validatedData,
@@ -609,7 +617,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         hireDate: validatedData.hireDate ? new Date(validatedData.hireDate) : undefined,
         dateOfBirth: validatedData.dateOfBirth ? new Date(validatedData.dateOfBirth) : undefined,
       };
-      
+
       const updatedDriver = await storage.updateDriverProfile(id, processedData);
       
       if (!updatedDriver) {
@@ -692,7 +700,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Verify driver invitation token (public endpoint for password setup page)
-  app.get('/api/driver-invitation/verify', async (req, res) => {
+  app.get('/api/driver-invitation/verify', authLimiter, async (req, res) => {
     try {
       const { token } = req.query;
       if (!token || typeof token !== 'string') {
@@ -729,7 +737,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Complete driver password setup (public endpoint)
-  app.post('/api/driver-invitation/complete', async (req, res) => {
+  app.post('/api/driver-invitation/complete', authLimiter, async (req, res) => {
     try {
       const { token, password } = req.body;
       if (!token || !password) {
@@ -982,7 +990,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingBus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      
+      if (!isMasterAdminUser(user) && existingBus.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+
       // Check for duplicate driver assignment if driverId is being updated
       if (updateData.driverId && updateData.driverId !== existingBus.driverId) {
         // Check if the driver is already assigned to another bus
@@ -1047,9 +1058,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
+      const bus = await storage.getBusById(id);
+      if (!bus) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+      if (!isMasterAdminUser(user) && bus.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+
       console.log('=== BUS DELETE REQUEST ===');
       console.log('Bus ID:', id);
-      
+
       const deleted = await storage.deleteBus(id);
       if (!deleted) {
         return res.status(404).json({ message: 'Bus not found' });
@@ -1156,23 +1175,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error deactivating bus:", error);
       res.status(500).json({ message: "Failed to deactivate bus" });
-    }
-  });
-
-  // Delete bus from fleet
-  app.delete('/api/buses/:id', isAuthenticated, async (req, res) => {
-    try {
-      const { id } = req.params;
-      
-      // Mock deleting bus
-      res.json({ 
-        id, 
-        deleted: true, 
-        deletedAt: new Date().toISOString() 
-      });
-    } catch (error) {
-      console.error("Error deleting bus:", error);
-      res.status(500).json({ message: "Failed to delete bus" });
     }
   });
 
@@ -1456,6 +1458,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingRoute) {
         return res.status(404).json({ message: "Route not found" });
       }
+      if (!isMasterAdminUser(user) && existingRoute.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
 
       try {
         // For partial updates, make all fields optional except the ones being updated
@@ -1601,6 +1606,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized" });
       }
       const { id } = req.params;
+      const existing = await storage.getSchoolById(id);
+      if (!existing) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      if (!isMasterAdminUser(user) && existing.companyId !== user.companyId) {
+        return res.status(404).json({ message: "School not found" });
+      }
       const updated = await storage.updateSchool(id, req.body);
       if (!updated) {
         return res.status(404).json({ message: "School not found" });
@@ -1621,6 +1633,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized" });
       }
       const { id } = req.params;
+      const school = await storage.getSchoolById(id);
+      if (!school) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      if (!isMasterAdminUser(user) && school.companyId !== user.companyId) {
+        return res.status(404).json({ message: "School not found" });
+      }
       await storage.deleteSchool(id);
       res.json({ message: "School deleted successfully" });
     } catch (error) {
@@ -1812,13 +1831,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
+      const existingBus = await storage.getBusById(id);
+      if (!existingBus) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+      if (!isMasterAdminUser(user) && existingBus.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+
       const validatedData = insertBusSchema.parse(req.body);
       const bus = await storage.updateBus(id, validatedData);
-      
+
       if (!bus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      
+
       res.json(bus);
     } catch (error: any) {
       console.error("Error updating bus:", error);
@@ -1939,9 +1966,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { busId } = req.params;
-      const { latitude, longitude, speed } = req.body;
 
-      const bus = await storage.updateBusLocation(busId, latitude, longitude, speed);
+      const locationSchema = z.object({
+        latitude: z.coerce.number().min(-90).max(90),
+        longitude: z.coerce.number().min(-180).max(180),
+        speed: z.coerce.number().min(0).optional(),
+      });
+      const parsed = locationSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid location data", errors: parsed.error.errors });
+      }
+
+      const existingBus = await storage.getBusById(busId);
+      if (!existingBus) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+      if (!isMasterAdminUser(user) && existingBus.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+
+      const bus = await storage.updateBusLocation(
+        busId,
+        String(parsed.data.latitude),
+        String(parsed.data.longitude),
+        parsed.data.speed !== undefined ? String(parsed.data.speed) : undefined,
+      );
       res.json(bus);
     } catch (error) {
       console.error("Error updating bus location:", error);
@@ -2493,6 +2542,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
+      } else {
+        // Admin path: verify the student belongs to this admin's company
+        const student = await storage.getStudentById(id);
+        if (!student) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+        if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+          return res.status(404).json({ message: "Student not found" });
+        }
       }
 
       const validatedData = insertStudentSchema.partial().parse(req.body);
@@ -2525,7 +2583,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
-      
+
       // For parents, verify they are linked to the student
       if (user.role === 'parent') {
         const link = await storage.getParentChildLink(userId, id);
@@ -2534,6 +2592,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
+      } else {
+        // Admin path: verify the student belongs to this admin's company
+        const student = await storage.getStudentById(id);
+        if (!student) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+        if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+          return res.status(404).json({ message: "Student not found" });
+        }
       }
 
       const deleted = await storage.deleteStudent(id);
@@ -2747,7 +2814,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { routeId, schoolId } = req.params;
-      
+
+      // Verify the route belongs to this admin's company before mutating
+      const route = await storage.getRouteById(routeId);
+      if (!route) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
       // Remove school from route
       const deleted = await storage.removeSchoolFromRoute(routeId, schoolId);
       
@@ -4813,7 +4889,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ============ BUSINESS ONBOARDING ROUTES ============
 
   // Register a new business (signup)
-  app.post('/api/business/register', async (req, res) => {
+  app.post('/api/business/register', registerLimiter, async (req, res) => {
     try {
       const { companyName, companySlug, email, password, firstName, lastName, phone } = req.body;
 

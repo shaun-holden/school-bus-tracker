@@ -50,8 +50,9 @@ export function useAuth() {
       return await apiRequest("/api/auth/logout", "POST");
     },
     onSuccess: () => {
-      queryClient.setQueryData(["/api/auth/user"], null);
-      queryClient.invalidateQueries({ queryKey: ["/api/auth/user"] });
+      // Wipe all cached data so the next user on this device doesn't see
+      // the previous user's buses, students, messages, etc.
+      queryClient.clear();
     },
   });
 

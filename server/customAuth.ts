@@ -11,7 +11,7 @@ import { User } from "@shared/schema";
 import { sendPasswordResetEmail } from "./emailService";
 
 // Rate limiters for auth endpoints
-const authLimiter = rateLimit({
+export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10, // 10 attempts per window
   message: { message: "Too many attempts, please try again in 15 minutes" },
@@ -19,7 +19,7 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
-const registerLimiter = rateLimit({
+export const registerLimiter = rateLimit({
   windowMs: 60 * 60 * 1000, // 1 hour
   max: 5, // 5 registrations per hour
   message: { message: "Too many accounts created, please try again later" },
@@ -69,10 +69,14 @@ export function getSession() {
   return session({
     secret: (() => {
       if (process.env.SESSION_SECRET) return process.env.SESSION_SECRET;
-      if (process.env.NODE_ENV === 'production') {
-        throw new Error('SESSION_SECRET must be set in production');
+      const env = process.env.NODE_ENV;
+      // Only explicit dev/test environments get an ephemeral fallback.
+      // Anything else (prod, staging, or unset) must provide SESSION_SECRET.
+      if (env !== 'development' && env !== 'test') {
+        throw new Error('SESSION_SECRET must be set (NODE_ENV=' + env + ')');
       }
-      return 'dev-secret-change-in-production';
+      console.warn('SESSION_SECRET not set — generating ephemeral random secret for dev/test only');
+      return crypto.randomBytes(32).toString('hex');
     })(),
     store: sessionStore,
     resave: false,
@@ -80,6 +84,7 @@ export function getSession() {
     cookie: {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
       maxAge: sessionTtl,
     },
   });
