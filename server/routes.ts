@@ -53,6 +53,25 @@ function canAccessMessaging(roleOrUser: any): boolean {
   return role === 'parent' || role === 'driver' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
 }
 
+// Batch-load school + route for a list of students. Replaces the N+1 pattern
+// of fetching each related record inside a Promise.all(map) loop.
+async function enrichStudentsWithSchoolAndRoute(students: any[]): Promise<any[]> {
+  if (!students || students.length === 0) return [];
+  const schoolIds = Array.from(new Set(students.map(s => s.schoolId).filter((x: string | null): x is string => !!x)));
+  const routeIds = Array.from(new Set(students.map(s => s.routeId).filter((x: string | null): x is string => !!x)));
+  const [schoolList, routeList] = await Promise.all([
+    storage.getSchoolsByIds(schoolIds),
+    storage.getRoutesByIds(routeIds),
+  ]);
+  const schoolsById = new Map(schoolList.map(s => [s.id, s]));
+  const routesById = new Map(routeList.map(r => [r.id, r]));
+  return students.map(student => ({
+    ...student,
+    school: student.schoolId ? schoolsById.get(student.schoolId) ?? null : null,
+    route: student.routeId ? routesById.get(student.routeId) ?? null : null,
+  }));
+}
+
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup custom email/password authentication
   await setupCustomAuth(app);
@@ -1192,14 +1211,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.role === 'parent') {
         // Use the linking system - only return students linked via parentChildLinks
         const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
-        
-        // Enrich students with school, route, bus, and stop info
-        students = await Promise.all(linkedStudents.map(async (student: any) => {
-          const school = student.schoolId ? await storage.getSchoolById(student.schoolId) : null;
-          const route = student.routeId ? await storage.getRouteById(student.routeId) : null;
-          const stop = student.stopId ? await storage.getRouteStopById(student.stopId) : null;
-          const bus = student.routeId ? await storage.getBusByRouteId(student.routeId) : null;
-          
+
+        // Batch-load related records: avoids N+1 by issuing one query per
+        // related table instead of 4 per student.
+        const schoolIds = Array.from(new Set(linkedStudents.map((s: any) => s.schoolId).filter((x: string | null): x is string => !!x)));
+        const routeIds = Array.from(new Set(linkedStudents.map((s: any) => s.routeId).filter((x: string | null): x is string => !!x)));
+        const stopIds = Array.from(new Set(linkedStudents.map((s: any) => s.stopId).filter((x: string | null): x is string => !!x)));
+
+        const [schoolList, routeList, stopList, busList] = await Promise.all([
+          storage.getSchoolsByIds(schoolIds),
+          storage.getRoutesByIds(routeIds),
+          storage.getRouteStopsByIds(stopIds),
+          storage.getBusesByRouteIds(routeIds),
+        ]);
+        const schoolsById = new Map(schoolList.map(s => [s.id, s]));
+        const routesById = new Map(routeList.map(r => [r.id, r]));
+        const stopsById = new Map(stopList.map(s => [s.id, s]));
+        const busesByRouteId = new Map(busList.filter(b => b.currentRouteId).map(b => [b.currentRouteId as string, b]));
+
+        students = linkedStudents.map((student: any) => {
+          const school = student.schoolId ? schoolsById.get(student.schoolId) : undefined;
+          const route = student.routeId ? routesById.get(student.routeId) : undefined;
+          const stop = student.stopId ? stopsById.get(student.stopId) : undefined;
+          const bus = student.routeId ? busesByRouteId.get(student.routeId) : undefined;
+
           return {
             ...student,
             school: school ? { id: school.id, name: school.name } : null,
@@ -1207,7 +1242,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             stop: stop ? { id: stop.id, name: stop.name } : null,
             bus: bus ? { id: bus.id, busNumber: bus.busNumber, status: bus.status } : null,
           };
-        }));
+        });
       } else if (isAdminRole(user.role)) {
         students = await storage.getAllStudents();
       } else {
@@ -1315,18 +1350,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const students = await storage.getStudentsByRouteId(user.assignedRouteId);
-      
-      // Enrich students with school and route info (individually looked up for tenant isolation)
-      const enrichedStudents = await Promise.all((students || []).map(async (student: any) => {
-        const school = student.schoolId ? await storage.getSchoolById(student.schoolId) : null;
-        const route = student.routeId ? await storage.getRouteById(student.routeId) : null;
-        return {
-          ...student,
-          school: school || null,
-          route: route || null,
-        };
-      }));
-      
+      const enrichedStudents = await enrichStudentsWithSchoolAndRoute(students);
+
       res.json(enrichedStudents);
     } catch (error) {
       console.error("Error fetching driver route students:", error);
@@ -2474,16 +2499,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized access" });
       }
 
-      // Enrich students with school and route info (individually looked up for tenant isolation)
-      const enrichedStudents = await Promise.all((students || []).map(async (student: any) => {
-        const school = student.schoolId ? await storage.getSchoolById(student.schoolId) : null;
-        const route = student.routeId ? await storage.getRouteById(student.routeId) : null;
-        return {
-          ...student,
-          school: school || null,
-          route: route || null,
-        };
-      }));
+      const enrichedStudents = await enrichStudentsWithSchoolAndRoute(students || []);
 
       res.json(enrichedStudents);
     } catch (error) {
@@ -2676,18 +2692,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { routeId } = req.params;
       const students = await storage.getStudentsByRouteId(routeId);
-      
-      // Enrich students with school and route info (individually looked up for tenant isolation)
-      const enrichedStudents = await Promise.all((students || []).map(async (student: any) => {
-        const school = student.schoolId ? await storage.getSchoolById(student.schoolId) : null;
-        const route = student.routeId ? await storage.getRouteById(student.routeId) : null;
-        return {
-          ...student,
-          school: school || null,
-          route: route || null,
-        };
-      }));
-      
+      const enrichedStudents = await enrichStudentsWithSchoolAndRoute(students || []);
+
       res.json(enrichedStudents);
     } catch (error) {
       console.error("Error fetching students by route:", error);
@@ -3194,21 +3200,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const children = Array.from(childrenMap.values());
       
-      // For each child, get their route and bus info
-      const childrenWithBuses = await Promise.all(children.map(async (child) => {
-        let bus = null;
-        let route = null;
-        let stop = null;
-        
-        if (child.routeId) {
-          route = await storage.getRouteById(child.routeId);
-          bus = await storage.getBusByRouteId(child.routeId);
-        }
-        
-        if (child.stopId) {
-          stop = await storage.getRouteStopById(child.stopId);
-        }
-        
+      // Batch-load routes, buses (by route), and stops for all children in one
+      // round-trip each instead of 3 queries per child.
+      const routeIds = Array.from(new Set(children.map(c => c.routeId).filter((x: string | null): x is string => !!x)));
+      const stopIds = Array.from(new Set(children.map(c => c.stopId).filter((x: string | null): x is string => !!x)));
+      const [routeList, busList, stopList] = await Promise.all([
+        storage.getRoutesByIds(routeIds),
+        storage.getBusesByRouteIds(routeIds),
+        storage.getRouteStopsByIds(stopIds),
+      ]);
+      const routesById = new Map(routeList.map(r => [r.id, r]));
+      const stopsById = new Map(stopList.map(s => [s.id, s]));
+      const busesByRouteId = new Map(busList.filter(b => b.currentRouteId).map(b => [b.currentRouteId as string, b]));
+
+      const childrenWithBuses = children.map(child => {
+        const route = child.routeId ? routesById.get(child.routeId) : undefined;
+        const bus = child.routeId ? busesByRouteId.get(child.routeId) : undefined;
+        const stop = child.stopId ? stopsById.get(child.stopId) : undefined;
+
         return {
           student: {
             id: child.id,
@@ -3235,7 +3244,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             estimatedTime: stop.scheduledTime,
           } : null,
         };
-      }));
+      });
 
       res.json(childrenWithBuses);
     } catch (error) {

@@ -124,6 +124,7 @@ export interface IStorage {
   
   // School operations
   getAllSchools(): Promise<School[]>;
+  getSchoolsByIds(ids: string[]): Promise<School[]>;
   createSchool(school: InsertSchool): Promise<School>;
   updateSchool(id: string, data: Partial<InsertSchool>): Promise<School | undefined>;
   deleteSchool(id: string): Promise<boolean>;
@@ -131,15 +132,17 @@ export interface IStorage {
   // Route operations
   getAllRoutes(): Promise<Route[]>;
   getRouteById(id: string): Promise<Route | undefined>;
+  getRoutesByIds(ids: string[]): Promise<Route[]>;
   getRoutesByDriverId(driverId: string): Promise<Route[]>;
   createRoute(route: InsertRoute): Promise<Route>;
   updateRoute(id: string, updates: Partial<InsertRoute>): Promise<Route | undefined>;
   deleteRoute(id: string): Promise<boolean>;
   assignDriverToRoute(driverId: string, routeId: string): Promise<boolean>;
-  
+
   // Route stop operations
   getStopsByRouteId(routeId: string): Promise<RouteStop[]>;
   getRouteStopById(id: string): Promise<RouteStop | undefined>;
+  getRouteStopsByIds(ids: string[]): Promise<RouteStop[]>;
   createRouteStop(stop: InsertRouteStop): Promise<RouteStop>;
   updateRouteStop(id: string, updates: Partial<InsertRouteStop>): Promise<RouteStop | undefined>;
   deleteRouteStop(id: string): Promise<boolean>;
@@ -174,6 +177,7 @@ export interface IStorage {
   getBusByNumber(busNumber: string): Promise<Bus | undefined>;
   getBusById(id: string): Promise<Bus | undefined>;
   getBusByRouteId(routeId: string): Promise<Bus | undefined>;
+  getBusesByRouteIds(routeIds: string[]): Promise<Bus[]>;
   createBus(bus: InsertBus): Promise<Bus>;
   updateBus(id: string, updates: Partial<InsertBus>): Promise<Bus | undefined>;
   updateBusFuelLevel(busId: string, fuelLevel: string): Promise<Bus | undefined>;
@@ -635,6 +639,11 @@ export class DatabaseStorage implements IStorage {
     return school;
   }
 
+  async getSchoolsByIds(ids: string[]): Promise<School[]> {
+    if (ids.length === 0) return [];
+    return await db.select().from(schools).where(inArray(schools.id, ids));
+  }
+
   async updateSchool(id: string, data: Partial<InsertSchool>): Promise<School | undefined> {
     const [updated] = await db.update(schools).set(data).where(eq(schools.id, id)).returning();
     return updated;
@@ -683,6 +692,11 @@ export class DatabaseStorage implements IStorage {
     return route;
   }
 
+  async getRoutesByIds(ids: string[]): Promise<Route[]> {
+    if (ids.length === 0) return [];
+    return await db.select().from(routes).where(inArray(routes.id, ids));
+  }
+
   async getRoutesByDriverId(driverId: string): Promise<Route[]> {
     return await db.select().from(routes).where(eq(routes.driverId, driverId));
   }
@@ -718,6 +732,11 @@ export class DatabaseStorage implements IStorage {
       .from(routeStops)
       .where(eq(routeStops.routeId, routeId))
       .orderBy(asc(routeStops.order));
+  }
+
+  async getRouteStopsByIds(ids: string[]): Promise<RouteStop[]> {
+    if (ids.length === 0) return [];
+    return await db.select().from(routeStops).where(inArray(routeStops.id, ids));
   }
 
   async getRouteStopById(id: string): Promise<RouteStop | undefined> {
@@ -933,6 +952,11 @@ export class DatabaseStorage implements IStorage {
   async getBusByRouteId(routeId: string): Promise<Bus | undefined> {
     const [bus] = await db.select().from(buses).where(eq(buses.currentRouteId, routeId));
     return bus;
+  }
+
+  async getBusesByRouteIds(routeIds: string[]): Promise<Bus[]> {
+    if (routeIds.length === 0) return [];
+    return await db.select().from(buses).where(inArray(buses.currentRouteId, routeIds));
   }
 
   async createBus(bus: InsertBus): Promise<Bus> {
