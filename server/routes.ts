@@ -23,6 +23,18 @@ function isMasterAdminUser(user: any): boolean {
   return user?.role === 'master_admin' || user?._masterAdminImpersonating === true;
 }
 
+// Returns the companyId filter to apply on list/read endpoints:
+//   undefined → caller should see everything (master-admin)
+//   string    → caller should be scoped to that companyId
+//   null      → caller should see nothing (authenticated but no company);
+//               handler should short-circuit with an empty list.
+// Keep these three states distinct — conflating null and undefined would
+// silently give unprivileged users an unscoped read.
+function companyScope(user: any): string | undefined | null {
+  if (isMasterAdminUser(user)) return undefined;
+  return user?.companyId ?? null;
+}
+
 function isAdminRole(role: string | undefined | null): boolean {
   return role === 'admin' || role === 'master_admin' || role === 'driver_admin';
 }
@@ -830,9 +842,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Admin-Driver Communication Routes
   
   // Admin requests for drivers
-  app.get('/api/admin-requests', isAuthenticated, async (req, res) => {
+  app.get('/api/admin-requests', isAuthenticated, async (req: any, res) => {
     try {
-      const requests = await storage.getAllAdminRequests();
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+      const requests = await storage.getAllAdminRequests(scope);
       res.json(requests);
     } catch (error) {
       console.error("Error fetching admin requests:", error);
@@ -1244,7 +1263,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           };
         });
       } else if (isAdminRole(user.role)) {
-        students = await storage.getAllStudents();
+        const scope = companyScope(user);
+        if (scope === null) return res.json([]);
+        students = await storage.getAllStudents(scope);
       } else {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -1270,7 +1291,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.role === 'driver') {
         routes = await storage.getRoutesByDriverId(userId);
       } else {
-        routes = await storage.getAllRoutes();
+        const scope = companyScope(user);
+        if (scope === null) return res.json([]);
+        routes = await storage.getAllRoutes(scope);
       }
 
       res.json(routes);
@@ -1290,8 +1313,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
-      // For check-in, drivers should see all available routes
-      const routes = await storage.getAllRoutes();
+      // For check-in, drivers see routes within their own company only.
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+      const routes = await storage.getAllRoutes(scope);
       res.json(routes);
     } catch (error) {
       console.error("Error fetching available routes:", error);
@@ -1309,8 +1334,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
-      // For check-in, drivers should see all buses from admin fleet that are available for assignment
-      const buses = await storage.getAllBuses();
+      // For check-in, drivers see buses within their own company only.
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+      const buses = await storage.getAllBuses(scope);
       console.log("Total buses in fleet:", buses.length);
       console.log("Bus statuses:", buses.map(b => ({id: b.id, number: b.busNumber, status: b.status, driverId: b.driverId})));
       
@@ -1608,7 +1635,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Schools
   app.get('/api/schools', isAuthenticated, async (req: any, res) => {
     try {
-      const schools = await storage.getAllSchools();
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+      const schools = await storage.getAllSchools(scope);
       res.json(schools);
     } catch (error) {
       console.error("Error fetching schools:", error);
@@ -1739,7 +1773,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const bus = await storage.getBusByDriverId(userId);
         buses = bus ? [bus] : [];
       } else {
-        buses = await storage.getAllBuses();
+        const scope = companyScope(user);
+        if (scope === null) return res.json([]);
+        buses = await storage.getAllBuses(scope);
       }
 
       res.json(buses);
@@ -1829,9 +1865,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         });
       }
       
-      // Final verification - fetch all buses to confirm addition
+      // Final verification - fetch buses to confirm addition (scoped).
       try {
-        const allBuses = await storage.getAllBuses();
+        const allBuses = await storage.getAllBuses(user.companyId ?? undefined);
         const busExists = allBuses.find(b => b.id === createdBus.id);
         if (!busExists) {
           console.error('CRITICAL: Bus not found in database after creation!');
@@ -2087,7 +2123,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.role === 'driver') {
         tasks = await storage.getTasksByDriverId(userId);
       } else if (isAdminRole(user.role)) {
-        tasks = await storage.getAllActiveTasks();
+        const scope = companyScope(user);
+        if (scope === null) return res.json([]);
+        tasks = await storage.getAllActiveTasks(scope);
       } else {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -2514,7 +2552,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let students;
       if (isAdminRole(user.role)) {
-        students = await storage.getAllStudents();
+        const scope = companyScope(user);
+        if (scope === null) return res.json([]);
+        students = await storage.getAllStudents(scope);
       } else if (user.role === 'parent') {
         students = await storage.getStudentsByParentId(userId);
       } else {
@@ -3081,8 +3121,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const attendance = await storage.getTodaysStudentAttendance(userId, routeId);
         res.json(attendance);
       } else {
-        // Admin can see all attendance data
-        const attendance = await storage.getAllAttendanceData();
+        // Admin sees attendance data for their own company only (master-admin sees all).
+        const scope = companyScope(user);
+        if (scope === null) return res.json([]);
+        const attendance = await storage.getAllAttendanceData(scope);
         res.json(attendance);
       }
     } catch (error) {
@@ -3165,7 +3207,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
-      const notifications = await storage.getAllNotifications();
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+      const notifications = await storage.getAllNotifications(scope);
       res.json(notifications);
     } catch (error) {
       console.error("Error fetching notifications:", error);
@@ -4142,10 +4186,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Latitude and longitude are required" });
       }
 
-      // Find the bus assigned to this driver
-      const buses = await storage.getAllBuses();
+      // Find the bus assigned to this driver (scoped to their company).
+      const scope = companyScope(user);
+      if (scope === null) {
+        return res.status(400).json({ message: "No company assigned" });
+      }
+      const buses = await storage.getAllBuses(scope);
       const driverBus = buses.find(bus => bus.driverId === userId);
-      
+
       if (!driverBus) {
         return res.status(400).json({ message: "No bus assigned to you. Please check in first." });
       }
@@ -4187,10 +4235,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only drivers can access this" });
       }
 
-      // Find the bus assigned to this driver
-      const buses = await storage.getAllBuses();
+      // Find the bus assigned to this driver (scoped to their company).
+      const scope = companyScope(user);
+      if (scope === null) return res.json(null);
+      const buses = await storage.getAllBuses(scope);
       const driverBus = buses.find(bus => bus.driverId === userId);
-      
+
       res.json(driverBus || null);
     } catch (error) {
       console.error("Error fetching driver's bus:", error);
@@ -4218,10 +4268,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Route stop ID and route ID are required" });
       }
 
-      // Find the bus assigned to this driver
-      const buses = await storage.getAllBuses();
+      // Find the bus assigned to this driver (scoped to their company).
+      const scope = companyScope(user);
+      if (scope === null) {
+        return res.status(400).json({ message: "No company assigned" });
+      }
+      const buses = await storage.getAllBuses(scope);
       const driverBus = buses.find(bus => bus.driverId === userId);
-      
+
       if (!driverBus) {
         return res.status(400).json({ message: "No bus assigned. Please check in first." });
       }

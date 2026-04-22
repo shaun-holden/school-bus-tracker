@@ -123,14 +123,14 @@ export interface IStorage {
   canCreateUser(companyId: string, role: string): Promise<{ allowed: boolean; reason?: string }>;
   
   // School operations
-  getAllSchools(): Promise<School[]>;
+  getAllSchools(companyId?: string): Promise<School[]>;
   getSchoolsByIds(ids: string[]): Promise<School[]>;
   createSchool(school: InsertSchool): Promise<School>;
   updateSchool(id: string, data: Partial<InsertSchool>): Promise<School | undefined>;
   deleteSchool(id: string): Promise<boolean>;
 
   // Route operations
-  getAllRoutes(): Promise<Route[]>;
+  getAllRoutes(companyId?: string): Promise<Route[]>;
   getRouteById(id: string): Promise<Route | undefined>;
   getRoutesByIds(ids: string[]): Promise<Route[]>;
   getRoutesByDriverId(driverId: string): Promise<Route[]>;
@@ -155,7 +155,7 @@ export interface IStorage {
   reorderRouteSchool(routeId: string, schoolId: string, direction: 'up' | 'down'): Promise<School[]>;
   
   // Student operations
-  getAllStudents(): Promise<Student[]>;
+  getAllStudents(companyId?: string): Promise<Student[]>;
   getStudentById(id: string): Promise<Student | undefined>;
   getStudentsByParentId(parentId: string): Promise<Student[]>;
   getStudentsByRouteId(routeId: string): Promise<Student[]>;
@@ -172,7 +172,7 @@ export interface IStorage {
   updateAttendance(id: string, updates: Partial<InsertAttendance>): Promise<Attendance | undefined>;
   
   // Bus operations
-  getAllBuses(): Promise<Bus[]>;
+  getAllBuses(companyId?: string): Promise<Bus[]>;
   getBusByDriverId(driverId: string): Promise<Bus | undefined>;
   getBusByNumber(busNumber: string): Promise<Bus | undefined>;
   getBusById(id: string): Promise<Bus | undefined>;
@@ -195,7 +195,7 @@ export interface IStorage {
   
   // Driver task operations
   getTasksByDriverId(driverId: string): Promise<DriverTask[]>;
-  getAllActiveTasks(): Promise<DriverTask[]>;
+  getAllActiveTasks(companyId?: string): Promise<DriverTask[]>;
   createDriverTask(task: InsertDriverTask): Promise<DriverTask>;
   updateTaskCompletion(id: string, isCompleted: boolean): Promise<DriverTask | undefined>;
   
@@ -213,7 +213,7 @@ export interface IStorage {
   getTodaysStudentAttendance(driverId: string, routeId: string): Promise<StudentAttendance[]>;
   markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent"): Promise<StudentAttendance>;
   getAttendanceByRoute(routeId: string, date?: Date): Promise<StudentAttendance[]>;
-  getAllAttendanceData(): Promise<StudentAttendance[]>;
+  getAllAttendanceData(companyId?: string): Promise<StudentAttendance[]>;
   getTodaysAttendanceForStudents(studentIds: string[]): Promise<StudentAttendance[]>;
 
   // Driver shift report operations
@@ -222,7 +222,7 @@ export interface IStorage {
   getDriverShiftReportsByDateRange(startDate: Date, endDate: Date, driverId?: string): Promise<DriverShiftReport[]>;
 
   // Admin request operations
-  getAllAdminRequests(): Promise<AdminRequest[]>;
+  getAllAdminRequests(companyId?: string): Promise<AdminRequest[]>;
   getAdminRequestById(id: string): Promise<AdminRequest | undefined>;
   createAdminRequest(request: InsertAdminRequest): Promise<AdminRequest>;
   acknowledgeAdminRequest(id: string): Promise<AdminRequest | undefined>;
@@ -230,7 +230,7 @@ export interface IStorage {
 
   // Parent notification operations
   createParentNotification(notification: InsertParentNotification): Promise<ParentNotification>;
-  getAllNotifications(): Promise<ParentNotification[]>;
+  getAllNotifications(companyId?: string): Promise<ParentNotification[]>;
   getNotificationsByRouteId(routeId: string): Promise<ParentNotification[]>;
   getNotificationsForParent(parentId: string): Promise<ParentNotification[]>;
   markNotificationRead(notificationId: string, parentId: string): Promise<NotificationRead>;
@@ -625,8 +625,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // School operations
-  async getAllSchools(): Promise<School[]> {
-    return await db.select().from(schools).orderBy(asc(schools.name));
+  async getAllSchools(companyId?: string): Promise<School[]> {
+    return await db
+      .select()
+      .from(schools)
+      .where(companyId ? eq(schools.companyId, companyId) : undefined)
+      .orderBy(asc(schools.name));
   }
 
   async createSchool(school: InsertSchool): Promise<School> {
@@ -662,7 +666,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Route operations
-  async getAllRoutes(): Promise<Route[]> {
+  async getAllRoutes(companyId?: string): Promise<Route[]> {
     const routesWithStopCount = await db
       .select({
         id: routes.id,
@@ -678,6 +682,7 @@ export class DatabaseStorage implements IStorage {
       })
       .from(routes)
       .leftJoin(routeStops, eq(routes.id, routeStops.routeId))
+      .where(companyId ? eq(routes.companyId, companyId) : undefined)
       .groupBy(routes.id, routes.name, routes.description, routes.driverId, routes.busNumber, routes.isActive, routes.estimatedDuration, routes.createdAt, routes.updatedAt)
       .orderBy(asc(routes.name));
     
@@ -820,10 +825,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Student operations
-  async getAllStudents(): Promise<Student[]> {
+  async getAllStudents(companyId?: string): Promise<Student[]> {
     return await db
       .select()
       .from(students)
+      .where(companyId ? eq(students.companyId, companyId) : undefined)
       .orderBy(asc(students.lastName), asc(students.firstName));
   }
 
@@ -930,8 +936,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Bus operations
-  async getAllBuses(): Promise<Bus[]> {
-    return await db.select().from(buses).orderBy(asc(buses.busNumber));
+  async getAllBuses(companyId?: string): Promise<Bus[]> {
+    return await db
+      .select()
+      .from(buses)
+      .where(companyId ? eq(buses.companyId, companyId) : undefined)
+      .orderBy(asc(buses.busNumber));
   }
 
   async getBusByDriverId(driverId: string): Promise<Bus | undefined> {
@@ -1183,11 +1193,15 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(driverTasks.createdAt));
   }
 
-  async getAllActiveTasks(): Promise<DriverTask[]> {
+  async getAllActiveTasks(companyId?: string): Promise<DriverTask[]> {
     return await db
       .select()
       .from(driverTasks)
-      .where(eq(driverTasks.isCompleted, false))
+      .where(
+        companyId
+          ? and(eq(driverTasks.isCompleted, false), eq(driverTasks.companyId, companyId))
+          : eq(driverTasks.isCompleted, false)
+      )
       .orderBy(desc(driverTasks.createdAt));
   }
 
@@ -1431,12 +1445,19 @@ export class DatabaseStorage implements IStorage {
     return attendance;
   }
 
-  async getAllAttendanceData(): Promise<StudentAttendance[]> {
+  async getAllAttendanceData(companyId?: string): Promise<StudentAttendance[]> {
     const today = new Date();
     const attendance = await db
       .select()
       .from(studentAttendance)
-      .where(sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`)
+      .where(
+        companyId
+          ? and(
+              sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`,
+              eq(studentAttendance.companyId, companyId)
+            )
+          : sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`
+      )
       .orderBy(desc(studentAttendance.createdAt));
     return attendance;
   }
@@ -1497,8 +1518,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Admin request operations
-  async getAllAdminRequests(): Promise<AdminRequest[]> {
-    return await db.select().from(adminRequests).orderBy(desc(adminRequests.createdAt));
+  async getAllAdminRequests(companyId?: string): Promise<AdminRequest[]> {
+    return await db
+      .select()
+      .from(adminRequests)
+      .where(companyId ? eq(adminRequests.companyId, companyId) : undefined)
+      .orderBy(desc(adminRequests.createdAt));
   }
 
   async getAdminRequestById(id: string): Promise<AdminRequest | undefined> {
@@ -1541,8 +1566,12 @@ export class DatabaseStorage implements IStorage {
     return newNotification;
   }
 
-  async getAllNotifications(): Promise<ParentNotification[]> {
-    return await db.select().from(parentNotifications).orderBy(desc(parentNotifications.createdAt));
+  async getAllNotifications(companyId?: string): Promise<ParentNotification[]> {
+    return await db
+      .select()
+      .from(parentNotifications)
+      .where(companyId ? eq(parentNotifications.companyId, companyId) : undefined)
+      .orderBy(desc(parentNotifications.createdAt));
   }
 
   async getNotificationsByRouteId(routeId: string): Promise<ParentNotification[]> {
