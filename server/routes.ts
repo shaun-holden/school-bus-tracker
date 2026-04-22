@@ -222,7 +222,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Update company settings (homebase, etc.)
+  // Update company settings (homebase, timezone, etc.)
   app.patch('/api/my-company', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -230,8 +230,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user || !isAdminRole(user.role) || !user.companyId) {
         return res.status(403).json({ message: "Unauthorized" });
       }
-      const { homebaseAddress } = req.body;
-      const updated = await storage.updateCompany(user.companyId, { homebaseAddress });
+      const { homebaseAddress, timezone } = req.body;
+
+      // Validate timezone against the runtime's IANA database — unknown names
+      // throw RangeError. This stops a typo like "America/New York" (space)
+      // from silently corrupting every downstream date calc.
+      if (timezone !== undefined) {
+        try {
+          new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+        } catch {
+          return res.status(400).json({ message: `Invalid timezone: ${timezone}` });
+        }
+      }
+
+      // Only include fields that were actually supplied — previously
+      // homebaseAddress was always written, so a request with just
+      // { timezone } would null out homebaseAddress.
+      const updates: Record<string, any> = {};
+      if (homebaseAddress !== undefined) updates.homebaseAddress = homebaseAddress;
+      if (timezone !== undefined) updates.timezone = timezone;
+
+      const updated = await storage.updateCompany(user.companyId, updates);
       res.json(updated);
     } catch (error) {
       res.status(500).json({ message: "Failed to update company" });
