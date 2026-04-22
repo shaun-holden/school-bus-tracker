@@ -166,8 +166,8 @@ export interface IStorage {
   deleteStudent(id: string): Promise<boolean>;
   
   // Attendance operations
-  getAttendanceByDate(date: Date): Promise<Attendance[]>;
-  getAttendanceByStudentAndDate(studentId: string, date: Date): Promise<Attendance | undefined>;
+  getAttendanceByDate(dateString: string, companyId?: string, timezone?: string): Promise<Attendance[]>;
+  getAttendanceByStudentAndDate(studentId: string, dateString: string, timezone?: string): Promise<Attendance | undefined>;
   createAttendance(attendance: InsertAttendance): Promise<Attendance>;
   updateAttendance(id: string, updates: Partial<InsertAttendance>): Promise<Attendance | undefined>;
   
@@ -893,30 +893,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Attendance operations
-  async getAttendanceByDate(date: Date): Promise<Attendance[]> {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(date);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    return await db
-      .select()
-      .from(attendance)
-      .where(and(
-        eq(attendance.date, startOfDay)
-      ));
+  //
+  // Note: compares attendance.date against the calendar day in the supplied
+  // IANA zone via Postgres `AT TIME ZONE`. The previous implementation used
+  // JavaScript setHours(0,0,0,0) which is always server-local — on a UTC
+  // host that meant an EST school's "today" was shifted by 4-5 hours.
+  // `dateString` is the canonical YYYY-MM-DD for that day in the caller's tz.
+  async getAttendanceByDate(dateString: string, companyId?: string, timezone: string = 'UTC'): Promise<Attendance[]> {
+    const conditions = [
+      sql`(${attendance.date} AT TIME ZONE ${timezone})::date = ${dateString}::date`,
+    ];
+    if (companyId) {
+      conditions.push(eq(attendance.companyId, companyId));
+    }
+    return await db.select().from(attendance).where(and(...conditions));
   }
 
-  async getAttendanceByStudentAndDate(studentId: string, date: Date): Promise<Attendance | undefined> {
-    const startOfDay = new Date(date);
-    startOfDay.setHours(0, 0, 0, 0);
-
+  async getAttendanceByStudentAndDate(studentId: string, dateString: string, timezone: string = 'UTC'): Promise<Attendance | undefined> {
     const [record] = await db
       .select()
       .from(attendance)
       .where(and(
         eq(attendance.studentId, studentId),
-        eq(attendance.date, startOfDay)
+        sql`(${attendance.date} AT TIME ZONE ${timezone})::date = ${dateString}::date`,
       ));
     return record;
   }

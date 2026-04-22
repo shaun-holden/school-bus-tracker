@@ -1737,9 +1737,40 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Attendance
   app.get('/api/attendance', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      // Tenant scope: non-master-admins only see their own company's rows.
+      // (Previously this endpoint was completely unscoped — any logged-in
+      // user read every tenant's attendance.)
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+
+      // Timezone for day-boundary: use the caller's company zone, default
+      // UTC for master-admin requests without an explicit impersonation.
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+
+      // Client sends ?date=YYYY-MM-DD interpreted in the company's timezone.
+      // If omitted, use today's calendar date in that zone.
       const { date } = req.query;
-      const attendanceDate = date ? new Date(date as string) : new Date();
-      const attendance = await storage.getAttendanceByDate(attendanceDate);
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      let dateString: string;
+      if (typeof date === 'string' && date.length > 0) {
+        if (!dateRegex.test(date)) {
+          return res.status(400).json({ message: "date must be in YYYY-MM-DD format" });
+        }
+        dateString = date;
+      } else {
+        // Intl 'en-CA' locale formats as YYYY-MM-DD; timeZone option anchors
+        // the day boundary to the company's zone.
+        dateString = new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date());
+      }
+
+      const attendance = await storage.getAttendanceByDate(dateString, scope, tz);
       res.json(attendance);
     } catch (error) {
       console.error("Error fetching attendance:", error);
