@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/hooks/use-auth";
 import { useToast } from "@/hooks/use-toast";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -617,50 +617,76 @@ export default function DriverDashboard() {
   // State for location sharing
   const [isLocationSharing, setIsLocationSharing] = useState(false);
   const [lastLocationUpdate, setLastLocationUpdate] = useState<Date | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+  const permissionDeniedRef = useRef(false);
 
   // Auto-update location every 30 seconds when on duty with assigned bus
   useEffect(() => {
     if (!isOnDuty || !assignedBus?.id) {
       setIsLocationSharing(false);
+      setLocationError(null);
+      permissionDeniedRef.current = false;
       return;
     }
 
     const updateLocation = () => {
-      if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-          async (position) => {
-            try {
-              await apiRequest('/api/driver/update-location', 'POST', {
-                latitude: position.coords.latitude,
-                longitude: position.coords.longitude,
-                speed: position.coords.speed ? Math.round(position.coords.speed * 2.237) : 0 // Convert m/s to mph
-              });
-              queryClient.invalidateQueries({ queryKey: ['/api/buses'] });
-              setIsLocationSharing(true);
-              setLastLocationUpdate(new Date());
-              console.log('Location update successful');
-            } catch (error) {
-              console.error('Location update failed:', error);
-              setIsLocationSharing(false);
-            }
-          },
-          (error) => {
-            console.error('Geolocation error:', error);
-            setIsLocationSharing(false);
-          },
-          { enableHighAccuracy: true, timeout: 10000 }
-        );
+      if (!navigator.geolocation) {
+        setIsLocationSharing(false);
+        setLocationError('Location is not supported on this device. Parents cannot see the bus.');
+        return;
       }
+      // Once the driver has explicitly denied permission, stop polling.
+      // Browsers cache the denial and won't re-prompt; retrying wastes battery
+      // and floods the console. Driver must toggle duty off/on (or change
+      // device settings) to re-initiate.
+      if (permissionDeniedRef.current) return;
+
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          try {
+            await apiRequest('/api/driver/update-location', 'POST', {
+              latitude: position.coords.latitude,
+              longitude: position.coords.longitude,
+              speed: position.coords.speed ? Math.round(position.coords.speed * 2.237) : 0 // m/s → mph
+            });
+            queryClient.invalidateQueries({ queryKey: ['/api/buses'] });
+            setIsLocationSharing(true);
+            setLastLocationUpdate(new Date());
+            setLocationError(null);
+          } catch (error) {
+            console.error('Location update failed:', error);
+            setIsLocationSharing(false);
+            setLocationError('Could not reach the server. Retrying in 30 seconds.');
+          }
+        },
+        (error) => {
+          setIsLocationSharing(false);
+          if (error.code === error.PERMISSION_DENIED) {
+            permissionDeniedRef.current = true;
+            setLocationError(
+              'Location permission denied. Parents cannot see the bus until you enable location access in your device settings.'
+            );
+            toast({
+              title: 'Location sharing disabled',
+              description: 'Parents cannot see the bus. Enable location access in your device settings.',
+              variant: 'destructive',
+            });
+          } else if (error.code === error.POSITION_UNAVAILABLE) {
+            setLocationError('GPS signal unavailable. Retrying in 30 seconds.');
+          } else if (error.code === error.TIMEOUT) {
+            setLocationError('GPS signal timed out. Retrying in 30 seconds.');
+          } else {
+            setLocationError('Location unavailable. Retrying in 30 seconds.');
+          }
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
+      );
     };
 
-    // Initial update
     updateLocation();
-
-    // Set up interval for every 30 seconds
     const intervalId = setInterval(updateLocation, 30000);
-
     return () => clearInterval(intervalId);
-  }, [isOnDuty, assignedBus?.id]);
+  }, [isOnDuty, assignedBus?.id, toast]);
 
   // Mutations
   const completeTaskMutation = useMutation({
@@ -1668,12 +1694,19 @@ export default function DriverDashboard() {
                         
                         {isOnDuty ? (
                           <div className="space-y-2">
-                            <div className="flex items-center gap-2 text-sm">
-                              <div className={`w-2 h-2 rounded-full ${isLocationSharing ? 'bg-green-500 animate-pulse' : 'bg-yellow-500'}`} />
-                              <span className={isLocationSharing ? 'text-green-600' : 'text-yellow-600'}>
-                                {isLocationSharing ? 'Sharing location with parents' : 'Starting location sharing...'}
-                              </span>
-                            </div>
+                            {locationError ? (
+                              <div className="flex items-start gap-2 text-sm bg-red-50 border border-red-200 rounded p-2">
+                                <AlertTriangle className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />
+                                <span className="text-red-700">{locationError}</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center gap-2 text-sm">
+                                <div className={`w-2 h-2 rounded-full ${isLocationSharing ? 'bg-green-500 animate-pulse' : 'bg-yellow-500'}`} />
+                                <span className={isLocationSharing ? 'text-green-600' : 'text-yellow-600'}>
+                                  {isLocationSharing ? 'Sharing location with parents' : 'Starting location sharing...'}
+                                </span>
+                              </div>
+                            )}
                             {lastLocationUpdate && (
                               <p className="text-xs text-gray-500">
                                 Last update: {lastLocationUpdate.toLocaleTimeString()}

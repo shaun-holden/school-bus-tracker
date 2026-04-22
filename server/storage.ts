@@ -333,6 +333,7 @@ export interface IStorage {
   // Device token operations (push notifications)
   registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken>;
   removeDeviceToken(token: string): Promise<void>;
+  deactivateDeviceTokensForUser(userId: string): Promise<void>;
   getDeviceTokensForUser(userId: string): Promise<DeviceToken[]>;
   getDeviceTokensForUsers(userIds: string[]): Promise<DeviceToken[]>;
 }
@@ -2761,6 +2762,12 @@ export class DatabaseStorage implements IStorage {
     await db.update(deviceTokens)
       .set({ isActive: false })
       .where(eq(deviceTokens.token, token));
+  }
+
+  async deactivateDeviceTokensForUser(userId: string): Promise<void> {
+    await db.update(deviceTokens)
+      .set({ isActive: false })
+      .where(eq(deviceTokens.userId, userId));
   }
 
   async getDeviceTokensForUser(userId: string): Promise<DeviceToken[]> {

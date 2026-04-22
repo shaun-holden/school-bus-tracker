@@ -2174,7 +2174,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { isOnDuty } = req.body;
-      
+      const desired = Boolean(isOnDuty);
+
+      // Idempotency guard: if the driver is already in the requested state,
+      // return without mutating. Protects against double-tap clicks that would
+      // otherwise overwrite dutyStartTime (on→on) or fire the off-transition
+      // cleanup + shift-report creation twice (off→off races).
+      if (user.isOnDuty === desired) {
+        return res.json(user);
+      }
+
       // If driver is going off duty, create shift report
       if (!isOnDuty && user.isOnDuty && user.dutyStartTime) {
         try {

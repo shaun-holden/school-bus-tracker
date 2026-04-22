@@ -260,7 +260,23 @@ export async function setupCustomAuth(app: Express) {
     })(req, res, next);
   });
 
-  app.post("/api/auth/logout", (req, res) => {
+  app.post("/api/auth/logout", async (req, res) => {
+    // Deactivate all of this user's push-notification device tokens before
+    // destroying the session. Relying on the client to call DELETE
+    // /api/device-tokens is brittle — force-quits and network failures leave
+    // orphan tokens that would deliver notifications to a future session/user
+    // on the same device.
+    const userId = (req.user as Express.User | undefined)?.id;
+    if (userId) {
+      try {
+        await storage.deactivateDeviceTokensForUser(userId);
+      } catch (err) {
+        console.error("Failed to deactivate device tokens on logout:", err);
+        // Proceed with logout anyway — session destruction is more important
+        // than token cleanup, and stale tokens are a lesser evil than a
+        // stuck session.
+      }
+    }
     req.logout((err) => {
       if (err) {
         return res.status(500).json({ message: "Logout failed" });
