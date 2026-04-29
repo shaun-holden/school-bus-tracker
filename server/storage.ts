@@ -205,7 +205,7 @@ export interface IStorage {
   
   // School visit operations for driver arrivals/departures
   getSchoolVisitsByDriverRoute(driverId: string, routeId: string): Promise<SchoolVisit[]>;
-  recordSchoolArrival(driverId: string, schoolId: string, routeId: string): Promise<SchoolVisit>;
+  recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone?: string): Promise<SchoolVisit>;
   recordSchoolDeparture(visitId: string): Promise<SchoolVisit | undefined>;
   getTodaysSchoolVisits(driverId: string, timezone?: string): Promise<SchoolVisit[]>;
 
@@ -323,16 +323,16 @@ export interface IStorage {
 
   // Bus journey tracking operations
   createBusJourney(busId: string, driverId: string, routeId: string, companyId: string, homebaseAddress?: string): Promise<BusJourney>;
-  getTodayBusJourney(busId: string): Promise<BusJourney | undefined>;
+  getTodayBusJourney(busId: string, timezone?: string): Promise<BusJourney | undefined>;
   updateJourneyEvent(journeyId: string, eventType: 'depart_homebase' | 'arrive_school' | 'depart_school' | 'arrive_homebase', schoolId?: string): Promise<BusJourney | undefined>;
   getBusJourneysForDateRange(companyId: string, startDate: Date, endDate: Date): Promise<BusJourney[]>;
   getBusJourneysByBus(busId: string, limit?: number): Promise<BusJourney[]>;
 
   // Route stop completion tracking
   markStopCompleted(data: { routeStopId: string; routeId: string; driverId: string; busId: string; companyId: string; stopSequence: number }): Promise<RouteStopCompletion>;
-  getTodayCompletedStops(routeId: string): Promise<RouteStopCompletion[]>;
-  getLastCompletedStop(routeId: string): Promise<RouteStopCompletion | undefined>;
-  resetRouteStops(routeId: string): Promise<void>;
+  getTodayCompletedStops(routeId: string, timezone?: string): Promise<RouteStopCompletion[]>;
+  getLastCompletedStop(routeId: string, timezone?: string): Promise<RouteStopCompletion | undefined>;
+  resetRouteStops(routeId: string, timezone?: string): Promise<void>;
 
   // Device token operations (push notifications)
   registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken>;
@@ -1313,10 +1313,14 @@ export class DatabaseStorage implements IStorage {
     return visits;
   }
 
-  async recordSchoolArrival(driverId: string, schoolId: string, routeId: string): Promise<SchoolVisit> {
+  async recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone: string = 'UTC'): Promise<SchoolVisit> {
     const now = new Date();
-    
-    // Check if there's already an active visit for this school today
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
+
+    // Dedupe by tenant calendar day. Without the tz projection, an evening
+    // arrival in EST would land on a different UTC date than a morning
+    // arrival the same school day, creating a duplicate row instead of
+    // updating the existing visit.
     const existingVisit = await db
       .select()
       .from(schoolVisits)
@@ -1324,7 +1328,7 @@ export class DatabaseStorage implements IStorage {
         eq(schoolVisits.driverId, driverId),
         eq(schoolVisits.schoolId, schoolId),
         eq(schoolVisits.routeId, routeId),
-        sql`DATE(${schoolVisits.visitDate}) = DATE(${now})`
+        sql`(${schoolVisits.visitDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
       ))
       .limit(1);
 
@@ -2632,9 +2636,11 @@ export class DatabaseStorage implements IStorage {
 
   // Bus journey tracking operations
   async createBusJourney(busId: string, driverId: string, routeId: string, companyId: string, homebaseAddress?: string): Promise<BusJourney> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+    // Store the wall-clock timestamp so getTodayBusJourney can project it
+    // through AT TIME ZONE for the tenant's calendar day. The previous
+    // setHours(0,0,0,0) wrote UTC midnight, which only matched correctly
+    // when the read also evaluated in UTC.
+    const now = new Date();
     const [journey] = await db
       .insert(busJourneys)
       .values({
@@ -2642,23 +2648,23 @@ export class DatabaseStorage implements IStorage {
         driverId,
         routeId,
         companyId,
-        journeyDate: today,
+        journeyDate: now,
         homebaseAddress,
-        departHomebaseAt: new Date(),
+        departHomebaseAt: now,
       })
       .returning();
     return journey;
   }
 
-  async getTodayBusJourney(busId: string): Promise<BusJourney | undefined> {
-    const today = new Date();
+  async getTodayBusJourney(busId: string, timezone: string = 'UTC'): Promise<BusJourney | undefined> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const [journey] = await db
       .select()
       .from(busJourneys)
       .where(
         and(
           eq(busJourneys.busId, busId),
-          sql`DATE(${busJourneys.journeyDate}) = DATE(${today})`
+          sql`(${busJourneys.journeyDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       )
       .orderBy(desc(busJourneys.createdAt))
@@ -2731,18 +2737,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Route stop completion tracking
-  async markStopCompleted(data: { 
-    routeStopId: string; 
-    routeId: string; 
-    driverId: string; 
-    busId: string; 
-    companyId: string; 
-    stopSequence: number 
+  async markStopCompleted(data: {
+    routeStopId: string;
+    routeId: string;
+    driverId: string;
+    busId: string;
+    companyId: string;
+    stopSequence: number
   }): Promise<RouteStopCompletion> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    // Store wall-clock for both fields (instead of UTC-midnight + now);
+    // the read side projects through AT TIME ZONE to bucket by tenant day.
     const now = new Date();
-    
     const [completion] = await db
       .insert(routeStopCompletions)
       .values({
@@ -2752,40 +2757,36 @@ export class DatabaseStorage implements IStorage {
         busId: data.busId,
         companyId: data.companyId,
         stopSequence: data.stopSequence,
-        completionDate: today,
+        completionDate: now,
         arrivedAt: now,
       })
       .returning();
     return completion;
   }
 
-  async getTodayCompletedStops(routeId: string): Promise<RouteStopCompletion[]> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  async getTodayCompletedStops(routeId: string, timezone: string = 'UTC'): Promise<RouteStopCompletion[]> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     return await db
       .select()
       .from(routeStopCompletions)
       .where(
         and(
           eq(routeStopCompletions.routeId, routeId),
-          sql`DATE(${routeStopCompletions.completionDate}) = DATE(${today})`
+          sql`(${routeStopCompletions.completionDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       )
       .orderBy(asc(routeStopCompletions.stopSequence));
   }
 
-  async getLastCompletedStop(routeId: string): Promise<RouteStopCompletion | undefined> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  async getLastCompletedStop(routeId: string, timezone: string = 'UTC'): Promise<RouteStopCompletion | undefined> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const [lastStop] = await db
       .select()
       .from(routeStopCompletions)
       .where(
         and(
           eq(routeStopCompletions.routeId, routeId),
-          sql`DATE(${routeStopCompletions.completionDate}) = DATE(${today})`
+          sql`(${routeStopCompletions.completionDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       )
       .orderBy(desc(routeStopCompletions.stopSequence))
@@ -2793,16 +2794,14 @@ export class DatabaseStorage implements IStorage {
     return lastStop;
   }
 
-  async resetRouteStops(routeId: string): Promise<void> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  async resetRouteStops(routeId: string, timezone: string = 'UTC'): Promise<void> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     await db
       .delete(routeStopCompletions)
       .where(
         and(
           eq(routeStopCompletions.routeId, routeId),
-          sql`DATE(${routeStopCompletions.completionDate}) = DATE(${today})`
+          sql`(${routeStopCompletions.completionDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       );
   }

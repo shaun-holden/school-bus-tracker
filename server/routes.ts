@@ -2497,9 +2497,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Start bus journey tracking for admin reports
       try {
         if (user.companyId) {
-          const existingJourney = await storage.getTodayBusJourney(busId);
+          const company = await storage.getCompanyById(user.companyId);
+          const tz = company?.timezone || 'UTC';
+          const existingJourney = await storage.getTodayBusJourney(busId, tz);
           if (!existingJourney) {
-            const company = await storage.getCompanyById(user.companyId);
             await storage.createBusJourney(busId, driverId, routeId, user.companyId, company?.homebaseAddress || undefined);
             console.log(`Started journey for bus ${busId} on route ${routeId} from homebase: ${company?.homebaseAddress || 'not set'}`);
           }
@@ -3037,13 +3038,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "School ID is required" });
       }
 
-      const visit = await storage.recordSchoolArrival(userId, schoolId, routeId);
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const visit = await storage.recordSchoolArrival(userId, schoolId, routeId, tz);
 
       // Update bus journey with arrive_school event
       try {
         const assignedBus = await storage.getBusByDriverId(userId);
         if (assignedBus) {
-          const todayJourney = await storage.getTodayBusJourney(assignedBus.id);
+          const todayJourney = await storage.getTodayBusJourney(assignedBus.id, tz);
           if (todayJourney && !todayJourney.arriveSchoolAt) {
             await storage.updateJourneyEvent(todayJourney.id, 'arrive_school', schoolId);
           }
@@ -3109,7 +3112,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const assignedBus = await storage.getBusByDriverId(userId);
         if (assignedBus) {
-          const todayJourney = await storage.getTodayBusJourney(assignedBus.id);
+          const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+          const tz = company?.timezone || 'UTC';
+          const todayJourney = await storage.getTodayBusJourney(assignedBus.id, tz);
           if (todayJourney && !todayJourney.departSchoolAt) {
             await storage.updateJourneyEvent(todayJourney.id, 'depart_school');
           }
@@ -4424,8 +4429,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Get today's completed stops for a route
   app.get('/api/routes/:routeId/completed-stops', isAuthenticated, async (req: any, res) => {
     try {
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      const user = await storage.getUser(userId);
       const { routeId } = req.params;
-      const completedStops = await storage.getTodayCompletedStops(routeId);
+      const company = user?.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const completedStops = await storage.getTodayCompletedStops(routeId, tz);
       res.json(completedStops);
     } catch (error) {
       console.error("Error fetching completed stops:", error);
@@ -4470,8 +4482,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get completed stops today
-      const completedStops = await storage.getTodayCompletedStops(student.routeId);
-      const lastCompleted = await storage.getLastCompletedStop(student.routeId);
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const completedStops = await storage.getTodayCompletedStops(student.routeId, tz);
+      const lastCompleted = await storage.getLastCompletedStop(student.routeId, tz);
 
       // Find student's stop sequence
       const studentStopIndex = routeStops.findIndex((s: any) => s.id === student.stopId);
@@ -4521,7 +4535,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Route ID is required" });
       }
 
-      await storage.resetRouteStops(routeId);
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      await storage.resetRouteStops(routeId, tz);
       res.json({ success: true, message: "Route stops reset" });
     } catch (error) {
       console.error("Error resetting route stops:", error);
@@ -5337,16 +5353,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Check if there's already a journey for this bus today
-      const existingJourney = await storage.getTodayBusJourney(busId);
+      const company = await storage.getCompanyById(user.companyId);
+      const tz = company?.timezone || 'UTC';
+      const existingJourney = await storage.getTodayBusJourney(busId, tz);
       if (existingJourney) {
         return res.json({ journey: existingJourney, message: "Journey already started today" });
       }
 
       const journey = await storage.createBusJourney(
-        busId, 
-        userId, 
-        routeId, 
-        user.companyId, 
+        busId,
+        userId,
+        routeId,
+        user.companyId,
         homebaseAddress
       );
 
@@ -5380,7 +5398,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid event type" });
       }
 
-      const journey = await storage.getTodayBusJourney(busId);
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const journey = await storage.getTodayBusJourney(busId, tz);
       if (!journey) {
         return res.status(404).json({ message: "No active journey found for this bus today" });
       }
@@ -5401,8 +5421,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
+      const user = await storage.getUser(userId);
       const { busId } = req.params;
-      const journey = await storage.getTodayBusJourney(busId);
+      const company = user?.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const journey = await storage.getTodayBusJourney(busId, tz);
       res.json(journey || null);
     } catch (error) {
       console.error("Error fetching today's journey:", error);
