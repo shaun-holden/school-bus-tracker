@@ -4,57 +4,10 @@ import fs from "fs";
 import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
-import { getStripeSync } from './stripeClient';
 import { WebhookHandlers } from './webhookHandlers';
 import { seedMasterAdmin } from '../scripts/seed-master-admin';
 
 const app = express();
-
-async function initStripe() {
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
-    console.log('DATABASE_URL not found, skipping Stripe initialization');
-    return;
-  }
-
-  try {
-    console.log('Initializing Stripe schema...');
-    const { runMigrations } = await import('stripe-replit-sync');
-    await runMigrations({ databaseUrl });
-    console.log('Stripe schema ready');
-  } catch (error) {
-    console.error('Stripe schema migration skipped:', error);
-    return;
-  }
-
-  try {
-    const stripeSync = await getStripeSync();
-
-    const webhookBaseUrl = `https://${process.env.REPLIT_DOMAINS?.split(',')[0]}`;
-    if (webhookBaseUrl && webhookBaseUrl !== 'https://undefined') {
-      try {
-        const result = await stripeSync.findOrCreateManagedWebhook(
-          `${webhookBaseUrl}/api/stripe/webhook`
-        );
-        if (result?.webhook?.url) {
-          console.log(`Webhook configured: ${result.webhook.url}`);
-        } else {
-          console.log('Webhook setup skipped - no webhook returned');
-        }
-      } catch (webhookError) {
-        console.log('Webhook setup skipped - error:', webhookError);
-      }
-    } else {
-      console.log('Webhook setup skipped - no domain available');
-    }
-
-    stripeSync.syncBackfill()
-      .then(() => console.log('Stripe data synced'))
-      .catch((err: any) => console.error('Error syncing Stripe data:', err));
-  } catch (error) {
-    console.error('Stripe sync skipped (no credentials configured):', (error as Error).message);
-  }
-}
 
 app.post(
   '/api/stripe/webhook',
@@ -146,7 +99,5 @@ app.use((req, res, next) => {
   const port = parseInt(process.env.PORT || '5000', 10);
   server.listen(port, "0.0.0.0", () => {
     log(`serving on port ${port}`);
-    // Initialize Stripe after server is already listening so failures don't crash startup
-    initStripe().catch(err => console.error('Stripe init error (non-fatal):', err));
   });
 })();

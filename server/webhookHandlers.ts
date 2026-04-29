@@ -1,4 +1,4 @@
-import { getStripeSync, getUncachableStripeClient } from './stripeClient';
+import { getUncachableStripeClient } from './stripeClient';
 import { storage } from './storage';
 import { db } from './db';
 import { companies, PLAN_CONFIGS, PlanType } from '@shared/schema';
@@ -28,10 +28,16 @@ export class WebhookHandlers {
       );
     }
 
-    const sync = await getStripeSync();
-    await sync.processWebhook(payload, signature);
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      throw new Error('STRIPE_WEBHOOK_SECRET is not set; cannot verify Stripe webhook.');
+    }
 
-    const event = JSON.parse(payload.toString());
+    // Stock SDK signature verification. Replaces stripe-replit-sync's
+    // processWebhook, which also mirrored events into local stripe_*
+    // tables we never read from.
+    const stripe = await getUncachableStripeClient();
+    const event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
     await WebhookHandlers.handleCustomLogic(event);
   }
 
