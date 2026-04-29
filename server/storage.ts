@@ -207,14 +207,14 @@ export interface IStorage {
   getSchoolVisitsByDriverRoute(driverId: string, routeId: string): Promise<SchoolVisit[]>;
   recordSchoolArrival(driverId: string, schoolId: string, routeId: string): Promise<SchoolVisit>;
   recordSchoolDeparture(visitId: string): Promise<SchoolVisit | undefined>;
-  getTodaysSchoolVisits(driverId: string): Promise<SchoolVisit[]>;
+  getTodaysSchoolVisits(driverId: string, timezone?: string): Promise<SchoolVisit[]>;
 
   // Student attendance operations
-  getTodaysStudentAttendance(driverId: string, routeId: string): Promise<StudentAttendance[]>;
-  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent"): Promise<StudentAttendance>;
+  getTodaysStudentAttendance(driverId: string, routeId: string, timezone?: string): Promise<StudentAttendance[]>;
+  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string): Promise<StudentAttendance>;
   getAttendanceByRoute(routeId: string, date?: Date): Promise<StudentAttendance[]>;
   getAllAttendanceData(companyId?: string): Promise<StudentAttendance[]>;
-  getTodaysAttendanceForStudents(studentIds: string[]): Promise<StudentAttendance[]>;
+  getTodaysAttendanceForStudents(studentIds: string[], timezone?: string): Promise<StudentAttendance[]>;
 
   // Driver shift report operations
   createDriverShiftReport(report: InsertDriverShiftReport): Promise<DriverShiftReport>;
@@ -1361,38 +1361,45 @@ export class DatabaseStorage implements IStorage {
     return updatedVisit;
   }
 
-  async getTodaysSchoolVisits(driverId: string): Promise<SchoolVisit[]> {
-    const today = new Date();
+  async getTodaysSchoolVisits(driverId: string, timezone: string = 'UTC'): Promise<SchoolVisit[]> {
+    // "Today" is the calendar day in the caller's tenant zone — see
+    // getAttendanceByDate for the same AT TIME ZONE pattern. Plain
+    // DATE(visit_date) compares in server-local (UTC on Railway), which
+    // for non-UTC tenants shifts the day by hours.
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const visits = await db
       .select()
       .from(schoolVisits)
       .where(and(
         eq(schoolVisits.driverId, driverId),
-        sql`DATE(${schoolVisits.visitDate}) = DATE(${today})`
+        sql`(${schoolVisits.visitDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
       ))
       .orderBy(asc(schoolVisits.visitDate));
     return visits;
   }
 
   // Student attendance operations
-  async getTodaysStudentAttendance(driverId: string, routeId: string): Promise<StudentAttendance[]> {
-    const today = new Date();
+  async getTodaysStudentAttendance(driverId: string, routeId: string, timezone: string = 'UTC'): Promise<StudentAttendance[]> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const attendance = await db
       .select()
       .from(studentAttendance)
       .where(and(
         eq(studentAttendance.driverId, driverId),
         eq(studentAttendance.routeId, routeId),
-        sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`
+        sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
       ))
       .orderBy(asc(studentAttendance.createdAt));
     return attendance;
   }
 
-  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent"): Promise<StudentAttendance> {
+  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone: string = 'UTC'): Promise<StudentAttendance> {
     const today = new Date();
-    
-    // Check if attendance already exists for today
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(today);
+
+    // Dedupe in the tenant's calendar day, not server-local. Without this,
+    // an EST tenant marking attendance after 8pm would create a second
+    // row instead of updating the existing day's record.
     const existingAttendance = await db
       .select()
       .from(studentAttendance)
@@ -1400,7 +1407,7 @@ export class DatabaseStorage implements IStorage {
         eq(studentAttendance.studentId, studentId),
         eq(studentAttendance.driverId, driverId),
         eq(studentAttendance.routeId, routeId),
-        sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`
+        sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
       ))
       .limit(1);
 
@@ -1461,19 +1468,19 @@ export class DatabaseStorage implements IStorage {
     return attendance;
   }
 
-  async getTodaysAttendanceForStudents(studentIds: string[]): Promise<StudentAttendance[]> {
+  async getTodaysAttendanceForStudents(studentIds: string[], timezone: string = 'UTC'): Promise<StudentAttendance[]> {
     if (studentIds.length === 0) {
       return [];
     }
-    
-    const today = new Date();
+
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const attendance = await db
       .select()
       .from(studentAttendance)
       .where(
         and(
           inArray(studentAttendance.studentId, studentIds),
-          sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`
+          sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       )
       .orderBy(desc(studentAttendance.createdAt));

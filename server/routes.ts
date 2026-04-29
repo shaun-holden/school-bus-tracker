@@ -2324,9 +2324,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const assignedBus = await storage.getBusByDriverId(userId);
           const assignedRoute = user.assignedRouteId ? await storage.getRouteById(user.assignedRouteId) : null;
           
-          // Count today's school visits and student attendance
-          const schoolVisits = await storage.getTodaysSchoolVisits(userId);
-          const studentAttendance = user.assignedRouteId ? await storage.getTodaysStudentAttendance(userId, user.assignedRouteId) : [];
+          // Count today's school visits and student attendance, scoped to the
+          // tenant's calendar day (server-local UTC would split a late EST
+          // shift across two report rows).
+          const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+          const tz = company?.timezone || 'UTC';
+          const schoolVisits = await storage.getTodaysSchoolVisits(userId, tz);
+          const studentAttendance = user.assignedRouteId ? await storage.getTodaysStudentAttendance(userId, user.assignedRouteId, tz) : [];
           
           const shiftReport = {
             driverId: userId,
@@ -3000,7 +3004,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json([]);
       }
 
-      const visits = await storage.getTodaysSchoolVisits(userId);
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const visits = await storage.getTodaysSchoolVisits(userId, tz);
       res.json(visits);
     } catch (error) {
       console.error("Error fetching school visits:", error);
@@ -3162,7 +3168,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!routeId) {
           return res.json([]);
         }
-        const attendance = await storage.getTodaysStudentAttendance(userId, routeId);
+        const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+        const tz = company?.timezone || 'UTC';
+        const attendance = await storage.getTodaysStudentAttendance(userId, routeId, tz);
         res.json(attendance);
       } else {
         // Admin sees attendance data for their own company only (master-admin sees all).
@@ -3213,7 +3221,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Student not found on your route" });
       }
 
-      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status);
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz);
       res.json(attendance);
     } catch (error) {
       console.error("Error marking student attendance:", error);
@@ -4634,8 +4644,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const allChildrenIds = Array.from(childrenMap.keys());
       
-      // Get driver-marked attendance for all children
-      const attendance = await storage.getTodaysAttendanceForStudents(allChildrenIds);
+      // Get driver-marked attendance for all children, scoped to the
+      // parent's tenant calendar day so a late evening still reads as today.
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const attendance = await storage.getTodaysAttendanceForStudents(allChildrenIds, tz);
       
       res.json(attendance);
     } catch (error) {
