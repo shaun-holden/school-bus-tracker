@@ -1414,7 +1414,7 @@ export default function AdminDashboard() {
   };
 
   // Form for adding buses
-  const addBusForm = useForm({
+  const addBusForm = useForm<z.infer<typeof addBusSchema>>({
     resolver: zodResolver(addBusSchema),
     defaultValues: {
       busNumber: "",
@@ -1423,14 +1423,14 @@ export default function AdminDashboard() {
       year: new Date().getFullYear(),
       capacity: 50,
       licensePlate: "",
-      status: "idle" as const,
+      status: "idle",
       fuelLevel: "F",
       mileage: 0,
     },
   });
 
   // Form for editing buses
-  const editBusForm = useForm({
+  const editBusForm = useForm<z.infer<typeof addBusSchema>>({
     resolver: zodResolver(addBusSchema),
     defaultValues: {
       busNumber: "",
@@ -1439,7 +1439,7 @@ export default function AdminDashboard() {
       year: new Date().getFullYear(),
       capacity: 50,
       licensePlate: "",
-      status: "idle" as const,
+      status: "idle",
       fuelLevel: "F",
       mileage: 0,
     },
@@ -1712,7 +1712,7 @@ export default function AdminDashboard() {
   };
 
   // Handle maintenance toggle
-  const handleMaintenanceToggle = (busId: string, newStatus: string) => {
+  const handleMaintenanceToggle = (busId: string, newStatus: z.infer<typeof addBusSchema>['status']) => {
     const bus = Array.isArray(buses) ? buses.find((b: any) => b.id === busId) : null;
     if (bus) {
       editBusMutation.mutate({
@@ -2482,7 +2482,7 @@ export default function AdminDashboard() {
     }
   }, [isAuthenticated, isLoading, toast]);
 
-  const { data: buses, refetch: refetchBuses, isLoading: busesLoading, isFetching: busesFetching, dataUpdatedAt } = useQuery({
+  const { data: buses, refetch: refetchBuses, isLoading: busesLoading, isFetching: busesFetching, dataUpdatedAt } = useQuery<any[]>({
     queryKey: ["/api/buses"],
     enabled: !!user,
     retry: false,
@@ -2581,7 +2581,7 @@ export default function AdminDashboard() {
   });
 
   // Fetch schools for the currently editing route
-  const { data: routeSchools } = useQuery({
+  const { data: routeSchools } = useQuery<any[]>({
     queryKey: ["/api/routes", editingRoute?.id, "schools"],
     enabled: !!editingRoute?.id,
     retry: false,
@@ -4583,7 +4583,7 @@ export default function AdminDashboard() {
                           </DialogTitle>
                         </DialogHeader>
                         <Form {...driverForm}>
-                          <form onSubmit={driverForm.handleSubmit(editingDriver ? editDriverMutation.mutate : createDriverMutation.mutate)} className="space-y-4">
+                          <form onSubmit={driverForm.handleSubmit((data) => (editingDriver ? editDriverMutation : createDriverMutation).mutate(data))} className="space-y-4">
                             <div className="grid grid-cols-2 gap-4">
                               <FormField
                                 control={driverForm.control}
@@ -6819,7 +6819,7 @@ export default function AdminDashboard() {
             </DialogDescription>
           </DialogHeader>
           <Form {...routeAssignmentForm}>
-            <form onSubmit={routeAssignmentForm.handleSubmit(assignRouteToDriverMutation.mutate)} className="space-y-4">
+            <form onSubmit={routeAssignmentForm.handleSubmit((data) => assignRouteToDriverMutation.mutate(data))} className="space-y-4">
               {selectedDriver && (
                 <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                   <div className="flex items-center gap-3">
@@ -6949,7 +6949,7 @@ export default function AdminDashboard() {
             </DialogDescription>
           </DialogHeader>
           <Form {...busAssignmentForm}>
-            <form onSubmit={busAssignmentForm.handleSubmit(assignBusToDriverMutation.mutate)} className="space-y-4">
+            <form onSubmit={busAssignmentForm.handleSubmit((data) => assignBusToDriverMutation.mutate(data))} className="space-y-4">
               {selectedDriver && (
                 <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
                   <div className="flex items-center gap-3">

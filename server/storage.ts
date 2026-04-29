@@ -1500,33 +1500,29 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDriverShiftReports(driverId?: string): Promise<DriverShiftReport[]> {
-    let query = db.select().from(driverShiftReports);
-    
-    if (driverId) {
-      query = query.where(eq(driverShiftReports.driverId, driverId));
-    }
-    
-    return await query.orderBy(desc(driverShiftReports.shiftEndTime));
+    // Drizzle's .where() returns a narrower select type than the bare
+    // .from(), so reassigning to a `let query` loses methods. Build the
+    // condition list once instead — same pattern as markConversationAsRead.
+    return await db
+      .select()
+      .from(driverShiftReports)
+      .where(driverId ? eq(driverShiftReports.driverId, driverId) : undefined)
+      .orderBy(desc(driverShiftReports.shiftEndTime));
   }
 
   async getDriverShiftReportsByDateRange(startDate: Date, endDate: Date, driverId?: string): Promise<DriverShiftReport[]> {
-    let query = db
+    const conditions = [
+      sql`${driverShiftReports.shiftEndTime} >= ${startDate}`,
+      sql`${driverShiftReports.shiftEndTime} <= ${endDate}`,
+    ];
+    if (driverId) {
+      conditions.push(eq(driverShiftReports.driverId, driverId));
+    }
+    return await db
       .select()
       .from(driverShiftReports)
-      .where(and(
-        sql`${driverShiftReports.shiftEndTime} >= ${startDate}`,
-        sql`${driverShiftReports.shiftEndTime} <= ${endDate}`
-      ));
-    
-    if (driverId) {
-      query = query.where(and(
-        eq(driverShiftReports.driverId, driverId),
-        sql`${driverShiftReports.shiftEndTime} >= ${startDate}`,
-        sql`${driverShiftReports.shiftEndTime} <= ${endDate}`
-      ));
-    }
-    
-    return await query.orderBy(desc(driverShiftReports.shiftEndTime));
+      .where(and(...conditions))
+      .orderBy(desc(driverShiftReports.shiftEndTime));
   }
 
   // Admin request operations
@@ -1840,12 +1836,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   async acceptInvitation(token: string, userId: string): Promise<Invitation | undefined> {
+    // The invitations table has no acceptedByUserId column (see
+    // shared/schema.ts:invitations). The previous version assigned it
+    // anyway, which TS flagged as TS2353 and Drizzle silently dropped.
+    // userId is unused here; if we ever need to track who accepted, add
+    // the column to the schema and surface it back.
+    void userId;
     const [updated] = await db
       .update(invitations)
-      .set({ 
+      .set({
         status: 'accepted',
         acceptedAt: new Date(),
-        acceptedByUserId: userId 
       })
       .where(eq(invitations.token, token))
       .returning();
