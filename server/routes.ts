@@ -4434,8 +4434,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
       const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
       const { routeId } = req.params;
-      const company = user?.companyId ? await storage.getCompanyById(user.companyId) : null;
+
+      // Tenant scope on URL-supplied routeId — without this, any logged-in
+      // user could read any tenant's stop completions. 404 (not 403) masks
+      // existence so probing for valid routeIds doesn't leak.
+      const route = await storage.getRouteById(routeId);
+      if (!route) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
       const completedStops = await storage.getTodayCompletedStops(routeId, tz);
       res.json(completedStops);
@@ -5422,8 +5437,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await storage.getUser(userId);
+      if (!user) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
       const { busId } = req.params;
-      const company = user?.companyId ? await storage.getCompanyById(user.companyId) : null;
+
+      // Tenant scope on URL-supplied busId. 404 (not 403) masks existence.
+      const bus = await storage.getBusById(busId);
+      if (!bus) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+      if (!isMasterAdminUser(user) && bus.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
+
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
       const journey = await storage.getTodayBusJourney(busId, tz);
       res.json(journey || null);
