@@ -3248,6 +3248,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { routeId } = req.params;
       const { date } = req.query;
 
+      // Tenant scope on the URL-supplied routeId. Without this, any admin
+      // could read another tenant's attendance by guessing a routeId.
+      // 404 (not 403) to mask existence — same pattern as record-by-id
+      // mutating handlers.
+      const route = await storage.getRouteById(routeId);
+      if (!route) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
       // Same YYYY-MM-DD contract as GET /api/attendance — interpreted in
       // the tenant's zone, not server-local UTC.
       let dateString: string | undefined;
