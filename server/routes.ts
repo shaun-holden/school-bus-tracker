@@ -2315,23 +2315,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // If driver is going off duty, create shift report
       if (!isOnDuty && user.isOnDuty && user.dutyStartTime) {
+        // Hoisted out of the shift-report try below so the journey-completion
+        // block can reach them. Previously these were const-scoped to the
+        // first try, making the journey block's `if (assignedBus)` dead at
+        // runtime — so arrive_homebase events have never been recorded on
+        // off-duty transitions.
+        let assignedBus: Awaited<ReturnType<typeof storage.getBusByDriverId>>;
+        let tz = 'UTC';
+
         try {
           const shiftEndTime = new Date();
           const shiftStartTime = user.dutyStartTime;
           const totalDurationMinutes = Math.floor((shiftEndTime.getTime() - shiftStartTime.getTime()) / (1000 * 60));
-          
-          // Get driver's assigned bus and route data
-          const assignedBus = await storage.getBusByDriverId(userId);
+
+          assignedBus = await storage.getBusByDriverId(userId);
           const assignedRoute = user.assignedRouteId ? await storage.getRouteById(user.assignedRouteId) : null;
-          
+
           // Count today's school visits and student attendance, scoped to the
           // tenant's calendar day (server-local UTC would split a late EST
           // shift across two report rows).
           const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
-          const tz = company?.timezone || 'UTC';
+          tz = company?.timezone || 'UTC';
           const schoolVisits = await storage.getTodaysSchoolVisits(userId, tz);
           const studentAttendance = user.assignedRouteId ? await storage.getTodaysStudentAttendance(userId, user.assignedRouteId, tz) : [];
-          
+
           const shiftReport = {
             driverId: userId,
             driverName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown Driver',
@@ -2366,7 +2373,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Complete bus journey tracking (driver returning to homebase)
         try {
           if (assignedBus) {
-            const todayJourney = await storage.getTodayBusJourney(assignedBus.id);
+            const todayJourney = await storage.getTodayBusJourney(assignedBus.id, tz);
             if (todayJourney) {
               await storage.updateJourneyEvent(todayJourney.id, 'arrive_homebase');
               console.log(`Completed journey for bus ${assignedBus.busNumber}`);
