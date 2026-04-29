@@ -3176,7 +3176,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Admin sees attendance data for their own company only (master-admin sees all).
         const scope = companyScope(user);
         if (scope === null) return res.json([]);
-        const attendance = await storage.getAllAttendanceData(scope);
+        const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+        const tz = company?.timezone || 'UTC';
+        const attendance = await storage.getAllAttendanceData(scope, tz);
         res.json(attendance);
       }
     } catch (error) {
@@ -3245,9 +3247,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { routeId } = req.params;
       const { date } = req.query;
-      
-      const targetDate = date ? new Date(date as string) : new Date();
-      const attendance = await storage.getAttendanceByRoute(routeId, targetDate);
+
+      // Same YYYY-MM-DD contract as GET /api/attendance — interpreted in
+      // the tenant's zone, not server-local UTC.
+      let dateString: string | undefined;
+      if (typeof date === 'string' && date.length > 0) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+          return res.status(400).json({ message: "date must be in YYYY-MM-DD format" });
+        }
+        dateString = date;
+      }
+
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const attendance = await storage.getAttendanceByRoute(routeId, dateString, tz);
       res.json(attendance);
     } catch (error) {
       console.error("Error fetching route attendance:", error);

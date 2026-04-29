@@ -212,8 +212,8 @@ export interface IStorage {
   // Student attendance operations
   getTodaysStudentAttendance(driverId: string, routeId: string, timezone?: string): Promise<StudentAttendance[]>;
   markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string): Promise<StudentAttendance>;
-  getAttendanceByRoute(routeId: string, date?: Date): Promise<StudentAttendance[]>;
-  getAllAttendanceData(companyId?: string): Promise<StudentAttendance[]>;
+  getAttendanceByRoute(routeId: string, dateString?: string, timezone?: string): Promise<StudentAttendance[]>;
+  getAllAttendanceData(companyId?: string, timezone?: string): Promise<StudentAttendance[]>;
   getTodaysAttendanceForStudents(studentIds: string[], timezone?: string): Promise<StudentAttendance[]>;
 
   // Driver shift report operations
@@ -1438,31 +1438,33 @@ export class DatabaseStorage implements IStorage {
     }
   }
 
-  async getAttendanceByRoute(routeId: string, date?: Date): Promise<StudentAttendance[]> {
-    const targetDate = date || new Date();
+  async getAttendanceByRoute(routeId: string, dateString?: string, timezone: string = 'UTC'): Promise<StudentAttendance[]> {
+    // Match the day boundary in the caller's tenant zone. The previous
+    // implementation took a JS Date and used DATE(col) = DATE(targetDate),
+    // which compared in server-local (UTC on Railway) — admin queries for
+    // a non-UTC tenant's date would miss any rows whose UTC date differed.
+    const day = dateString || new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const attendance = await db
       .select()
       .from(studentAttendance)
       .where(and(
         eq(studentAttendance.routeId, routeId),
-        sql`DATE(${studentAttendance.attendanceDate}) = DATE(${targetDate})`
+        sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${day}::date`
       ))
       .orderBy(asc(studentAttendance.createdAt));
     return attendance;
   }
 
-  async getAllAttendanceData(companyId?: string): Promise<StudentAttendance[]> {
-    const today = new Date();
+  async getAllAttendanceData(companyId?: string, timezone: string = 'UTC'): Promise<StudentAttendance[]> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+    const dayPredicate = sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`;
     const attendance = await db
       .select()
       .from(studentAttendance)
       .where(
         companyId
-          ? and(
-              sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`,
-              eq(studentAttendance.companyId, companyId)
-            )
-          : sql`DATE(${studentAttendance.attendanceDate}) = DATE(${today})`
+          ? and(dayPredicate, eq(studentAttendance.companyId, companyId))
+          : dayPredicate
       )
       .orderBy(desc(studentAttendance.createdAt));
     return attendance;
