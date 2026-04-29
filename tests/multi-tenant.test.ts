@@ -209,3 +209,162 @@ describe('Multi-Tenant - Company Modules', () => {
     expect(AVAILABLE_MODULES).toContain('maintenance');
   });
 });
+
+// Policy-shape tests for the tenant-isolation helpers and enforcement
+// patterns documented in CLAUDE.md. These mirror the helpers inline (same
+// pattern as tests/role-access.test.ts) because the originals are declared
+// inside registerRoutes and not exported. If the policy changes in
+// routes.ts, update both places.
+
+type TestUser = {
+  role?: string;
+  companyId?: string | null;
+  _masterAdminImpersonating?: boolean;
+};
+
+function isMasterAdminUser(user: TestUser | null | undefined): boolean {
+  if (!user) return false;
+  return user.role === 'master_admin' || user._masterAdminImpersonating === true;
+}
+
+function companyScope(user: TestUser | null | undefined): string | null | undefined {
+  if (isMasterAdminUser(user)) return undefined;
+  if (!user) return null;
+  return user.companyId ?? null;
+}
+
+describe('Multi-Tenant - isMasterAdminUser', () => {
+  it('grants master access to master_admin role', () => {
+    expect(isMasterAdminUser({ role: 'master_admin' })).toBe(true);
+  });
+
+  it('grants master access to impersonating session regardless of role', () => {
+    expect(isMasterAdminUser({ role: 'admin', _masterAdminImpersonating: true })).toBe(true);
+    expect(isMasterAdminUser({ role: 'driver', _masterAdminImpersonating: true })).toBe(true);
+  });
+
+  it('denies for tenant admin', () => {
+    expect(isMasterAdminUser({ role: 'admin' })).toBe(false);
+  });
+
+  it('denies for driver, driver_admin, parent', () => {
+    expect(isMasterAdminUser({ role: 'driver' })).toBe(false);
+    expect(isMasterAdminUser({ role: 'driver_admin' })).toBe(false);
+    expect(isMasterAdminUser({ role: 'parent' })).toBe(false);
+  });
+
+  it('denies for falsy user', () => {
+    expect(isMasterAdminUser(null)).toBe(false);
+    expect(isMasterAdminUser(undefined)).toBe(false);
+  });
+
+  it('does not treat _masterAdminImpersonating: false as master', () => {
+    expect(isMasterAdminUser({ role: 'admin', _masterAdminImpersonating: false })).toBe(false);
+  });
+});
+
+describe('Multi-Tenant - companyScope', () => {
+  it('returns undefined for master_admin (no filter, sees all tenants)', () => {
+    expect(companyScope({ role: 'master_admin' })).toBeUndefined();
+  });
+
+  it('returns undefined for impersonating session (still treated as master)', () => {
+    // Important: impersonation rewrites user.companyId at the session layer
+    // but the master flag survives, so storage queries remain unscoped.
+    expect(companyScope({ role: 'admin', companyId: 'co-1', _masterAdminImpersonating: true })).toBeUndefined();
+  });
+
+  it('returns the user companyId for tenant admin', () => {
+    expect(companyScope({ role: 'admin', companyId: 'co-42' })).toBe('co-42');
+  });
+
+  it('returns the user companyId for driver and parent', () => {
+    expect(companyScope({ role: 'driver', companyId: 'co-42' })).toBe('co-42');
+    expect(companyScope({ role: 'parent', companyId: 'co-42' })).toBe('co-42');
+  });
+
+  it('returns null when a non-master user has no companyId (caller must short-circuit [])', () => {
+    expect(companyScope({ role: 'admin' })).toBeNull();
+    expect(companyScope({ role: 'admin', companyId: null })).toBeNull();
+  });
+});
+
+describe('Multi-Tenant - Record-by-id Guard', () => {
+  // Mirrors the standard "fetch record, 404 if missing, 404 if cross-tenant"
+  // shape from CLAUDE.md. Returns true if the request should proceed, false
+  // if it should 404 (whether due to missing or cross-tenant).
+  function canAccessRecord(
+    user: TestUser,
+    record: { companyId?: string | null } | null | undefined,
+  ): boolean {
+    if (!record) return false;
+    if (isMasterAdminUser(user)) return true;
+    return record.companyId === user.companyId;
+  }
+
+  it('master admin can access any tenant record', () => {
+    expect(canAccessRecord({ role: 'master_admin' }, { companyId: 'co-1' })).toBe(true);
+    expect(canAccessRecord({ role: 'master_admin' }, { companyId: 'co-2' })).toBe(true);
+  });
+
+  it('admin can access own tenant record', () => {
+    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, { companyId: 'co-1' })).toBe(true);
+  });
+
+  it('admin cannot access another tenant record (must 404, not 403)', () => {
+    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, { companyId: 'co-2' })).toBe(false);
+  });
+
+  it('driver cannot access another tenant record', () => {
+    expect(canAccessRecord({ role: 'driver', companyId: 'co-1' }, { companyId: 'co-2' })).toBe(false);
+  });
+
+  it('missing record reports as not found regardless of role', () => {
+    expect(canAccessRecord({ role: 'master_admin' }, null)).toBe(false);
+    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, undefined)).toBe(false);
+  });
+
+  it('record with null companyId is not accessible to a tenant admin', () => {
+    // Defensive: a record with companyId=null shouldn't accidentally match
+    // an admin whose companyId is also null/undefined and leak across tenants.
+    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, { companyId: null })).toBe(false);
+  });
+});
+
+describe('Multi-Tenant - Create Tenant Stamping', () => {
+  // POST handlers must force validatedData.companyId = user.companyId ?? null
+  // AFTER zod parse so a malicious body cannot place a row in another tenant.
+  function stampCompanyId<T extends { companyId?: string | null }>(
+    user: TestUser,
+    validatedBody: T,
+  ): T {
+    return { ...validatedBody, companyId: user.companyId ?? null };
+  }
+
+  it('overwrites a body-supplied companyId with the user companyId', () => {
+    const body = { name: 'New Bus', companyId: 'co-attacker' };
+    const result = stampCompanyId({ role: 'admin', companyId: 'co-victim' }, body);
+    expect(result.companyId).toBe('co-victim');
+  });
+
+  it('falls back to null when the user has no companyId', () => {
+    const body = { name: 'New Bus', companyId: 'co-attacker' };
+    const result = stampCompanyId({ role: 'admin' }, body);
+    expect(result.companyId).toBeNull();
+  });
+
+  it('preserves other fields untouched', () => {
+    const body = { name: 'New Bus', busNumber: '7', companyId: 'co-attacker' };
+    const result = stampCompanyId({ role: 'admin', companyId: 'co-1' }, body);
+    expect(result).toEqual({ name: 'New Bus', busNumber: '7', companyId: 'co-1' });
+  });
+
+  it('master admin still gets stamped (their companyId is the impersonation target)', () => {
+    // Without an active impersonation, master_admin.companyId is null and
+    // the stamp lands null — POSTs from a non-impersonating master should
+    // be a deliberate no-op rather than silently land in some tenant.
+    const body = { name: 'New Bus', companyId: 'co-anywhere' };
+    expect(stampCompanyId({ role: 'master_admin' }, body).companyId).toBeNull();
+    expect(stampCompanyId({ role: 'master_admin', companyId: 'co-impersonated' }, body).companyId).toBe('co-impersonated');
+  });
+});
