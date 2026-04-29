@@ -45,5 +45,7 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>School Bus Tracker shares your bus's location with parents while you are on duty so they can see when the bus is approaching.</string>
 </dict>
 </plist>

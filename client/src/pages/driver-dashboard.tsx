@@ -14,6 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Progress } from "@/components/ui/progress";
 import AppNavigation from "@/components/shared/Navigation";
 import { MessagingPortal } from "@/components/shared/MessagingPortal";
+import { Geolocation } from "@capacitor/geolocation";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
@@ -629,58 +630,65 @@ export default function DriverDashboard() {
       return;
     }
 
-    const updateLocation = () => {
-      if (!navigator.geolocation) {
-        setIsLocationSharing(false);
-        setLocationError('Location is not supported on this device. Parents cannot see the bus.');
-        return;
-      }
+    const updateLocation = async () => {
       // Once the driver has explicitly denied permission, stop polling.
-      // Browsers cache the denial and won't re-prompt; retrying wastes battery
-      // and floods the console. Driver must toggle duty off/on (or change
-      // device settings) to re-initiate.
+      // OS/browsers cache the denial and won't re-prompt; retrying wastes
+      // battery and floods the console. Driver must toggle duty off/on (or
+      // change device settings) to re-initiate.
       if (permissionDeniedRef.current) return;
 
-      navigator.geolocation.getCurrentPosition(
-        async (position) => {
-          try {
-            await apiRequest('/api/driver/update-location', 'POST', {
-              latitude: position.coords.latitude,
-              longitude: position.coords.longitude,
-              speed: position.coords.speed ? Math.round(position.coords.speed * 2.237) : 0 // m/s → mph
-            });
-            queryClient.invalidateQueries({ queryKey: ['/api/buses'] });
-            setIsLocationSharing(true);
-            setLastLocationUpdate(new Date());
-            setLocationError(null);
-          } catch (error) {
-            console.error('Location update failed:', error);
-            setIsLocationSharing(false);
-            setLocationError('Could not reach the server. Retrying in 30 seconds.');
-          }
-        },
-        (error) => {
+      try {
+        // @capacitor/geolocation routes to CoreLocation on iOS, Android's
+        // FusedLocationProvider on Android, and navigator.geolocation on web.
+        const position = await Geolocation.getCurrentPosition({
+          enableHighAccuracy: true,
+          timeout: 10000,
+        });
+
+        try {
+          await apiRequest('/api/driver/update-location', 'POST', {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            speed: position.coords.speed ? Math.round(position.coords.speed * 2.237) : 0 // m/s → mph
+          });
+          queryClient.invalidateQueries({ queryKey: ['/api/buses'] });
+          setIsLocationSharing(true);
+          setLastLocationUpdate(new Date());
+          setLocationError(null);
+        } catch (postError) {
+          console.error('Location update failed:', postError);
           setIsLocationSharing(false);
-          if (error.code === error.PERMISSION_DENIED) {
-            permissionDeniedRef.current = true;
-            setLocationError(
-              'Location permission denied. Parents cannot see the bus until you enable location access in your device settings.'
-            );
-            toast({
-              title: 'Location sharing disabled',
-              description: 'Parents cannot see the bus. Enable location access in your device settings.',
-              variant: 'destructive',
-            });
-          } else if (error.code === error.POSITION_UNAVAILABLE) {
-            setLocationError('GPS signal unavailable. Retrying in 30 seconds.');
-          } else if (error.code === error.TIMEOUT) {
-            setLocationError('GPS signal timed out. Retrying in 30 seconds.');
-          } else {
-            setLocationError('Location unavailable. Retrying in 30 seconds.');
-          }
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
+          setLocationError('Could not reach the server. Retrying in 30 seconds.');
+        }
+      } catch (error: any) {
+        // Capacitor preserves W3C `.code` on web; on native iOS/Android the
+        // rejection is an Error whose `.message` includes "denied",
+        // "unavailable", "timeout" etc. Match both shapes.
+        setIsLocationSharing(false);
+        const code = error?.code;
+        const msg = String(error?.message || '').toLowerCase();
+        const isDenied = code === 1 || /denied|disallowed|not authorized/.test(msg);
+        const isUnavailable = code === 2 || /unavailable|disabled|location services/.test(msg);
+        const isTimeout = code === 3 || /timeout/.test(msg);
+
+        if (isDenied) {
+          permissionDeniedRef.current = true;
+          setLocationError(
+            'Location permission denied. Parents cannot see the bus until you enable location access in your device settings.'
+          );
+          toast({
+            title: 'Location sharing disabled',
+            description: 'Parents cannot see the bus. Enable location access in your device settings.',
+            variant: 'destructive',
+          });
+        } else if (isUnavailable) {
+          setLocationError('GPS signal unavailable. Retrying in 30 seconds.');
+        } else if (isTimeout) {
+          setLocationError('GPS signal timed out. Retrying in 30 seconds.');
+        } else {
+          setLocationError('Location unavailable. Retrying in 30 seconds.');
+        }
+      }
     };
 
     updateLocation();
