@@ -26,7 +26,7 @@ const config: CapacitorConfig = {
       permissions: ['location'],
     },
     SplashScreen: {
-      launchShowDuration: 2000,
+      launchShowDuration: 0,
       backgroundColor: '#1e40af',
       showSpinner: false,
     },
