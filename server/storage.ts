@@ -2692,18 +2692,25 @@ export class DatabaseStorage implements IStorage {
       case 'depart_school':
         updates.departSchoolAt = now;
         break;
-      case 'arrive_homebase':
-        updates.arriveHomebaseAt = now;
-        // Calculate total duration if we have departure time
+      case 'arrive_homebase': {
+        // Idempotent: keep the first arriveHomebaseAt timestamp. The driver
+        // may click "Arrived at Homebase" before going off duty, and the
+        // off-duty handler also fires this event — without this guard the
+        // off-duty stamp would overwrite the driver's actual arrival time.
         const [existingJourney] = await db
           .select()
           .from(busJourneys)
           .where(eq(busJourneys.id, journeyId));
+        if (existingJourney?.arriveHomebaseAt) {
+          return existingJourney;
+        }
+        updates.arriveHomebaseAt = now;
         if (existingJourney?.departHomebaseAt) {
           const durationMs = now.getTime() - new Date(existingJourney.departHomebaseAt).getTime();
           updates.totalDurationMinutes = Math.round(durationMs / 60000);
         }
         break;
+      }
     }
     
     const [updated] = await db

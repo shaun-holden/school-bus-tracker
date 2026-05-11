@@ -3162,6 +3162,60 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Driver: today's bus journey (used by the dashboard to know which journey
+  // events have already fired, e.g. whether arriveHomebaseAt is stamped).
+  app.get('/api/driver/today-journey', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || !isDriverRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized - drivers only" });
+      }
+
+      const assignedBus = await storage.getBusByDriverId(userId);
+      if (!assignedBus) return res.json(null);
+
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const journey = await storage.getTodayBusJourney(assignedBus.id, tz);
+      res.json(journey ?? null);
+    } catch (error) {
+      console.error("Error fetching today's journey:", error);
+      res.status(500).json({ message: "Failed to fetch today's journey" });
+    }
+  });
+
+  // Driver: explicit "Arrived at Homebase" — stamps arriveHomebaseAt without
+  // ending the shift. Off-duty stamps the same event but is idempotent in
+  // storage, so calling this first preserves the actual arrival time.
+  app.post('/api/driver/arrive-homebase', isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user?.id;
+      const user = await storage.getUser(userId);
+      if (!user || !isDriverRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized - drivers only" });
+      }
+
+      const assignedBus = await storage.getBusByDriverId(userId);
+      if (!assignedBus) {
+        return res.status(400).json({ message: "No bus assigned to driver" });
+      }
+
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const todayJourney = await storage.getTodayBusJourney(assignedBus.id, tz);
+      if (!todayJourney) {
+        return res.status(404).json({ message: "No active journey for today" });
+      }
+
+      const updated = await storage.updateJourneyEvent(todayJourney.id, 'arrive_homebase');
+      res.json(updated);
+    } catch (error) {
+      console.error("Error recording arrive-homebase:", error);
+      res.status(500).json({ message: "Failed to record arrival at homebase" });
+    }
+  });
+
   // Student attendance endpoints
   app.get('/api/student-attendance', isAuthenticated, async (req: any, res) => {
     try {

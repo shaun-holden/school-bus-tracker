@@ -25,7 +25,7 @@ import {
   MapPin, Clock, Users, CheckCircle, Fuel, AlertTriangle, Clipboard, 
   Plus, UserPlus, Route as RouteIcon, FileText, Settings, Car, 
   Calendar, TrendingUp, BarChart3, Wrench, User, Save, Power, Bus,
-  Navigation, Timer, School, Bell, BarChart, MessageCircle
+  Navigation, Timer, School, Bell, BarChart, MessageCircle, Home
 } from "lucide-react";
 import { driverCheckInSchema, type DriverCheckIn } from "@shared/schema";
 import { Loader2, Send } from "lucide-react";
@@ -500,6 +500,16 @@ export default function DriverDashboard() {
     refetchInterval: 30000,
   });
 
+  // Today's bus journey — used to disable the Arrived-at-Homebase button once
+  // it has been recorded. The endpoint returns null if no journey has started.
+  const { data: todayJourney } = useQuery<{ id: string; arriveHomebaseAt: string | null } | null>({
+    queryKey: ["/api/driver/today-journey"],
+    enabled: !!user && isOnDuty,
+    retry: false,
+    refetchInterval: 30000,
+  });
+  const hasArrivedHomebase = !!todayJourney?.arriveHomebaseAt;
+
   // Query for completed stops today - used to show which stops the driver has arrived at
   const assignedRouteId = (user as any)?.assignedRouteId;
   const { data: completedStops, refetch: refetchCompletedStops } = useQuery<any[]>({
@@ -529,6 +539,25 @@ export default function DriverDashboard() {
       toast({
         title: "Error",
         description: error.message || "Failed to mark stop",
+        variant: "destructive",
+      });
+    },
+  });
+
+  // Mutation: explicitly stamp arriveHomebaseAt without going off duty.
+  const arriveHomebaseMutation = useMutation({
+    mutationFn: async () => apiRequest("/api/driver/arrive-homebase", "POST", {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/driver/today-journey"] });
+      toast({
+        title: "Arrived at Homebase",
+        description: "Arrival logged. Click End Shift when you're ready to go off duty.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to log arrival at homebase",
         variant: "destructive",
       });
     },
@@ -1092,6 +1121,26 @@ export default function DriverDashboard() {
               <p className="text-blue-100 text-sm sm:text-base">Comprehensive bus fleet and student management</p>
             </div>
             <div className="flex items-center space-x-3">
+              {isOnDuty && (
+                <Button
+                  onClick={() => arriveHomebaseMutation.mutate()}
+                  disabled={arriveHomebaseMutation.isPending || hasArrivedHomebase}
+                  size="sm"
+                  className={hasArrivedHomebase
+                    ? "bg-blue-900 text-blue-100 cursor-not-allowed"
+                    : "bg-blue-600 hover:bg-blue-700 text-white"
+                  }
+                  data-testid="button-arrive-homebase"
+                >
+                  <Home className="w-4 h-4 mr-2" />
+                  {arriveHomebaseMutation.isPending
+                    ? "Logging..."
+                    : hasArrivedHomebase
+                      ? "Arrived at Homebase"
+                      : "Arrived at Homebase"
+                  }
+                </Button>
+              )}
               <Button
                 onClick={toggleDutyStatus}
                 disabled={toggleDutyMutation.isPending}
@@ -1106,8 +1155,8 @@ export default function DriverDashboard() {
                 {toggleDutyMutation.isPending
                   ? "Updating..."
                   : isOnDuty
-                    ? "On Duty"
-                    : "Off Duty"
+                    ? "End Shift"
+                    : "Start Route from Homebase"
                 }
               </Button>
               <Badge
@@ -1239,15 +1288,15 @@ export default function DriverDashboard() {
                 {!isOnDuty ? (
                   <div className="text-center py-12">
                     <Users className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">Go On Duty to View Students</h3>
-                    <p className="text-gray-500 mb-4">Student information will be available when you're on duty</p>
-                    <Button 
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Start Route from Homebase to View Students</h3>
+                    <p className="text-gray-500 mb-4">Student information will be available once the route starts</p>
+                    <Button
                       onClick={toggleDutyStatus}
                       disabled={toggleDutyMutation.isPending}
                       data-testid="button-go-on-duty"
                     >
                       <Power className="w-4 h-4 mr-2" />
-                      Go On Duty
+                      Start Route from Homebase
                     </Button>
                   </div>
                 ) : Array.isArray(routeStudents) && routeStudents.length > 0 ? (
@@ -1788,15 +1837,15 @@ export default function DriverDashboard() {
                 {!isOnDuty ? (
                   <div className="text-center py-12">
                     <MapPin className="w-16 h-16 mx-auto mb-4 text-gray-300" />
-                    <h3 className="text-lg font-medium text-gray-900 mb-2">Go On Duty to View Route</h3>
-                    <p className="text-gray-500 mb-4">Route information will be available when you're on duty</p>
-                    <Button 
+                    <h3 className="text-lg font-medium text-gray-900 mb-2">Start Route from Homebase to View Route</h3>
+                    <p className="text-gray-500 mb-4">Route information will be available once the route starts</p>
+                    <Button
                       onClick={toggleDutyStatus}
                       disabled={toggleDutyMutation.isPending}
                       data-testid="button-go-on-duty-routes"
                     >
                       <Power className="w-4 h-4 mr-2" />
-                      Go On Duty
+                      Start Route from Homebase
                     </Button>
                   </div>
                 ) : (assignedRoute || (Array.isArray(routeStops) && routeStops.length > 0) || (Array.isArray(routeSchools) && routeSchools.length > 0)) ? (
