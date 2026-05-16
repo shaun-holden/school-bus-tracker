@@ -2,6 +2,7 @@ import { Component, ErrorInfo, ReactNode } from "react";
 
 interface Props {
   children: ReactNode;
+  onError?: (error: Error, errorInfo: ErrorInfo) => void;
 }
 
 interface State {
@@ -21,6 +22,13 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error("ErrorBoundary caught:", error, errorInfo);
+    // Notify owner (e.g. so the native splash screen can be dismissed) — never
+    // let an onError handler throw and re-trigger the boundary.
+    try {
+      this.props.onError?.(error, errorInfo);
+    } catch (handlerErr) {
+      console.warn("ErrorBoundary onError handler threw", handlerErr);
+    }
   }
 
   render() {

@@ -26,9 +26,12 @@ const config: CapacitorConfig = {
       permissions: ['location'],
     },
     SplashScreen: {
-      launchShowDuration: 0,
+      launchShowDuration: 5000,
+      launchAutoHide: true,
+      launchFadeOutDuration: 200,
       backgroundColor: '#1e40af',
       showSpinner: false,
+      androidScaleType: 'CENTER_CROP',
     },
     StatusBar: {
       style: 'Light',

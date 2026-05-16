@@ -1,0 +1,4 @@
+sessions/
+*.log
+tmp/
+settings.local.json

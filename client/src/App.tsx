@@ -7,6 +7,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useWebPush } from "@/hooks/use-web-push";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { SplashProvider, useSplash } from "@/lib/splash-context";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
 import AuthPage from "@/pages/auth";
@@ -24,6 +25,7 @@ import OnboardingPending from "@/pages/onboarding-pending";
 
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
+  const { hide: hideSplash } = useSplash();
 
   // Register for web push notifications once authenticated
   useWebPush(!!isAuthenticated && !!user?.id);
@@ -48,6 +50,17 @@ function Router() {
       }
     }
   }, [isAuthenticated, user]);
+
+  // Dismiss the native splash screen the moment auth resolves. We intentionally
+  // do NOT gate on isAuthenticated — landing on the Landing page is a valid
+  // resolved state and should not leave the user staring at the splash.
+  // SplashProvider.hide() is idempotent (guarded by hasHiddenRef), so calling
+  // it on every non-loading render is safe.
+  useEffect(() => {
+    if (!isLoading) {
+      void hideSplash();
+    }
+  }, [isLoading, hideSplash]);
 
   if (isLoading) {
     return (
@@ -89,9 +102,14 @@ function Router() {
   );
 }
 
-function App() {
+interface AppProps {
+  splashShownAt: number | null;
+}
+
+function AppShell() {
+  const { hide: hideSplash } = useSplash();
   return (
-    <ErrorBoundary>
+    <ErrorBoundary onError={() => { void hideSplash(); }}>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
           <Toaster />
@@ -99,6 +117,14 @@ function App() {
         </TooltipProvider>
       </QueryClientProvider>
     </ErrorBoundary>
+  );
+}
+
+function App({ splashShownAt }: AppProps) {
+  return (
+    <SplashProvider shownAt={splashShownAt}>
+      <AppShell />
+    </SplashProvider>
   );
 }
 
