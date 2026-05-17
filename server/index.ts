@@ -1,11 +1,20 @@
 import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
+import cors from "cors";
 import fs from "fs";
 import path from "path";
 import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { WebhookHandlers } from './webhookHandlers';
 import { seedMasterAdmin } from '../scripts/seed-master-admin';
+
+export const ALLOWED_ORIGINS = [
+  'capacitor://localhost',
+  'ionic://localhost',
+  'http://localhost',
+  'https://www.schoolbustracker.org',
+  'https://schoolbustracker.org',
+];
 
 const app = express();
 
@@ -35,6 +44,18 @@ app.post(
       res.status(400).json({ error: 'Webhook processing error' });
     }
   }
+);
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Same-origin and non-browser requests omit the Origin header — always allow.
+      if (!origin) return callback(null, true);
+      if (ALLOWED_ORIGINS.includes(origin)) return callback(null, true);
+      return callback(null, false);
+    },
+    credentials: true,
+  })
 );
 
 app.use(express.json());
