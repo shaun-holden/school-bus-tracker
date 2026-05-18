@@ -17,6 +17,7 @@ import Navigation from "@/components/shared/Navigation";
 import { BusTrackingMap, BusTrackingLegend } from "@/components/shared/BusTrackingMap";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiUrl } from "@/lib/apiBase";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -158,7 +159,9 @@ function TotalStopsDisplay({ routes }: { routes: any }) {
       // Fetch schools for each route and count them
       const promises = routes.map(async (route: any) => {
         try {
-          const response = await fetch(`/api/routes/${route.id}/schools`);
+          const response = await fetch(apiUrl(`/api/routes/${route.id}/schools`), {
+            credentials: 'include',
+          });
           if (response.ok) {
             const schools = await response.json();
             return Array.isArray(schools) ? schools.length : 0;
@@ -1351,8 +1354,8 @@ export default function AdminDashboard() {
 
       // Fetch both route stops and route schools
       const [stopsResponse, schoolsResponse] = await Promise.all([
-        fetch(`/api/routes/${routeId}/stops`, { credentials: 'include' }),
-        fetch(`/api/routes/${routeId}/schools`, { credentials: 'include' }),
+        fetch(apiUrl(`/api/routes/${routeId}/stops`), { credentials: 'include' }),
+        fetch(apiUrl(`/api/routes/${routeId}/schools`), { credentials: 'include' }),
       ]);
       const stops = await stopsResponse.json();
       const routeSchoolsList = await schoolsResponse.json();
@@ -1750,7 +1753,7 @@ export default function AdminDashboard() {
       const routeId = data.routeId === "none" ? undefined : data.routeId;
       
       if (schoolId && routeId) {
-        const response = await fetch(`/api/routes/${routeId}/schools`, { credentials: 'include' });
+        const response = await fetch(apiUrl(`/api/routes/${routeId}/schools`), { credentials: 'include' });
         if (response.ok) {
           const routeSchools = await response.json();
           const schoolOnRoute = Array.isArray(routeSchools) && routeSchools.some((s: any) => s.id === schoolId);
@@ -1848,7 +1851,7 @@ export default function AdminDashboard() {
       const routeId = updateData.routeId === "none" ? undefined : updateData.routeId;
       
       if (schoolId && routeId) {
-        const response = await fetch(`/api/routes/${routeId}/schools`, { credentials: 'include' });
+        const response = await fetch(apiUrl(`/api/routes/${routeId}/schools`), { credentials: 'include' });
         if (response.ok) {
           const routeSchools = await response.json();
           const schoolOnRoute = Array.isArray(routeSchools) && routeSchools.some((s: any) => s.id === schoolId);
@@ -2509,7 +2512,9 @@ export default function AdminDashboard() {
   // Helper function to get school count for a route (each school = 1 stop)
   const getRouteStopCount = async (routeId: string) => {
     try {
-      const response = await fetch(`/api/routes/${routeId}/schools`);
+      const response = await fetch(apiUrl(`/api/routes/${routeId}/schools`), {
+        credentials: 'include',
+      });
       if (response.ok) {
         const schools = await response.json();
         return Array.isArray(schools) ? schools.length : 0;

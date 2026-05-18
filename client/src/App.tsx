@@ -1,12 +1,13 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { Switch, Route } from "wouter";
-import { queryClient } from "./lib/queryClient";
+import { queryClient, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useWebPush } from "@/hooks/use-web-push";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import { SplashProvider, useSplash } from "@/lib/splash-context";
 import NotFound from "@/pages/not-found";
 import Landing from "@/pages/landing";
@@ -26,6 +27,7 @@ import OnboardingPending from "@/pages/onboarding-pending";
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
   const { hide: hideSplash } = useSplash();
+  const pendingRolePatchSentRef = useRef(false);
 
   // Register for web push notifications once authenticated
   useWebPush(!!isAuthenticated && !!user?.id);
@@ -39,14 +41,20 @@ function Router() {
       }
       const pendingRole = sessionStorage.getItem('pendingRole');
       if (pendingRole && (!user?.role || user?.role !== pendingRole)) {
-        fetch(`/api/users/${user.id}/role`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ role: pendingRole })
-        }).then(() => {
-          sessionStorage.removeItem('pendingRole');
-          window.location.reload();
-        });
+        // Guard against the effect re-running (auth state churn, fast re-renders)
+        // before the PATCH resolves and clears sessionStorage. Once set, never
+        // reset — the page reloads on success, and on failure we leave pendingRole
+        // intact so the user can retry by reloading manually.
+        if (pendingRolePatchSentRef.current) return;
+        pendingRolePatchSentRef.current = true;
+        apiRequest(`/api/users/${user.id}/role`, 'PATCH', { role: pendingRole })
+          .then(() => {
+            sessionStorage.removeItem('pendingRole');
+            window.location.reload();
+          })
+          .catch((err) => {
+            console.error('Failed to apply pending role:', err);
+          });
       }
     }
   }, [isAuthenticated, user]);
@@ -112,6 +120,7 @@ function AppShell() {
     <ErrorBoundary onError={() => { void hideSplash(); }}>
       <QueryClientProvider client={queryClient}>
         <TooltipProvider>
+          <OfflineBanner />
           <Toaster />
           <Router />
         </TooltipProvider>

@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Bus, CheckCircle, AlertCircle } from "lucide-react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { apiUrl } from "@/lib/apiBase";
 
 const passwordSetupSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters"),
@@ -41,7 +42,9 @@ export default function DriverPasswordSetupPage() {
     queryKey: ['/api/driver-invitation/verify', token],
     queryFn: async () => {
       if (!token) throw new Error("No token provided");
-      const response = await fetch(`/api/driver-invitation/verify?token=${encodeURIComponent(token)}`);
+      const response = await fetch(apiUrl(`/api/driver-invitation/verify?token=${encodeURIComponent(token)}`), {
+        credentials: 'include',
+      });
       if (!response.ok) {
         const data = await response.json();
         throw new Error(data.message || "Invalid or expired invitation");
