@@ -1,0 +1,68 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "🚀 dev",
+      "type": "shell",
+      "command": "npm run dev",
+      "isBackground": true,
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": {
+        "group": "dashboard",
+        "panel": "dedicated",
+        "reveal": "always",
+        "focus": false,
+        "echo": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🐚 shell",
+      "type": "shell",
+      "command": "exec $SHELL",
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": {
+        "group": "dashboard",
+        "panel": "dedicated",
+        "reveal": "always",
+        "focus": false,
+        "echo": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🖥 terminal 1",
+      "type": "shell",
+      "command": "exec $SHELL",
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": {
+        "group": "dashboard",
+        "panel": "dedicated",
+        "reveal": "always",
+        "focus": false,
+        "echo": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🖥 terminal 2",
+      "type": "shell",
+      "command": "exec $SHELL",
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": {
+        "group": "dashboard",
+        "panel": "dedicated",
+        "reveal": "always",
+        "focus": false,
+        "echo": false
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "🟢 Open Dashboard (dev + shell + 2 terminals)",
+      "dependsOn": ["🚀 dev", "🐚 shell", "🖥 terminal 1", "🖥 terminal 2"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    }
+  ]
+}

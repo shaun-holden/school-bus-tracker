@@ -1,0 +1,25 @@
+{
+  "folders": [
+    {
+      "name": "school-bus-tracker",
+      "path": "."
+    }
+  ],
+  "settings": {
+    "task.allowAutomaticTasks": "on",
+    "terminal.integrated.tabs.enabled": true,
+    "terminal.integrated.defaultProfile.osx": "zsh",
+    "search.exclude": {
+      "**/dist": true,
+      "**/node_modules": true,
+      "**/ios/App/Pods": true
+    }
+  },
+  "extensions": {
+    "recommendations": [
+      "anthropic.claude-code",
+      "dbaeumer.vscode-eslint",
+      "esbenp.prettier-vscode"
+    ]
+  }
+}
