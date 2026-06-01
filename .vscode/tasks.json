@@ -31,9 +31,9 @@
       "problemMatcher": []
     },
     {
-      "label": "🖥 terminal 1",
+      "label": "🤖 T1",
       "type": "shell",
-      "command": "exec $SHELL",
+      "command": "claude",
       "runOptions": { "runOn": "folderOpen" },
       "presentation": {
         "group": "dashboard",
@@ -45,9 +45,9 @@
       "problemMatcher": []
     },
     {
-      "label": "🖥 terminal 2",
+      "label": "🤖 T2",
       "type": "shell",
-      "command": "exec $SHELL",
+      "command": "claude",
       "runOptions": { "runOn": "folderOpen" },
       "presentation": {
         "group": "dashboard",
@@ -60,7 +60,7 @@
     },
     {
       "label": "🟢 Open Dashboard (dev + shell + 2 terminals)",
-      "dependsOn": ["🚀 dev", "🐚 shell", "🖥 terminal 1", "🖥 terminal 2"],
+      "dependsOn": ["🚀 dev", "🐚 shell", "🤖 T1", "🤖 T2"],
       "dependsOrder": "parallel",
       "problemMatcher": []
     }
