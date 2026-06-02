@@ -4983,7 +4983,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { routeId } = req.params;
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+
+      // routeId comes straight from the URL — verify it belongs to the
+      // caller's tenant before reading its check-ins. Storage methods take
+      // raw ids and do not tenant-scope internally. 404 (not 403) masks
+      // existence so a foreign routeId is indistinguishable from a missing one.
+      const route = await storage.getRouteById(routeId);
+      if (!route) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
+      // Day boundary follows the route's tenant zone (same as the driver's
+      // company for normal drivers; correct for an impersonating master admin).
+      const company = route.companyId ? await storage.getCompanyById(route.companyId) : null;
       const tz = company?.timezone || 'UTC';
       const checkIns = await storage.getActiveCheckInsForRoute(routeId, tz);
       
