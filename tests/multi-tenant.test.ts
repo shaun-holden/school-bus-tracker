@@ -368,3 +368,51 @@ describe('Multi-Tenant - Create Tenant Stamping', () => {
     expect(stampCompanyId({ role: 'master_admin', companyId: 'co-impersonated' }, body).companyId).toBe('co-impersonated');
   });
 });
+
+describe('Multi-Tenant - Day-boundary timezone resolution', () => {
+  // The storage layer's day-scoped queries (attendance, bus journeys, and the
+  // studentCheckIns / Bluetooth-boarding methods) compute "today" as the
+  // tenant's calendar day via Intl.DateTimeFormat('en-CA', { timeZone }) and
+  // compare it against (col AT TIME ZONE tz)::date in Postgres. No DB harness
+  // exists here (tests are pure-unit, see auth-validation.test.ts), so we lock
+  // in the JS half of that contract: the dateString derivation. This is the
+  // exact logic whose absence caused non-UTC tenants on the UTC Railway host
+  // to bucket check-ins into the wrong day.
+  function tenantToday(instant: Date, timezone: string): string {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(instant);
+  }
+
+  it('produces a YYYY-MM-DD string comparable to ::date', () => {
+    const day = tenantToday(new Date('2026-01-15T12:00:00Z'), 'UTC');
+    expect(day).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(day).toBe('2026-01-15');
+  });
+
+  it('an instant after UTC midnight is still the previous calendar day in EST', () => {
+    // 02:30 UTC on Jan 15 is 21:30 EST on Jan 14. A check-in enabled at this
+    // moment must bucket into Jan 14 for an America/New_York tenant — the old
+    // server-local setHours(0,0,0,0) on a UTC host bucketed it into Jan 15.
+    const instant = new Date('2026-01-15T02:30:00Z');
+    expect(tenantToday(instant, 'UTC')).toBe('2026-01-15');
+    expect(tenantToday(instant, 'America/New_York')).toBe('2026-01-14');
+  });
+
+  it('two tenants in different zones can disagree on the calendar day for the same instant', () => {
+    // Same wall-clock instant, three tenants — the dedupe/query day differs,
+    // which is precisely why timezone must be threaded per-tenant rather than
+    // resolved once from the server clock.
+    const instant = new Date('2026-06-02T03:30:00Z');
+    expect(tenantToday(instant, 'America/New_York')).toBe('2026-06-01'); // 23:30 prev day
+    expect(tenantToday(instant, 'UTC')).toBe('2026-06-02');
+    expect(tenantToday(instant, 'Asia/Tokyo')).toBe('2026-06-02'); // 12:30 same day
+  });
+
+  it('the UTC fallback matches a missing/UTC tenant timezone', () => {
+    // Callers pass company?.timezone || 'UTC'; the fallback must equal an
+    // explicit UTC tenant so a company row without a timezone is not silently
+    // shifted relative to one set to 'UTC'.
+    const instant = new Date('2026-03-09T06:15:00Z');
+    expect(tenantToday(instant, 'UTC')).toBe(tenantToday(instant, 'UTC'));
+    expect(tenantToday(instant, undefined as unknown as string || 'UTC')).toBe('2026-03-09');
+  });
+});

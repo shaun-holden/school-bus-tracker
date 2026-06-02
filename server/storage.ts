@@ -293,15 +293,15 @@ export interface IStorage {
   getParentsForDriver(driverId: string, companyId?: string): Promise<User[]>;
 
   // Student check-in operations (Bluetooth boarding)
-  enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string): Promise<StudentCheckIn>;
-  disableStudentCheckIn(studentId: string): Promise<boolean>;
-  getActiveCheckInsForRoute(routeId: string): Promise<StudentCheckIn[]>;
-  getCheckInStatus(studentId: string): Promise<StudentCheckIn | undefined>;
+  enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone?: string): Promise<StudentCheckIn>;
+  disableStudentCheckIn(studentId: string, timezone?: string): Promise<boolean>;
+  getActiveCheckInsForRoute(routeId: string, timezone?: string): Promise<StudentCheckIn[]>;
+  getCheckInStatus(studentId: string, timezone?: string): Promise<StudentCheckIn | undefined>;
   getCheckInById(checkInId: string): Promise<StudentCheckIn | undefined>;
   confirmStudentBoarded(checkInId: string, driverId: string, busId: string, routeId: string): Promise<StudentCheckIn | undefined>;
   confirmStudentDroppedOff(checkInId: string): Promise<StudentCheckIn | undefined>;
-  getTodayCheckInsForParent(parentId: string): Promise<StudentCheckIn[]>;
-  getTodayCheckInsForStudents(studentIds: string[]): Promise<StudentCheckIn[]>;
+  getTodayCheckInsForParent(parentId: string, timezone?: string): Promise<StudentCheckIn[]>;
+  getTodayCheckInsForStudents(studentIds: string[], timezone?: string): Promise<StudentCheckIn[]>;
 
   // Driver invitation operations
   createDriverInvitation(driverId: string, email: string, companyId: string, tokenHash: string, expiresAt: Date): Promise<DriverInvitation>;
@@ -2257,20 +2257,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Student check-in operations (Bluetooth boarding)
-  async enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string): Promise<StudentCheckIn> {
+  async enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone: string = 'UTC'): Promise<StudentCheckIn> {
     // Get student's route
     const student = await this.getStudentById(studentId);
-    
-    // Check if there's already an active check-in for today
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+
+    // Dedupe within the tenant's calendar day, not server-local. Plain
+    // setHours(0,0,0,0) is server-local (UTC on Railway), so a non-UTC
+    // tenant enabling after the UTC day-flip would either miss an existing
+    // row or match yesterday's. See getTodaysStudentAttendance.
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const existing = await db
       .select()
       .from(studentCheckIns)
       .where(
         and(
           eq(studentCheckIns.studentId, studentId),
-          sql`${studentCheckIns.checkInDate} >= ${today}`
+          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       );
     
@@ -2300,26 +2302,24 @@ export class DatabaseStorage implements IStorage {
     return checkIn;
   }
 
-  async disableStudentCheckIn(studentId: string): Promise<boolean> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  async disableStudentCheckIn(studentId: string, timezone: string = 'UTC'): Promise<boolean> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+
     const result = await db
       .delete(studentCheckIns)
       .where(
         and(
           eq(studentCheckIns.studentId, studentId),
-          sql`${studentCheckIns.checkInDate} >= ${today}`
+          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       );
-    
+
     return true;
   }
 
-  async getActiveCheckInsForRoute(routeId: string): Promise<StudentCheckIn[]> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  async getActiveCheckInsForRoute(routeId: string, timezone: string = 'UTC'): Promise<StudentCheckIn[]> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+
     return db
       .select()
       .from(studentCheckIns)
@@ -2327,22 +2327,21 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(studentCheckIns.routeId, routeId),
           eq(studentCheckIns.status, 'waiting'),
-          sql`${studentCheckIns.checkInDate} >= ${today}`
+          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       );
   }
 
-  async getCheckInStatus(studentId: string): Promise<StudentCheckIn | undefined> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  async getCheckInStatus(studentId: string, timezone: string = 'UTC'): Promise<StudentCheckIn | undefined> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+
     const [checkIn] = await db
       .select()
       .from(studentCheckIns)
       .where(
         and(
           eq(studentCheckIns.studentId, studentId),
-          sql`${studentCheckIns.checkInDate} >= ${today}`
+          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       )
       .orderBy(desc(studentCheckIns.createdAt))
@@ -2386,37 +2385,35 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async getTodayCheckInsForParent(parentId: string): Promise<StudentCheckIn[]> {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+  async getTodayCheckInsForParent(parentId: string, timezone: string = 'UTC'): Promise<StudentCheckIn[]> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+
     return db
       .select()
       .from(studentCheckIns)
       .where(
         and(
           eq(studentCheckIns.parentId, parentId),
-          sql`${studentCheckIns.checkInDate} >= ${today}`
+          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       )
       .orderBy(desc(studentCheckIns.createdAt));
   }
 
-  async getTodayCheckInsForStudents(studentIds: string[]): Promise<StudentCheckIn[]> {
+  async getTodayCheckInsForStudents(studentIds: string[], timezone: string = 'UTC'): Promise<StudentCheckIn[]> {
     if (studentIds.length === 0) {
       return [];
     }
-    
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    
+
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+
     return db
       .select()
       .from(studentCheckIns)
       .where(
         and(
           inArray(studentCheckIns.studentId, studentIds),
-          sql`${studentCheckIns.checkInDate} >= ${today}`
+          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
         )
       )
       .orderBy(desc(studentCheckIns.createdAt));

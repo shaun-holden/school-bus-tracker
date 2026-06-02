@@ -4649,7 +4649,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const effectiveCompanyId = linkedStudents[0]?.companyId || user.companyId;
-      const checkIn = await storage.enableStudentCheckIn(studentId, userId, deviceId, effectiveCompanyId || undefined);
+      const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const checkIn = await storage.enableStudentCheckIn(studentId, userId, deviceId, effectiveCompanyId || undefined, tz);
       res.json(checkIn);
     } catch (error) {
       console.error("Error enabling check-in:", error);
@@ -4682,7 +4684,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "You don't have access to this student" });
       }
 
-      await storage.disableStudentCheckIn(studentId);
+      const effectiveCompanyId = linkedStudents[0]?.companyId || user.companyId;
+      const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
+      const tz = company?.timezone || 'UTC';
+      await storage.disableStudentCheckIn(studentId, tz);
       res.json({ success: true, message: "Check-in disabled" });
     } catch (error) {
       console.error("Error disabling check-in:", error);
@@ -4719,7 +4724,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const allChildrenIds = Array.from(childrenMap.keys());
         
         // Get check-ins for all children (by studentId, not just parentId)
-        const allCheckIns = await storage.getTodayCheckInsForStudents(allChildrenIds);
+        const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+        const tz = company?.timezone || 'UTC';
+        const allCheckIns = await storage.getTodayCheckInsForStudents(allChildrenIds, tz);
         
         res.json(allCheckIns);
         return;
@@ -4808,19 +4815,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const student = allChildren.find(c => c.id === studentId);
       const effectiveCompanyId = student?.companyId || user.companyId;
+      const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
+      const tz = company?.timezone || 'UTC';
 
       if (status === 'riding') {
         // Create or update check-in to 'waiting' status
         const checkIn = await storage.enableStudentCheckIn(
-          studentId, 
-          userId, 
-          'parent-web', 
-          effectiveCompanyId || undefined
+          studentId,
+          userId,
+          'parent-web',
+          effectiveCompanyId || undefined,
+          tz
         );
         res.json({ success: true, checkIn, message: "Student marked as riding today" });
       } else {
         // Mark as not riding - disable any existing check-in
-        await storage.disableStudentCheckIn(studentId);
+        await storage.disableStudentCheckIn(studentId, tz);
         res.json({ success: true, message: "Student marked as not riding today" });
       }
     } catch (error) {
@@ -4973,7 +4983,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { routeId } = req.params;
-      const checkIns = await storage.getActiveCheckInsForRoute(routeId);
+      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const tz = company?.timezone || 'UTC';
+      const checkIns = await storage.getActiveCheckInsForRoute(routeId, tz);
       
       // Get student details for each check-in
       const checkInsWithStudents = await Promise.all(
