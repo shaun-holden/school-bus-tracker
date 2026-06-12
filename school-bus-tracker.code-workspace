@@ -9,6 +9,9 @@
     "task.allowAutomaticTasks": "on",
     "terminal.integrated.tabs.enabled": true,
     "terminal.integrated.defaultProfile.osx": "zsh",
+    "terminal.integrated.defaultLocation": "editor",
+    "terminal.integrated.enablePersistentSessions": false,
+    "workbench.startupEditor": "none",
     "search.exclude": {
       "**/dist": true,
       "**/node_modules": true,

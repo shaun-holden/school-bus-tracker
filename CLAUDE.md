@@ -81,8 +81,23 @@ Vitest, configured in `vitest.config.ts`. Tests live in `tests/` (not colocated)
 - `react-builder` — implements approved plans for client/ files.
 - `express-api` — implements approved plans for server/ files.
 - `reviewer` — reads diffs before commit; flags critical/important/suggestions. Never writes code.
+- `tester` — writes/runs the Vitest suite (company isolation, role access, plan caps, validation). Never writes app code.
 
 The intended flow for any non-trivial change: planner → human review of plan → builder → reviewer → human review of findings → commit → verify on Railway. See `LEARNINGS.md` for the discipline that makes this work and the specific failure modes to avoid (especially: never `cd` between codebases in the same terminal, always verify `pwd` before any session, never `git add -A` or `.`).
+
+### Three-window workflow (Coach 🧭 / Dev 🔨 / Shell 🐚)
+Run three Claude windows in VS Code (auto-started by `.vscode/tasks.json`), each kept strictly in its lane. Talk to **Coach** in plain English; Coach drafts the exact prompt/command and says which window to paste it into.
+
+- **Coach 🧭** — planning + routing. Talk through what you want; Coach reads the repo, drives `planner` (writes the `plans/*.md` file) for non-trivial changes, drafts the precise prompt for Dev or Shell, and says which window to paste into. Coach does NOT write app code or run git.
+- **Dev 🔨** — the ONLY window that writes application code. Drives `react-builder` for `client/` and `express-api` for `server/`/`shared/`. Implements the approved plan; hands off, never self-approves.
+- **Shell 🐚** — ops only: git, `npm test` / `npm run check`, `npm run db:push` (Drizzle), Railway CLI, and dispatching the `reviewer` and `tester`. Shell NEVER writes application code.
+
+One-directional rules (non-negotiable):
+- Only **Dev** edits `client/`/`server/`/`shared/`. If Coach or Shell spots a needed fix, route it back to **Dev** — never have Shell edit code.
+- Only **Shell** runs git and shell commands; Coach/Dev don't commit, push, or deploy. Per `LEARNINGS.md`: verify `pwd` before any session, never `cd` between codebases in one terminal, never `git add -A`/`.` — stage explicit paths.
+- The builders, `reviewer`, and `tester` are invoked per task (no auto-handoff). Typical flow: Coach plans → Dev builds → Shell runs the `tester` + `reviewer` → commit → verify on Railway.
+- **Secrets never enter a Claude pane.** DB URLs, Railway tokens, and any API keys are staged in a PLAIN terminal (⌃\`) via env vars / `railway variables --set` — never typed or pasted into Coach/Dev/Shell, and never via the `!` prefix (it records into that session's transcript). A secret that lands in any chat is compromised → rotate it.
+- **"Merged" ≠ "live."** After a change merges, confirm it actually deployed on Railway and the app responds before calling it shipped.
 
 **Plans live in `plans/`.** Each non-trivial change gets its own plan file. Current plans:
 - `plans/splashscreen-timing-fix.md` (shipped 2026-05-16)
