@@ -65,8 +65,25 @@
       "problemMatcher": []
     },
     {
+      "label": "🌐 open site",
+      "detail": "Waits for the dev server on :5001, then opens it in the default browser",
+      "type": "shell",
+      "command": "for i in $(seq 1 120); do curl -sf -o /dev/null http://localhost:5001 && break; sleep 0.5; done; open http://localhost:5001",
+      "runOptions": { "runOn": "folderOpen" },
+      "presentation": {
+        "group": "dashboard",
+        "panel": "shared",
+        "reveal": "silent",
+        "focus": false,
+        "echo": false,
+        "showReuseMessage": false,
+        "close": true
+      },
+      "problemMatcher": []
+    },
+    {
       "label": "🟢 Open Dashboard (Coach + Dev + Shell + dev)",
-      "dependsOn": ["Coach 🧭", "Dev 🔨", "Shell 🐚", "🚀 dev"],
+      "dependsOn": ["Coach 🧭", "Dev 🔨", "Shell 🐚", "🚀 dev", "🌐 open site"],
       "dependsOrder": "parallel",
       "problemMatcher": []
     }
