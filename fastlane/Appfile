@@ -1,0 +1,7 @@
+app_identifier("com.TopNotchTrainingCenter.SchoolBusTracker")
+
+# Team ID from the Xcode project — a semi-public identifier, not a secret.
+team_id("Z3KAT7AUKH")
+
+# App Store Connect authentication uses the API key read from the environment
+# (see Fastfile / .env.example). No apple_id or itc credentials are stored here.
