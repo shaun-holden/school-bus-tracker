@@ -13,3 +13,11 @@ fastlane/test_output
 build/
 *.ipa
 *.dSYM.zip
+
+# Android signing secrets (never commit)
+android/keystore.properties
+*.jks
+*.keystore
+# Google Play service account key
+fastlane/play-store-*.json
+*.aab

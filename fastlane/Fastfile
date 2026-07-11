@@ -12,6 +12,13 @@
 # Usage:
 #   npm run build && npx cap sync ios      # build the web bundle + sync it into iOS
 #   fastlane ios beta                      # bump build number, archive, upload to TestFlight
+#   fastlane android beta                  # build the release .aab, upload to Play internal track
+#
+# Android extras (see android/keystore.properties.example):
+#   - android/keystore.properties present (release signing) — gitignored
+#   - PLAY_STORE_JSON_KEY env → path to the Google Play service-account JSON
+#   - the app's FIRST .aab must be uploaded manually in the Play Console; after
+#     that this lane automates internal-testing releases.
 
 default_platform(:ios)
 
@@ -80,5 +87,42 @@ platform :ios do
       "Uploaded build #{next_build} to TestFlight. Apple-side processing can take several " \
       "minutes before it appears for the internal testing group."
     )
+  end
+end
+
+platform :android do
+  desc "Build the release AAB and upload to Play Store internal testing"
+  lane :beta do
+    # Build the web bundle and sync it into the Android project (fastlane runs
+    # from ./fastlane, so step up to the repo root first).
+    sh("cd .. && npm run build && npx cap sync android")
+
+    # Release signing comes from android/keystore.properties (gitignored). If it
+    # is missing the AAB is unsigned and Play will reject it — set it up first
+    # (see android/keystore.properties.example).
+    #
+    # NOTE: Google Play requires a unique, incrementing versionCode per upload.
+    # The first release uses versionCode 1 (android/app/build.gradle); bump it
+    # for each subsequent release until we wire auto-increment off the Play track.
+    gradle(
+      task: "bundle",
+      build_type: "Release",
+      project_dir: "android/"
+    )
+
+    # Google Play service-account JSON, read from the environment (never committed).
+    # The very first upload for a brand-new app must be done manually in the Play
+    # Console; this lane automates every internal-testing release after that.
+    upload_to_play_store(
+      track: "internal",
+      aab: "android/app/build/outputs/bundle/release/app-release.aab",
+      json_key: ENV.fetch("PLAY_STORE_JSON_KEY"),
+      skip_upload_metadata: true,
+      skip_upload_images: true,
+      skip_upload_screenshots: true,
+      skip_upload_apk: true
+    )
+
+    UI.success("Uploaded a new AAB to the Play Store internal testing track.")
   end
 end
