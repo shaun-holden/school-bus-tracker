@@ -43,7 +43,7 @@ export default function PrivacyPolicy() {
 
         <div className="mt-8 space-y-10">
           <p className="text-slate-600 leading-relaxed">
-            School Bus Tracker ("the App," "we," "us"), operated by Top Notch Training Center, helps
+            School Bus Tracker ("the App," "we," "us"), operated by Holden Enterprise LLC, helps
             schools, camps, and similar organizations track their buses in real time. Administrators
             manage routes, students, and drivers; drivers share their location while on duty; and
             parents see when a bus is approaching. This policy explains what information the App
