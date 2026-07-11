@@ -1,9 +1,13 @@
 import type { CapacitorConfig } from '@capacitor/cli';
 
-// Set PRODUCTION_SERVER_URL to your deployed Railway URL
-// e.g. https://your-app.up.railway.app
-// Leave empty to use bundled web assets (requires API calls to same server)
-const PRODUCTION_SERVER_URL = process.env.PRODUCTION_SERVER_URL || 'https://www.schoolbustracker.org';
+// Default (env var unset): serve the bundled web assets from `webDir`
+// (dist/public) locally via capacitor://localhost. API calls go cross-origin
+// to the remote server and are handled by the Phase A CORS allowlist +
+// SameSite=None; Secure cookie.
+// Set PRODUCTION_SERVER_URL ONLY to resurrect the old remote-bundle behavior
+// (WKWebView loads the deployed site instead of the bundle). This is the
+// code-free rollback escape hatch — keep it indefinitely.
+const PRODUCTION_SERVER_URL = process.env.PRODUCTION_SERVER_URL || '';
 
 const config: CapacitorConfig = {
   appId: 'com.TopNotchTrainingCenter.SchoolBusTracker',
@@ -26,7 +30,7 @@ const config: CapacitorConfig = {
       permissions: ['location'],
     },
     SplashScreen: {
-      launchShowDuration: 5000,
+      launchShowDuration: 2000,
       launchAutoHide: true,
       launchFadeOutDuration: 200,
       backgroundColor: '#1e40af',
