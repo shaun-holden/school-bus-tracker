@@ -25,3 +25,12 @@ jobs:
 
       - name: Run tests
         run: npm test
+        env:
+          # tests/cors.test.ts imports server/index.ts, which pulls in server/db.ts.
+          # db.ts throws at import time if DATABASE_URL is unset (the pg Pool is lazy,
+          # so no real database is contacted — a placeholder URL is enough). NODE_ENV=test
+          # waives the SESSION_SECRET startup requirement. Without these the suite fails
+          # to load cors.test.ts in CI even though every real test passes.
+          NODE_ENV: test
+          SESSION_SECRET: ci-test-secret
+          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci_test
