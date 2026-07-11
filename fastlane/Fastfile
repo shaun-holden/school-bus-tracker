@@ -1,0 +1,84 @@
+# Fastlane config for School Bus Tracker iOS (TestFlight).
+#
+# SECRETS ARE READ FROM THE ENVIRONMENT — never hard-coded here, never committed.
+# Set them in a plain terminal before running (see fastlane/.env.example):
+#   ASC_KEY_ID, ASC_ISSUER_ID, ASC_KEY_FILEPATH   (App Store Connect API key .p8)
+#
+# One-time prerequisites on the Mac:
+#   - CocoaPods installed (`brew install cocoapods`) — Capacitor's `cap sync` needs it
+#   - The "App" scheme shared in Xcode (Product > Scheme > Manage Schemes > check "Shared")
+#   - Signed in to Xcode / distribution cert in the keychain (automatic signing)
+#
+# Usage:
+#   npm run build && npx cap sync ios      # build the web bundle + sync it into iOS
+#   fastlane ios beta                      # bump build number, archive, upload to TestFlight
+
+default_platform(:ios)
+
+WORKSPACE = "ios/App/App.xcworkspace"
+PROJECT   = "ios/App/App.xcodeproj"
+SCHEME    = "App"
+APP_ID    = "com.TopNotchTrainingCenter.SchoolBusTracker"
+
+platform :ios do
+  desc "Build the app and upload a new build to TestFlight"
+  lane :beta do
+    # Guard: the Phase B bundle flip is a no-op if PRODUCTION_SERVER_URL is set,
+    # because capacitor.config.ts would restore the remote server.url and the
+    # WKWebView would load the remote site instead of the bundled dist/public.
+    if ENV["PRODUCTION_SERVER_URL"].to_s.strip != ""
+      UI.user_error!(
+        "PRODUCTION_SERVER_URL is set (#{ENV["PRODUCTION_SERVER_URL"]}). " \
+        "The bundled build would be bypassed. Unset it before building for TestFlight."
+      )
+    end
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_filepath: ENV.fetch("ASC_KEY_FILEPATH"),
+      duration: 1200
+    )
+
+    # Bump the build number to one above the latest build already on TestFlight.
+    latest = latest_testflight_build_number(
+      api_key: api_key,
+      app_identifier: APP_ID,
+      initial_build_number: 0
+    )
+    next_build = latest + 1
+    begin
+      increment_build_number(
+        xcodeproj: PROJECT,
+        build_number: next_build
+      )
+    rescue => e
+      UI.user_error!(
+        "Could not auto-bump the build number (#{e.message}). The App target likely " \
+        "isn't using Apple-Generic versioning. Fix once in Xcode: target > Build Settings > " \
+        "Versioning System = \"Apple Generic\" — then re-run. (Or bump CURRENT_PROJECT_VERSION " \
+        "to #{next_build} by hand.)"
+      )
+    end
+
+    build_app(
+      workspace: WORKSPACE,
+      scheme: SCHEME,
+      export_method: "app-store",
+      xcargs: "-allowProvisioningUpdates",
+      output_directory: "build",
+      clean: true
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: APP_ID,
+      skip_waiting_for_build_processing: true
+    )
+
+    UI.success(
+      "Uploaded build #{next_build} to TestFlight. Apple-side processing can take several " \
+      "minutes before it appears for the internal testing group."
+    )
+  end
+end

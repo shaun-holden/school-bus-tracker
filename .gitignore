@@ -2,3 +2,14 @@ node_modules
 .env
 dist/
 .DS_Store
+
+# Fastlane / iOS build secrets and artifacts
+*.p8
+AuthKey_*.p8
+fastlane/.env
+fastlane/report.xml
+fastlane/README.md
+fastlane/test_output
+build/
+*.ipa
+*.dSYM.zip
