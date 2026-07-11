@@ -47,5 +47,9 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>School Bus Tracker shares your bus's location with parents while you are on duty so they can see when the bus is approaching.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>School Bus Tracker shares your bus's location with parents while you are on duty so they can see when the bus is approaching, even when the app is in the background.</string>
+	<key>NSLocationAlwaysUsageDescription</key>
+	<string>School Bus Tracker shares your bus's location with parents while you are on duty so they can see when the bus is approaching, even when the app is in the background.</string>
 </dict>
 </plist>
