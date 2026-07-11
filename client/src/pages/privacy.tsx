@@ -2,7 +2,7 @@ import { Link } from "wouter";
 import { ArrowLeft, Bus } from "lucide-react";
 
 const LAST_UPDATED = "July 11, 2026";
-const CONTACT_EMAIL = "deshaun@tntgym.org";
+const CONTACT_EMAIL = "support@schoolbustracker.org";
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
