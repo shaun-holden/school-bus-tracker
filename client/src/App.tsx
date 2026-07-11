@@ -24,6 +24,7 @@ import OnboardingPlans from "@/pages/onboarding-plans";
 import OnboardingSuccess from "@/pages/onboarding-success";
 import OnboardingPending from "@/pages/onboarding-pending";
 import PrivacyPolicy from "@/pages/privacy";
+import Support from "@/pages/support";
 
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
@@ -89,6 +90,7 @@ function Router() {
       <Route path="/onboarding/success" component={OnboardingSuccess} />
       <Route path="/onboarding/pending" component={OnboardingPending} />
       <Route path="/privacy" component={PrivacyPolicy} />
+      <Route path="/support" component={Support} />
       {!isAuthenticated ? (
         <Route path="/" component={Landing} />
       ) : (
