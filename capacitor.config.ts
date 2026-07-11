@@ -23,6 +23,14 @@ const config: CapacitorConfig = {
       : {}),
   },
   plugins: {
+    // Route native fetch/XHR through the native HTTP layer so the session
+    // cookie is stored/sent by the native cookie jar (URLSession), not the
+    // WKWebView — which drops cross-site cookies under iOS tracking prevention.
+    // This is what lets cookie auth survive now that the app is served from
+    // capacitor://localhost while the API stays on schoolbustracker.org.
+    CapacitorHttp: {
+      enabled: true,
+    },
     PushNotifications: {
       presentationOptions: ['badge', 'sound', 'alert'],
     },
