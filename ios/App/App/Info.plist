@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
-	<string>6</string>
+	<string>7</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -51,5 +51,7 @@
 	<string>School Bus Tracker shares your bus's location with parents while you are on duty so they can see when the bus is approaching, even when the app is in the background.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
 	<string>School Bus Tracker shares your bus's location with parents while you are on duty so they can see when the bus is approaching, even when the app is in the background.</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 </dict>
 </plist>
