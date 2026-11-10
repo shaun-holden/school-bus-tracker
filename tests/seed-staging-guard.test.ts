@@ -74,6 +74,33 @@ describe('seed-staging guard', () => {
     expect(checkUsers([...seedUserRows, { email: 'owner@real-staging-admin.example', role: 'master_admin' }])).toEqual([]);
   });
 
+  // Red if MIN_PASSWORD_LENGTH is lowered: the tests above are relative to the
+  // constant, so pin the documented minimum with literal lengths too.
+  it('pins the password minimum at 12 characters', () => {
+    expect(MIN_PASSWORD_LENGTH).toBe(12);
+    expect(checkEnv({ ...GOOD_ENV, STAGING_SEED_PASSWORD: 'x'.repeat(11) })).not.toEqual([]);
+    expect(checkEnv({ ...GOOD_ENV, STAGING_SEED_PASSWORD: 'x'.repeat(12) })).toEqual([]);
+  });
+
+  // Red if checkCompanies' exact match is loosened to a case-insensitive one.
+  it('refuses a case-variant of a seed slug', () => {
+    expect(checkCompanies(['STAGING-ALPHA'])).not.toEqual([]);
+    expect(checkCompanies(['Staging-Bravo'])).not.toEqual([]);
+  });
+
+  // Red if checkUsers exempts any role other than exactly master_admin.
+  it('refuses non-seed admin and driver_admin users (only master_admin is exempt)', () => {
+    expect(checkUsers([{ email: 'boss@real-district.example', role: 'admin' }])).not.toEqual([]);
+    expect(checkUsers([{ email: 'lead@real-district.example', role: 'driver_admin' }])).not.toEqual([]);
+    expect(checkUsers([{ email: 'boss@real-district.example', role: 'MASTER_ADMIN' }])).not.toEqual([]);
+  });
+
+  // Red if checkEnv stops trimming MASTER_ADMIN_EMAIL before comparing.
+  it('refuses a whitespace-padded seed email as MASTER_ADMIN_EMAIL', () => {
+    expect(checkEnv({ ...GOOD_ENV, MASTER_ADMIN_EMAIL: `  ${SEED_EMAILS[0]}\n` })).not.toEqual([]);
+    expect(checkEnv({ ...GOOD_ENV, MASTER_ADMIN_EMAIL: ` ${SEED_EMAILS[0].toUpperCase()} ` })).not.toEqual([]);
+  });
+
   it('seed emails are all @*.example.invalid and unique', () => {
     expect(new Set(SEED_EMAILS).size).toBe(SEED_EMAILS.length);
     for (const e of SEED_EMAILS) expect(e).toMatch(/^[a-z_]+-\d+@[a-z-]+\.example\.invalid$/);
