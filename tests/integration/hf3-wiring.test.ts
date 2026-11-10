@@ -4,7 +4,7 @@
 // registration whose removal turns it red.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { companies } from '@shared/schema';
+import { companies, users } from '@shared/schema';
 import { EMAILS } from './seed';
 import { useIntegrationHarness, type Agent } from './harness';
 
@@ -69,6 +69,17 @@ describe('H4 sessionDecision on every request (deserializeUser)', () => {
     await h.db.update(companies).set({ status: 'suspended' }).where(eq(companies.id, h.ids.companyA2));
 
     const after = await adminA2.get('/api/auth/user');
+    expect(after.status).toBe(401);
+  });
+
+  it("H4 parentB's live session ends with 401 once parentB is archived (isActive false) (red if the deserializeUser `sessionDecision(user, company)` check stops seeing the user's isActive)", async () => {
+    const parentB = await h.loginAs('parentB');
+    const before = await parentB.get('/api/auth/user');
+    expect(before.status).toBe(200);
+
+    await h.db.update(users).set({ isActive: false }).where(eq(users.id, h.ids.parentB));
+
+    const after = await parentB.get('/api/auth/user');
     expect(after.status).toBe(401);
   });
 });
