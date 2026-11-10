@@ -64,18 +64,24 @@ railway environment staging
 railway status
 ```
 
-**2. Open the tunnel in the background.** The first line starts it, the second remembers its process id, and `jobs` must show it as **running**.
+**2. Open the tunnel in the background.** The first line starts it, the second remembers its process id, and `jobs` must show it as **running**. The tunnel prints the staging DB password and a full connection URL when it starts, so its output goes to `/dev/null`: nowhere on screen and in no file.
 
 ```sh
-railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544 > /tmp/sbt-tunnel.log 2>&1 &
+railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544 > /dev/null 2>&1 &
 TUNNEL_PID=$!
 jobs
 ```
 
-If `jobs` shows the tunnel as `exit 1`, the port is usually already in use by an old tunnel. Find it with the first line below and stop it with `kill <the PID it shows>` (replace the placeholder including the angle brackets), or use another port in every line of this section. `cat /tmp/sbt-tunnel.log` shows the tunnel's own error.
+If `jobs` shows the tunnel as `exit 1`, the port is usually already in use by an old tunnel. Find it with the line below and stop it with `kill <the PID it shows>` (replace the placeholder including the angle brackets), or use another port in every line of this section.
 
 ```sh
 lsof -nP -iTCP:6544 -sTCP:LISTEN
+```
+
+If it still fails, rerun the tunnel with the filter below to see its error. Ctrl-C to stop. It hides the password and URL lines, so error messages still show.
+
+```sh
+railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544 2>&1 | grep -viE 'password|postgres(ql)?://'
 ```
 
 Wait a few seconds, then check the tunnel is up. It must print `tunnel-up`; run it again if it fails straight after step 2.
@@ -91,7 +97,7 @@ nc -z 127.0.0.1 6544 && echo tunnel-up
 railway run --environment staging --service Postgres-cKuC sh -c 'DATABASE_URL="postgresql://$PGUSER:$PGPASSWORD@127.0.0.1:6544/$PGDATABASE" npm run db:push'
 ```
 
-The single quotes stop your terminal from expanding `$PGUSER`, `$PGPASSWORD` and `$PGDATABASE`. They reach `sh` unchanged, `railway run` fills them in with `Postgres-cKuC`'s own values, and the password never shows on screen or in shell history.
+The single quotes stop your terminal from expanding `$PGUSER`, `$PGPASSWORD` and `$PGDATABASE`. They reach `sh` unchanged and `railway run` fills them in with `Postgres-cKuC`'s own values, so the password stays out of your command line and shell history. The tunnel itself does print it, which is why step 2 sends the tunnel's output to `/dev/null`.
 
 **If the database was empty,** restart the staging app service in the Railway dashboard now, so it creates the master admin from its `MASTER_ADMIN_EMAIL` / `MASTER_ADMIN_PASSWORD` on boot. Log in at https://school-bus-tracker-staging.up.railway.app as that master admin before you seed.
 
@@ -109,19 +115,22 @@ echo ${#STAGING_SEED_PASSWORD}
 railway run --environment staging --service Postgres-cKuC sh -c 'DATABASE_URL="postgresql://$PGUSER:$PGPASSWORD@127.0.0.1:6544/$PGDATABASE" SEED_TARGET=staging npx tsx scripts/seed-staging.ts'
 ```
 
-**6. Close the tunnel.**
+**6. Close the tunnel.** Stop it, then check the port is free: the `lsof` line must print nothing. If it still lists an `ssh` process, stop that too with `kill <that PID>` (replace the placeholder including the angle brackets); on 2026-11-10 the tunnel's `ssh` child outlived the `railway` process.
 
 ```sh
 kill $TUNNEL_PID
+lsof -nP -iTCP:6544 -sTCP:LISTEN
 ```
 
-**Alternative: two terminals.** Instead of step 2, open a second plain terminal and leave this running in it (it closes with Ctrl-C when you're done):
+Older runs may have left `/tmp/sbt-tunnel.log`; delete it with `rm -f /tmp/sbt-tunnel.log`.
+
+**Alternative: two terminals.** Instead of step 2, open a second plain terminal and leave this running in it. It stays open, with no output, until you press Ctrl-C.
 
 ```sh
-railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544
+railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544 > /dev/null 2>&1
 ```
 
-Then run steps 1 and 3–5 in the first terminal, skip step 6, and close the second terminal's tunnel with Ctrl-C at the end.
+Then run steps 1 and 3–5 in the first terminal. At the end, close the second terminal's tunnel with Ctrl-C, then run step 6's `lsof` line (and its `ssh` cleanup) instead of `kill $TUNNEL_PID`.
 
 ### What the seed refuses
 It exits 1 and writes nothing if any of these fail:
