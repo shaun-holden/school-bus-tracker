@@ -4092,7 +4092,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -4153,7 +4153,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -4187,7 +4187,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -4228,7 +4228,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can send messages" });
       }
 

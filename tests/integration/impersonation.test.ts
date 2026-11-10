@@ -175,6 +175,77 @@ describe('B2. POST /api/link-child refuses any master admin', () => {
   });
 });
 
+describe('6. messaging (Q19): master only while impersonating', () => {
+  const MSG_CLAUSE = 'canAccessMessaging allows master_admin without the impersonation flag';
+
+  describe('non-impersonating master → 403 on all 4 gated endpoints', () => {
+    it(`GET /api/messages/contacts → 403 (red if ${MSG_CLAUSE})`, async () => {
+      const res = await master.get('/api/messages/contacts');
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ message: 'Only parents and drivers can access messaging' });
+    });
+
+    it(`GET /api/messages/conversations → 403 (red if ${MSG_CLAUSE})`, async () => {
+      const res = await master.get('/api/messages/conversations');
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ message: 'Only parents and drivers can access messaging' });
+    });
+
+    it(`GET /api/messages/conversation/:recipientId → 403 (red if ${MSG_CLAUSE})`, async () => {
+      const res = await master.get(`/api/messages/conversation/${h.ids.parentA}`);
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ message: 'Only parents and drivers can access messaging' });
+    });
+
+    it(`POST /api/messages → 403 (red if ${MSG_CLAUSE})`, async () => {
+      const res = await master.post('/api/messages').send({ recipientId: h.ids.parentA, content: 'master-unscoped' });
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ message: 'Only parents and drivers can send messages' });
+    });
+  });
+
+  describe('impersonating master → 200 (red if canAccessMessaging rejects a master with _masterAdminImpersonating, or getCaller drops the overlay)', () => {
+    it('GET /api/messages/contacts → 200', async () => {
+      const res = await impersonator.get('/api/messages/contacts');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    it('GET /api/messages/conversations → 200', async () => {
+      const res = await impersonator.get('/api/messages/conversations');
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    it('GET /api/messages/conversation/:recipientId → 200', async () => {
+      const res = await impersonator.get(`/api/messages/conversation/${h.ids.parentA}`);
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    it('POST /api/messages to parentA → 200, stored in company A from the master', async () => {
+      const res = await impersonator.post('/api/messages').send({ recipientId: h.ids.parentA, content: 'imp-to-parentA' });
+      expect(res.status).toBe(200);
+      expect(res.body).toMatchObject({ senderId: h.ids.master, recipientId: h.ids.parentA, companyId: h.ids.companyA });
+    });
+  });
+
+  describe('parentA and driverA are unchanged → 200', () => {
+    for (const who of ['parentA', 'driverA'] as const) {
+      it(`${who}: contacts, conversations, conversation and POST /api/messages → 200 (red if canAccessMessaging stops allowing ${who === 'parentA' ? 'parent' : 'driver'})`, async () => {
+        const agent = who === 'parentA' ? parentA : driverA;
+        const other = who === 'parentA' ? h.ids.driverA : h.ids.parentA;
+        expect((await agent.get('/api/messages/contacts')).status).toBe(200);
+        expect((await agent.get('/api/messages/conversations')).status).toBe(200);
+        expect((await agent.get(`/api/messages/conversation/${other}`)).status).toBe(200);
+        const sent = await agent.post('/api/messages').send({ recipientId: other, content: `${who}-hello` });
+        expect(sent.status).toBe(200);
+        expect(sent.body).toMatchObject({ senderId: h.ids[who], recipientId: other, companyId: h.ids.companyA });
+      });
+    }
+  });
+});
+
 describe('I4. PATCH /api/messages/:messageId/read: only the recipient may mark it read', () => {
   let parentB: Agent;
   let messageToB: string;
@@ -227,6 +298,11 @@ describe('5. stop-impersonating restores the unscoped view', () => {
     const got = idsOf(res.body);
     expect(got).toContain(h.ids.schoolA);
     expect(got).toContain(h.ids.schoolB);
+  });
+
+  it('after stopping, messaging is refused again (red if canAccessMessaging allows master_admin without the impersonation flag)', async () => {
+    const res = await impersonator.get('/api/messages/conversations');
+    expect(res.status).toBe(403);
   });
 
   it("master's users.companyId is still NULL after stop-impersonating", async () => {

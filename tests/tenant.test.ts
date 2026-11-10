@@ -170,10 +170,10 @@ describe('tenant - isParentRole', () => {
 });
 
 describe('tenant - canAccessMessaging', () => {
-  it('string form: parent, driver and master_admin pass', () => {
+  it('string form: parent and driver pass; master_admin fails (a string cannot carry the impersonation flag)', () => {
     expect(canAccessMessaging('parent')).toBe(true);
     expect(canAccessMessaging('driver')).toBe(true);
-    expect(canAccessMessaging('master_admin')).toBe(true);
+    expect(canAccessMessaging('master_admin')).toBe(false);
   });
 
   it('string form: admin, driver_admin and unknown roles fail', () => {
@@ -184,10 +184,22 @@ describe('tenant - canAccessMessaging', () => {
     expect(canAccessMessaging(undefined)).toBe(false);
   });
 
-  it('object form: impersonating master passes, plain admin fails', () => {
+  it('object form: parent and driver pass; admin and driver_admin fail', () => {
+    expect(canAccessMessaging({ role: 'parent' })).toBe(true);
     expect(canAccessMessaging({ role: 'driver' })).toBe(true);
-    expect(canAccessMessaging({ role: 'admin', _masterAdminImpersonating: true })).toBe(true);
     expect(canAccessMessaging({ role: 'admin' })).toBe(false);
     expect(canAccessMessaging({ role: 'driver_admin' })).toBe(false);
+  });
+
+  it('object form: a master admin passes only while impersonating (Q19)', () => {
+    expect(canAccessMessaging({ role: 'master_admin', companyId: 'co-1', _masterAdminImpersonating: true })).toBe(true);
+    expect(canAccessMessaging({ role: 'master_admin' })).toBe(false);
+    expect(canAccessMessaging({ role: 'master_admin', _masterAdminImpersonating: false })).toBe(false);
+  });
+
+  it('object form: a non-master carrying the impersonation flag fails', () => {
+    expect(canAccessMessaging({ role: 'admin', _masterAdminImpersonating: true })).toBe(false);
+    expect(canAccessMessaging({ role: 'driver_admin', _masterAdminImpersonating: true })).toBe(false);
+    expect(canAccessMessaging({ _masterAdminImpersonating: true })).toBe(false);
   });
 });

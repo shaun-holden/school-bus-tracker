@@ -63,10 +63,14 @@ export function isParentRole(roleOrUser: any): boolean {
   return role === 'parent' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
 }
 
+// Messaging is for parents and drivers. A master admin has no messaging,
+// except while impersonating a school (Q19). A bare role string can't carry
+// the impersonation flag, so 'master_admin' as a string is always false.
 export function canAccessMessaging(roleOrUser: any): boolean {
   if (typeof roleOrUser === 'string' || roleOrUser == null) {
-    return roleOrUser === 'parent' || roleOrUser === 'driver' || roleOrUser === 'master_admin';
+    return roleOrUser === 'parent' || roleOrUser === 'driver';
   }
   const role = roleOrUser.role;
-  return role === 'parent' || role === 'driver' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
+  if (role === 'parent' || role === 'driver') return true;
+  return role === 'master_admin' && roleOrUser._masterAdminImpersonating === true;
 }
