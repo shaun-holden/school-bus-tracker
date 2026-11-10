@@ -85,19 +85,32 @@ Vitest, configured in `vitest.config.ts`. Tests live in `tests/` (not colocated)
 
 The intended flow for any non-trivial change: planner → human review of plan → builder → reviewer → human review of findings → commit → verify on Railway. See `LEARNINGS.md` for the discipline that makes this work and the specific failure modes to avoid (especially: never `cd` between codebases in the same terminal, always verify `pwd` before any session, never `git add -A` or `.`).
 
-### Three-window workflow (Coach 🧭 / Dev 🔨 / Shell 🐚)
-Run three Claude windows in VS Code (auto-started by `.vscode/tasks.json`), each kept strictly in its lane. Talk to **Coach** in plain English; Coach drafts the exact prompt/command and says which window to paste it into.
+### Six-window workflow (COACH 🧭 / DEV-1 🔨1 / DEV-2 🔨2 / SHELL 🐚 / ASK ❓ / READER 📖 optional)
+DeShaun runs up to six Claude windows. Talk to **COACH** in plain English; COACH writes brief files and says which window reads which. Each dev works in its OWN git worktree, so SHELL can test, merge and ship without touching files a dev is editing.
 
-- **Coach 🧭** — planning + routing. Talk through what you want; Coach reads the repo, drives `planner` (writes the `plans/*.md` file) for non-trivial changes, drafts the precise prompt for Dev or Shell, and says which window to paste into. Coach does NOT write app code or run git.
-- **Dev 🔨** — the ONLY window that writes application code. Drives `react-builder` for `client/` and `express-api` for `server/`/`shared/`. Implements the approved plan; hands off, never self-approves.
-- **Shell 🐚** — ops only: git, `npm test` / `npm run check`, `npm run db:push` (Drizzle), Railway CLI, and dispatching the `reviewer` and `tester`. Shell NEVER writes application code.
+| Window | Folder | Branch | Does |
+|---|---|---|---|
+| **COACH** | `~/Projects/school-bus-tracker` | (reads only) | Plans, splits work so the two devs never touch the same files at once, writes briefs. Never writes application code, never runs git writes. Role file: `~/Projects/school-bus-tracker/coach-prompt.md`. |
+| **DEV-1** | `~/Projects/school-bus-tracker-dev1` | `dev1/work` | Writes application code and **commits on its own branch only**. Role file: `~/Projects/school-bus-tracker/dev1-prompt.md`. |
+| **DEV-2** | `~/Projects/school-bus-tracker-dev2` | `dev2/work` | Same as DEV-1, in its own folder and branch. Role file: `~/Projects/school-bus-tracker/dev2-prompt.md`. |
+| **SHELL** | `~/Projects/school-bus-tracker` | `main` | Ops only: tests and reviews IN the dev folder, merges one dev branch at a time into `main`, pushes, ships. Never edits application code. Role file: `~/Projects/school-bus-tracker/shell-prompt.md`. |
+| **ASK** | `~/Projects/school-bus-tracker` | (reads only) | Answers DeShaun's questions. Never edits, never runs git writes, builds or tests, never assigns work. |
+| **READER** (optional) | `~/Projects/school-bus-tracker` | (reads only) | Read-only code lookups and brief pre-reads for COACH (COACH may message it directly). May write only its untracked `reader-<topic>.md` answers and `reader-log.md`. No git writes, builds, tests or locks; never assigns work. |
 
-One-directional rules (non-negotiable):
-- Only **Dev** edits `client/`/`server/`/`shared/`. If Coach or Shell spots a needed fix, route it back to **Dev** — never have Shell edit code.
-- Only **Shell** runs git and shell commands; Coach/Dev don't commit, push, or deploy. Per `LEARNINGS.md`: verify `pwd` before any session, never `cd` between codebases in one terminal, never `git add -A`/`.` — stage explicit paths.
-- The builders, `reviewer`, and `tester` are invoked per task (no auto-handoff). Typical flow: Coach plans → Dev builds → Shell runs the `tester` + `reviewer` → commit → verify on Railway.
-- **Secrets never enter a Claude pane.** DB URLs, Railway tokens, and any API keys are staged in a PLAIN terminal (⌃\`) via env vars / `railway variables --set` — never typed or pasted into Coach/Dev/Shell, and never via the `!` prefix (it records into that session's transcript). A secret that lands in any chat is compromised → rotate it.
-- **"Merged" ≠ "live."** After a change merges, confirm it actually deployed on Railway and the app responds before calling it shipped.
+Rules (non-negotiable):
+- Only **DEV-1/DEV-2** edit application code, each only inside its own folder. A fix spotted by COACH, SHELL, ASK or READER goes back to a dev.
+- **Devs** may run git ONLY to `merge --no-edit main` into their branch and to commit on it. They never push, never merge into `main`, never switch branches, never `checkout`/`stash`/`reset`. **SHELL** does every other git operation.
+- Briefs, reports, role files (`*-prompt.md`), `BACKLOG.local.md`, `QUEUE.local.md`, `locks/` and `dispatch/` are untracked and live ONLY in the main folder. Always refer to them by full path (`~/Projects/school-bus-tracker/<file>`).
+- A dev commits BEFORE reporting done, and stays idle while SHELL tests its folder.
+- SHELL merges ONE branch at a time, only after the build, the full test suite and the review pass. After each merge, the other dev runs `git merge --no-edit main` before its next task.
+- **Queuing + locks:** DeShaun may queue a paste into a busy window; it starts only if that window's last task ended ✅. Windows working in a dev folder hold a lock via `~/Projects/school-bus-tracker/team-lock.sh take|refresh|release`, and a queued task first runs `team-lock.sh wait` in the background (2 clear checks in a row; gives up after 60 min, or 4 h while the other side holds a fresh lock). A lock not refreshed for 3 h is reported as stale, never deleted. SHELL releases only after every test mutation is restored and the folder is clean. A window that stops with ❓ keeps its lock. The brief wins over "merge main first".
+- **No double pastes:** each brief names its window in the title; a window refuses a brief for another window. Before starting a brief a window runs `team-lock.sh started <brief> "<window>"`; exit 3 = already started → stop and ask DeShaun "Run it again?" (`rerun` only after a yes). It runs `finished … ok|stopped` at the end. Re-runs get new brief names. COACH adds a "Paste status" line from `team-lock.sh status` to every reply.
+- **Report upward directly:** when SHELL or a dev ends ✅ or ❓, it sends COACH a one-line note (session "COACH School Bus"). Notes are info only and go upward only: work reaches a window only as DeShaun's paste, and a window refuses tasks sent by any other window. A note is never approval to push or ship.
+- At most 2 full test runs on the machine at once. Windows check this themselves before starting one (count with `ps -axo command | grep -E '^(\S*/)?node \S*vitest(\.mjs)? run( --\S+)* *$' | grep -vE -- '--(testNamePattern|dir|project|changed|related)' | wc -l`; start if under 2, otherwise wait in the background). No need to ask DeShaun; pushes and shipping still need their OK.
+- Nothing ships without DeShaun's approval. Never `git push --all`. "Merged" is not "live": confirm a deploy actually succeeded before calling it shipped.
+- **Secrets never enter a Claude window.** DeShaun sets them in the hosting dashboard or a plain terminal. Local settings files that the build needs are copied into the dev folders by SHELL during setup and are never committed or printed. A secret that lands in any chat is compromised: rotate it.
+- Every window ends each reply with `✅ <window> idle – nothing running` (task fully finished), `⏳ <window> busy – <what>`, or `❓ <window> waiting for DeShaun – <question>` (stopped for their answer).
+- Project-specific: stage explicit paths only, never `git add -A` / `git add .` (see `LEARNINGS.md`), and never pass a secret through the `!` prefix (it records into that session's transcript).
 
 **Plans live in `plans/`.** Each non-trivial change gets its own plan file. Current plans:
 - `plans/splashscreen-timing-fix.md` (shipped 2026-05-16)
