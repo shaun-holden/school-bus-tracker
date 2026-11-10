@@ -21,6 +21,22 @@ One-off scripts live in `scripts/`: `seed-master-admin.ts`, `seed-stripe-product
 
 Deployed on Railway. Build and deploy settings live in the Railway dashboard (Config as Code / `railway.json` was retired before Railway's 2026-12-01 cutoff). Builder: Railpack, Node pinned to 20 via `package.json` `engines` and `.node-version`. Health check: `GET /healthz` (DB ping).
 
+## Environments
+
+| Env | Branch | URL | Data | Deploys when |
+|---|---|---|---|---|
+| Local | dev branches / `main` | localhost:5001 | local Postgres | – |
+| **Staging** | `staging` | Railway-provided `*.up.railway.app` (see `STAGING.md`) | its own Postgres (`Postgres-cKuC`), **synthetic seed only** | push to `staging`, CI-gated |
+| **Production** | `production` | https://www.schoolbustracker.org | live (`Postgres`) | push to `production`, CI-gated |
+
+- **Pushing `main` deploys nothing.** (Target model: takes effect when DeShaun switches production to the `production` branch, staging-plan S5.)
+- **Promotion** (SHELL, each step needs DeShaun's OK; fast-forward only, so production is always a commit that already ran on staging):
+  1. `git fetch origin && git merge-base --is-ancestor origin/staging main && git push origin main:staging`
+  2. Verify on staging (web, plus the iOS app pointed at staging when auth, cookies or CORS changed).
+  3. `git push origin origin/staging:production` (exactly the commit that ran on staging).
+- Never `--force`, never a `+` refspec, never `git push --all` (it would fire both environments).
+- **Staging data is synthetic only** (`scripts/seed-staging.ts`); never copy production data to staging. How to reseed, the Railway dashboard settings and the seeded logins are in `STAGING.md`.
+
 ## Architecture
 
 **Layout.** Server in `server/` (Express + TypeScript), client in `client/src/` (React SPA built with Vite), shared Drizzle schema and Zod validation in `shared/schema.ts`, Postgres via `pg.Pool` + `drizzle-orm/node-postgres` (`server/db.ts`). Path aliases: `@/*` → `client/src/*`, `@shared/*` → `shared/*`.
