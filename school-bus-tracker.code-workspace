@@ -11,6 +11,7 @@
     "terminal.integrated.defaultProfile.osx": "zsh",
     "terminal.integrated.defaultLocation": "editor",
     "terminal.integrated.enablePersistentSessions": false,
+    "task.reconnection": false,
     "workbench.startupEditor": "none",
     "search.exclude": {
       "**/dist": true,
