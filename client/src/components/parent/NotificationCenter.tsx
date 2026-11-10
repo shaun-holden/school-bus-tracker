@@ -33,12 +33,14 @@ export function NotificationCenter() {
 
   const { data: notifications = [], isLoading } = useQuery<Notification[]>({
     queryKey: ["/api/parent-notifications"],
-    refetchInterval: 10000,
+    refetchInterval: 30000,
   });
 
   const { data: unreadCount } = useQuery<{ unreadCount: number }>({
     queryKey: ["/api/parent-notifications/unread-count"],
-    refetchInterval: 10000,
+    // Owner of this key's interval (mounted on the parent dashboard and the
+    // notifications page); Navigation and ParentDashboard only read it.
+    refetchInterval: 30000,
   });
 
   const markReadMutation = useMutation({

@@ -40,14 +40,13 @@ export default function ParentDashboard() {
     queryKey: ["/api/students"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
   });
 
   const { data: unreadCount } = useQuery<{ unreadCount: number }>({
     queryKey: ["/api/parent-notifications/unread-count"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 10000,
+    // Reader only: NotificationCenter owns the polling interval for this key.
   });
 
   if (error && isUnauthorizedError(error as Error)) {

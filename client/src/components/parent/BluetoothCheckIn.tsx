@@ -42,7 +42,7 @@ export function BluetoothCheckIn({ students }: BluetoothCheckInProps) {
 
   const { data: checkInStatuses = [], isLoading } = useQuery<CheckInStatus[]>({
     queryKey: ["/api/check-in/status"],
-    refetchInterval: 10000,
+    // Reader only: LiveTrackingCard owns the polling interval for this key.
   });
 
   const enableCheckInMutation = useMutation({

@@ -31,12 +31,12 @@ export default function StudentStatusCard({ student }: StudentStatusCardProps) {
   
   const { data: checkInStatuses = [] } = useQuery<CheckInStatus[]>({
     queryKey: ["/api/check-in/status"],
-    refetchInterval: 10000,
+    // Reader only: LiveTrackingCard owns the polling interval for this key.
   });
 
   const { data: attendanceRecords = [] } = useQuery<AttendanceRecord[]>({
     queryKey: ["/api/parent/children-attendance"],
-    refetchInterval: 10000,
+    // Reader only: LiveTrackingCard owns the polling interval for this key.
   });
 
   const studentCheckIn = checkInStatuses.find(s => s.studentId === student.id);

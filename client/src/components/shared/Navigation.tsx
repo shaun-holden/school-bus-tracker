@@ -20,7 +20,7 @@ export default function Navigation() {
   const { data: unreadCount } = useQuery<{ unreadCount: number }>({
     queryKey: ["/api/parent-notifications/unread-count"],
     enabled: user?.role === "parent",
-    refetchInterval: 10000,
+    // Reader only: NotificationCenter owns the polling interval for this key.
   });
 
   const handleLogout = async () => {

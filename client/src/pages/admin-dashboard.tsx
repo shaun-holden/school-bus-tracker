@@ -146,6 +146,9 @@ function TotalStopsDisplay({ routes }: { routes: any }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    const controller = new AbortController();
+    const { signal } = controller;
+
     const calculateTotalStops = async () => {
       if (!Array.isArray(routes) || routes.length === 0) {
         setTotalStops(0);
@@ -161,6 +164,7 @@ function TotalStopsDisplay({ routes }: { routes: any }) {
         try {
           const response = await fetch(apiUrl(`/api/routes/${route.id}/schools`), {
             credentials: 'include',
+            signal,
           });
           if (response.ok) {
             const schools = await response.json();
@@ -168,12 +172,16 @@ function TotalStopsDisplay({ routes }: { routes: any }) {
           }
           return 0;
         } catch (error) {
+          if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+            return 0;
+          }
           console.error(`Error fetching schools for route ${route.id}:`, error);
           return 0;
         }
       });
 
       const stopCounts = await Promise.all(promises);
+      if (signal.aborted) return;
       total = stopCounts.reduce((sum, count) => sum + count, 0);
       
       setTotalStops(total);
@@ -181,6 +189,10 @@ function TotalStopsDisplay({ routes }: { routes: any }) {
     };
 
     calculateTotalStops();
+
+    return () => {
+      controller.abort();
+    };
   }, [routes]);
 
   return (
@@ -494,11 +506,13 @@ function NotificationsTab({ routes, buses }: { routes: any; buses: any }) {
   const { data: notifications, isLoading } = useQuery({
     queryKey: ["/api/notifications"],
     retry: false,
+    refetchInterval: 30000,
   });
 
   const { data: systemNotifications, isLoading: systemNotificationsLoading } = useQuery({
     queryKey: ["/api/system-notifications"],
     retry: false,
+    refetchInterval: 30000,
   });
 
   const { data: drivers } = useQuery({
@@ -2492,21 +2506,19 @@ export default function AdminDashboard() {
     staleTime: 0,
     refetchOnWindowFocus: true,
     refetchOnMount: true,
-    refetchInterval: 30000,
+    refetchInterval: 10000,
   });
 
   const { data: students } = useQuery({
     queryKey: ["/api/students"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
   });
 
   const { data: routes } = useQuery({
     queryKey: ["/api/routes"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
   });
 
   // Helper function to get school count for a route (each school = 1 stop)
@@ -2547,21 +2559,18 @@ export default function AdminDashboard() {
     queryKey: ["/api/drivers"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
   });
 
   const { data: activeDrivers } = useQuery({
     queryKey: ["/api/drivers/active"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
   });
 
   const { data: archivedDrivers } = useQuery({
     queryKey: ["/api/drivers/archived"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
   });
 
   const { data: onDutyDrivers } = useQuery({
@@ -2583,6 +2592,7 @@ export default function AdminDashboard() {
     queryKey: ["/api/student-attendance"],
     enabled: !!user,
     retry: false,
+    refetchInterval: 15000,
   });
 
   // Fetch schools for the currently editing route

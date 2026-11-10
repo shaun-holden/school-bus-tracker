@@ -1,3 +1,13 @@
+// Polling policy (LEAK-2): there is NO global refetchInterval. Every query
+// that needs live data opts in with its own `refetchInterval`:
+//   - bus position / live tracking:           10000 ms
+//   - check-in and attendance status:         15000 ms
+//   - unread counts and notifications:        30000 ms
+//   - lists (routes, buses, schools, students, reports, ...): no polling;
+//     they refresh on window focus and on mutation invalidation
+//   - onboarding status pages: keep their own short intervals (short-lived)
+// When several observers share a query key, exactly one of them owns the
+// interval and the others read the same key without one. Never go below 5000.
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 import { apiUrl } from "@/lib/apiBase";
 
@@ -50,7 +60,7 @@ export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "returnNull" }),
-      refetchInterval: 15000,
+      refetchInterval: false,
       refetchOnWindowFocus: true,
       staleTime: 5000,
       gcTime: 300000,

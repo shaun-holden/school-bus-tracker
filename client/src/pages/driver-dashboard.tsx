@@ -429,7 +429,8 @@ export default function DriverDashboard() {
 
   const { data: students } = useQuery({
     queryKey: ["/api/students"],
-    enabled: !!user,
+    // A plain driver gets 403 here; they use /api/driver-route-students.
+    enabled: !!user && user.role !== 'driver',
     retry: false,
   });
 
@@ -437,7 +438,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/routes"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 5000, // Refresh every 5 seconds for route assignments
   });
 
   // Query for available routes during check-in
@@ -466,7 +466,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/driver-route-students"],
     enabled: !!user && isOnDuty,
     retry: false,
-    refetchInterval: 30000,
   });
 
   // Query for route stops - always enabled when on duty, backend returns empty if no route
@@ -474,7 +473,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/driver-route-stops"],
     enabled: !!user && isOnDuty,
     retry: false,
-    refetchInterval: 30000,
   });
 
   // Query for route schools - always enabled when on duty, backend returns empty if no route
@@ -482,7 +480,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/driver-route-schools"],
     enabled: !!user && isOnDuty,
     retry: false,
-    refetchInterval: 30000,
   });
 
   // Query for assigned route details
@@ -497,7 +494,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/driver-school-visits"],
     enabled: !!user && isOnDuty,
     retry: false,
-    refetchInterval: 30000,
   });
 
   // Today's bus journey — used to disable the Arrived-at-Homebase button once
@@ -506,7 +502,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/driver/today-journey"],
     enabled: !!user && isOnDuty,
     retry: false,
-    refetchInterval: 30000,
   });
   const hasArrivedHomebase = !!todayJourney?.arriveHomebaseAt;
 
@@ -516,7 +511,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/routes", assignedRouteId, "completed-stops"],
     enabled: !!user && isOnDuty && !!assignedRouteId,
     retry: false,
-    refetchInterval: 10000,
   });
 
   // Mutation to mark a stop as completed (arrived)
@@ -568,14 +562,14 @@ export default function DriverDashboard() {
     queryKey: ["/api/student-attendance"],
     enabled: !!user && isOnDuty,
     retry: false,
-    refetchInterval: 30000,
+    refetchInterval: 15000,
   });
 
   const { data: buses } = useQuery({
     queryKey: ["/api/buses"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 5000, // Refresh every 5 seconds to get real-time updates
+    refetchInterval: 30000,
   });
 
   const { data: driverTasks } = useQuery({
@@ -590,7 +584,6 @@ export default function DriverDashboard() {
     queryKey: ["/api/driver-names"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
   });
 
   // Query for admin requests and assignments

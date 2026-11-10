@@ -58,6 +58,7 @@ export function MessagingPortal({ currentUserId, userRole }: MessagingPortalProp
   const { data: messages = [], isLoading: messagesLoading, isError: messagesError } = useQuery<Message[]>({
     queryKey: ["/api/messages/conversation", selectedContact?.id],
     enabled: !!selectedContact?.id,
+    refetchInterval: 30000,
   });
 
   const { data: unreadData } = useQuery<{ count: number }>({
