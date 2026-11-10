@@ -90,7 +90,7 @@ Terms: `isMasterAdminUser`, `companyScope`, `isOutsideCallerTenant`, `isDriverIn
 
 | ID | Check | Sev | Source |
 |---|---|---|---|
-| X-1 | Every new or changed tenant query path has a cross-tenant test: seed company A **and** B, act as A, and assert B's data is absent (list `[]`), B's record is untouched (404 by id), the stored `companyId` is A (create), or the protected fields didn't change (mass-assign). Once the Q4 harness is on `main`, the test calls the real handler, not a copied helper. | high | [S5 test-cases] [G] |
+| X-1 | Every new or changed tenant query path has an HTTP-level cross-tenant test under `tests/integration/` that calls the real handler as company A and asserts company B's data is absent (list `[]`), untouched (404 by id), not written (stored `companyId` is A) or not mass-assigned. | high | [S5 test-cases] [G] |
 | X-2 | Each tenant test names the clause whose deletion turns it red (in the `it(...)` title or a comment), and the author confirmed it by commenting the clause out. | high | [G] |
 | X-3 | The foreign row can reach the query: foreign `companyId` with local FKs, or a local record with a foreign FK; the test asserts the seed really landed in B before asserting the zero. | high | [G] |
 | X-4 | Auth cases are covered: no session → 401, another company → 404 / `[]`, wrong role → 403, and a null-company caller → `[]` on list paths. | medium | [G] |
@@ -131,7 +131,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | P-5 | N+1 loops | LEAK-5, LEAK-6, LEAK-8, LEAK-9, LEAK-20, LEAK-21 | `driver-school-arrival`/`departure`, `mark-stop-completed`, `GET /api/reports/journeys`, `GET /api/check-in/waiting/:routeId`, `getConversationsForUser`, `markAllNotificationsRead`, `reorderRouteSchool` |
 | P-6 | Unbounded lists on polled endpoints | LEAK-1 (LIMIT only), LEAK-6, LEAK-7, LEAK-9, LEAK-14 | `getDriverShiftReports`, `getNotificationsForParent`, `getSystemNotificationsFor*`, `getConversation`; `GET /api/available-buses` reads every on-duty driver (all tenants, ids only) |
 | P-9 | Session store opens a second pool | LEAK-16 | `new PgStore({ conString })` in `server/customAuth.ts` |
-| X-1 | Tenant tests re-implement helpers instead of calling handlers | (gaps A5) | `tests/multi-tenant.test.ts`; fixed when the Q4 harness lands |
+| X-1 | Tenant tests re-implement helpers instead of calling handlers | (gaps A5) | `tests/multi-tenant.test.ts` (older tests); the Q4 harness is on `main` (`fa85158`), so new paths use `tests/integration/` |
 | S-24 | Existing `npm audit` baseline (32 advisories) | Q2 | dependency plan |
 
 **Closed since the audit (verified in code; 26 IDs):**
