@@ -6,8 +6,11 @@ import bcrypt from "bcryptjs";
 import connectPg from "connect-pg-simple";
 import crypto from "crypto";
 import rateLimit from "express-rate-limit";
+import { eq } from "drizzle-orm";
 import { storage } from "./storage";
-import { User } from "@shared/schema";
+import { db } from "./db";
+import { User, users, companies } from "@shared/schema";
+import { sessionDecision, isCompanyGateAllowed } from "./authGate";
 import { sendPasswordResetEmail } from "./emailService";
 
 // Rate limiters for auth endpoints
@@ -43,9 +46,15 @@ declare global {
       companyRoleId: string | null;
       assignedRouteId?: string | null;
       isOnDuty?: boolean | null;
+      // HF3: the user's company status, loaded at login and on every request.
+      // Null when the user has no company or the company row is missing.
+      companyStatus?: string | null;
+      companyIsActive?: boolean | null;
     }
   }
 }
+
+const DEACTIVATED_MESSAGE = "This account has been deactivated. Contact your administrator.";
 
 export async function hashPassword(password: string): Promise<string> {
   const salt = await bcrypt.genSalt(12);
@@ -96,6 +105,22 @@ export async function setupCustomAuth(app: Express) {
   app.use(passport.initialize());
   app.use(passport.session());
 
+  // HF3 / SEC-7: company gate. Runs right after passport.session(), before the
+  // master-admin impersonation overlay in routes.ts, so the real role is seen.
+  // Users of a company that is not approved+active may only reach the
+  // onboarding/billing allow-list in server/authGate.ts. Path matching there is
+  // case-insensitive (Express routes match /API/drivers too).
+  app.use((req, res, next) => {
+    const user = req.user as Express.User | undefined;
+    if (!isCompanyGateAllowed(req.path, user)) {
+      return res.status(403).json({
+        message: "Your company account is not active yet.",
+        code: "COMPANY_NOT_ACTIVE",
+      });
+    }
+    next();
+  });
+
   passport.use(
     new LocalStrategy(
       { usernameField: 'email', passwordField: 'password' },
@@ -116,6 +141,13 @@ export async function setupCustomAuth(app: Express) {
             return done(null, false, { message: 'Invalid email or password' });
           }
 
+          // HF3 / SEC-19: only after the password check passes, so a wrong
+          // password never reveals that an account is deactivated.
+          const company = user.companyId ? await storage.getCompanyById(user.companyId) : undefined;
+          if (sessionDecision(user, company) === 'reject') {
+            return done(null, false, { message: DEACTIVATED_MESSAGE });
+          }
+
           return done(null, {
             id: user.id,
             email: user.email,
@@ -124,6 +156,8 @@ export async function setupCustomAuth(app: Express) {
             role: user.role,
             companyId: user.companyId,
             companyRoleId: user.companyRoleId,
+            companyStatus: company?.status ?? null,
+            companyIsActive: company?.isActive ?? null,
           });
         } catch (error) {
           return done(error);
@@ -138,8 +172,30 @@ export async function setupCustomAuth(app: Express) {
 
   passport.deserializeUser(async (id: string, done) => {
     try {
-      const user = await storage.getUser(id);
+      // HF3 / SEC-19: one users LEFT JOIN companies query per request (instead
+      // of getUser + getCompanyById). companyStatus is null when the user has
+      // no company or the company row is missing; the company gate blocks the
+      // latter. A thrown lookup goes to done(err) and never allows the session.
+      const [row] = await db
+        .select({
+          user: users,
+          companyStatus: companies.status,
+          companyIsActive: companies.isActive,
+          companyRowId: companies.id,
+        })
+        .from(users)
+        .leftJoin(companies, eq(users.companyId, companies.id))
+        .where(eq(users.id, id))
+        .limit(1);
+      const user = row?.user;
       if (!user) {
+        return done(null, false);
+      }
+      const company = row.companyRowId
+        ? { status: row.companyStatus, isActive: row.companyIsActive }
+        : null;
+      // Archived user or suspended/rejected company: end the session.
+      if (sessionDecision(user, company) === 'reject') {
         return done(null, false);
       }
       done(null, {
@@ -152,6 +208,8 @@ export async function setupCustomAuth(app: Express) {
         companyRoleId: user.companyRoleId,
         assignedRouteId: user.assignedRouteId,
         isOnDuty: user.isOnDuty,
+        companyStatus: company?.status ?? null,
+        companyIsActive: company?.isActive ?? null,
       });
     } catch (error) {
       done(error);
@@ -160,7 +218,10 @@ export async function setupCustomAuth(app: Express) {
 
   app.post("/api/auth/register", registerLimiter, async (req, res) => {
     try {
-      const { email, password, firstName, lastName, companySlug, role } = req.body;
+      // HF3 / SEC-8: `companySlug` is deliberately ignored. Nobody joins a
+      // company by its slug any more: parents join through a link code
+      // (/api/link-child assigns the company), drivers through an invitation.
+      const { email, password, firstName, lastName, role } = req.body;
 
       if (!email || !password) {
         return res.status(400).json({ message: "Email and password are required" });
@@ -170,32 +231,20 @@ export async function setupCustomAuth(app: Express) {
         return res.status(400).json({ message: "Password must be at least 8 characters" });
       }
 
-      // Validate role - only parent and driver allowed via self-registration
-      const userRole = (role === 'driver') ? 'driver' : 'parent';
+      // Drivers are invited by their company admin. Checked BEFORE the
+      // email-exists lookup so this response never reveals whether an email
+      // is registered.
+      if (role === 'driver') {
+        return res.status(400).json({ message: "Drivers join by invitation from their company administrator." });
+      }
+
+      // Self-registration creates parents only, with no company.
+      const userRole = 'parent';
+      const companyId: string | null = null;
 
       const existingUser = await storage.getUserByEmail(email);
       if (existingUser) {
         return res.status(400).json({ message: "Email already registered" });
-      }
-
-      let companyId: string | null = null;
-      if (companySlug) {
-        const company = await storage.getCompanyBySlug(companySlug);
-        if (!company) {
-          return res.status(400).json({ message: "Invalid Business ID. Please check with your employer." });
-        }
-        if (company.status !== 'approved') {
-          return res.status(400).json({ message: "This company is not currently active. Please contact your employer." });
-        }
-        companyId = company.id;
-
-        // Check plan limits
-        const canCreate = await storage.canCreateUser(companyId, userRole);
-        if (!canCreate.allowed) {
-          return res.status(403).json({ message: canCreate.reason });
-        }
-      } else if (userRole === 'driver') {
-        return res.status(400).json({ message: "Business ID is required for driver registration" });
       }
 
       const hashedPassword = await hashPassword(password);
@@ -216,6 +265,8 @@ export async function setupCustomAuth(app: Express) {
         role: user.role,
         companyId: user.companyId,
         companyRoleId: user.companyRoleId,
+        companyStatus: null,
+        companyIsActive: null,
       }, (err) => {
         if (err) {
           console.error("Login after register error:", err);

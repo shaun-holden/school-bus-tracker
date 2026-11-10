@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Switch, Route } from "wouter";
 import { queryClient, apiRequest } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
@@ -26,8 +26,26 @@ import OnboardingPending from "@/pages/onboarding-pending";
 import PrivacyPolicy from "@/pages/privacy";
 import Support from "@/pages/support";
 
+// HF3: admins of a company that is not approved+active get 403s from every
+// admin API, so show the pending page instead of an empty dashboard. When the
+// pending page's status poll sees approval, refresh the cached user so the
+// router switches to the dashboard without waiting for the auth staleTime.
+function PendingCompanyGate() {
+  const { data: status } = useQuery<{ status: string; isActive: boolean }>({
+    queryKey: ['/api/business/status'],
+    refetchInterval: 10000,
+  });
+  useEffect(() => {
+    if (status?.status === 'approved' && status?.isActive) {
+      queryClient.invalidateQueries({ queryKey: ['/api/auth/user'] });
+    }
+  }, [status]);
+  return <OnboardingPending />;
+}
+
 function Router() {
   const { isAuthenticated, isLoading, user } = useAuth();
+  const isCompanyActive = user?.companyStatus === 'approved' && user?.companyIsActive !== false;
   const { hide: hideSplash } = useSplash();
   const pendingRolePatchSentRef = useRef(false);
 
@@ -101,7 +119,8 @@ function Router() {
           {user?.role === 'parent' && <Route path="/parent" component={ParentDashboard} />}
           {user?.role === 'parent' && <Route path="/parent/notifications" component={ParentNotifications} />}
           {user?.role === 'driver' && <Route path="/" component={DriverDashboard} />}
-          {(user?.role === 'admin' || user?.role === 'master_admin' || user?.role === 'driver_admin') && <Route path="/" component={AdminDashboard} />}
+          {(user?.role === 'admin' || user?.role === 'driver_admin') && !isCompanyActive && <Route path="/" component={PendingCompanyGate} />}
+          {(user?.role === 'master_admin' || ((user?.role === 'admin' || user?.role === 'driver_admin') && isCompanyActive)) && <Route path="/" component={AdminDashboard} />}
           {/* Master admin can view any dashboard */}
           {user?.role === 'master_admin' && <Route path="/driver" component={DriverDashboard} />}
           {user?.role === 'master_admin' && <Route path="/parent" component={ParentDashboard} />}

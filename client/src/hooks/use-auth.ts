@@ -2,6 +2,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getQueryFn } from "@/lib/queryClient";
 import type { User } from "@shared/schema";
 
+// /api/auth/user returns req.user, which the server extends with the user's
+// company status (HF3). Null when the user has no company.
+export type AuthUser = User & {
+  companyStatus?: string | null;
+  companyIsActive?: boolean | null;
+};
+
 interface LoginCredentials {
   email: string;
   password: string;
@@ -12,14 +19,13 @@ interface RegisterCredentials {
   password: string;
   firstName?: string;
   lastName?: string;
-  companySlug?: string;
   role?: string;
 }
 
 export function useAuth() {
   const queryClient = useQueryClient();
 
-  const userQuery = useQuery<User | null>({
+  const userQuery = useQuery<AuthUser | null>({
     queryKey: ["/api/auth/user"],
     queryFn: getQueryFn({ on401: "returnNull" }),
     retry: false,

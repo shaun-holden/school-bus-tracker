@@ -47,4 +47,16 @@ describe('server/index.ts middleware ordering', () => {
     expect(webhookIndex).toBeLessThan(corsIndex);
     expect(corsIndex).toBeLessThan(jsonIndex);
   });
+
+  // HF3 / SEC-18: the cross-site write guard must sit after the Stripe webhook
+  // (which carries no browser Origin and must keep its raw body) and after
+  // cors(), and the urlencoded body parser must stay removed so cross-site
+  // HTML form posts cannot feed string fields to /api handlers.
+  it('registers the Origin guard after the webhook and after cors(), and has no express.urlencoded', () => {
+    const originGuardIndex = source.indexOf('isCrossSiteWriteBlocked(req.method');
+    expect(originGuardIndex).toBeGreaterThanOrEqual(0);
+    expect(webhookIndex).toBeLessThan(originGuardIndex);
+    expect(corsIndex).toBeLessThan(originGuardIndex);
+    expect(source).not.toMatch(/express\.urlencoded\s*\(/);
+  });
 });

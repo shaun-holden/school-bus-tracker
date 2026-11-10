@@ -7,6 +7,7 @@ import { registerRoutes } from "./routes";
 import { setupVite, serveStatic, log } from "./vite";
 import { WebhookHandlers } from './webhookHandlers';
 import { seedMasterAdmin } from '../scripts/seed-master-admin';
+import { isCrossSiteWriteBlocked } from './authGate';
 
 export const ALLOWED_ORIGINS = [
   'capacitor://localhost',
@@ -58,8 +59,24 @@ app.use(
   })
 );
 
+// HF3 / SEC-18: reject cross-site writes to /api. The production session
+// cookie is SameSite=None, so a foreign page could otherwise POST with it.
+// Non-GET/HEAD/OPTIONS /api requests carrying an Origin must come from
+// ALLOWED_ORIGINS or from this server's own host; `Origin: null` is blocked.
+// No Origin header (non-browser / native clients) is allowed. Registered after
+// the Stripe webhook (which carries no browser Origin) and after cors().
+// The decision is in server/authGate.ts and matches /api case-insensitively.
+app.use((req, res, next) => {
+  const selfOrigin = `${req.protocol}://${req.get('host')}`;
+  if (isCrossSiteWriteBlocked(req.method, req.path, req.get('origin'), selfOrigin, ALLOWED_ORIGINS)) {
+    return res.status(403).json({ message: 'Cross-site request blocked' });
+  }
+  next();
+});
+
+// JSON bodies only. express.urlencoded was removed (HF3 / SEC-18) so plain
+// cross-site HTML form posts can no longer feed string fields to handlers.
 app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
 
 app.use((req, res, next) => {
   const start = Date.now();
