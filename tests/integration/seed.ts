@@ -18,6 +18,8 @@ import {
   parentChildLinks,
   buses,
   driverShiftReports,
+  linkCodes,
+  parentNotifications,
 } from '@shared/schema';
 
 export const SEED_PASSWORD = 'integration-Pass-123';
@@ -37,6 +39,8 @@ export const EMAILS = {
   adminC: 'admin-c@sbt.test',
   adminD: 'admin-d@sbt.test',
   adminA2: 'admin-a2@sbt.test',
+  driverAdminA: 'driver-admin-a@sbt.test',
+  parentNull: 'parent-null@sbt.test',
 } as const;
 
 export type Persona = keyof typeof EMAILS;
@@ -62,6 +66,8 @@ export interface SeedIds {
   adminC: string;
   adminD: string;
   adminA2: string;
+  driverAdminA: string;
+  parentNull: string;
 
   schoolA: string;
   schoolB: string;
@@ -79,6 +85,10 @@ export interface SeedIds {
   busB: string;
   shiftA: string;
   shiftB: string;
+  linkCodeA: string;
+  linkCodeB: string;
+  noticeA: string;
+  noticeB: string;
 }
 
 const PROFESSIONAL = {
@@ -205,6 +215,32 @@ async function seedTenant(prefix: 'A' | 'B', companyId: string) {
     })
     .returning({ id: driverShiftReports.id });
 
+  // Active link code for the tenant's student (reachability target for the
+  // link-code / regenerate-code record-by-id guards).
+  const [linkCode] = await db
+    .insert(linkCodes)
+    .values({
+      companyId,
+      code: `${prefix}-LINK-0001`,
+      studentId: student.id,
+      createdById: adminId,
+      status: 'active',
+      expiresAt: new Date('2099-01-01T00:00:00Z'),
+    })
+    .returning({ id: linkCodes.id });
+
+  // Company-wide (global) parent notification, no route.
+  const [notice] = await db
+    .insert(parentNotifications)
+    .values({
+      companyId,
+      title: `${prefix}-Notice`,
+      message: `${prefix}-Notice message`,
+      createdById: adminId,
+      isGlobal: true,
+    })
+    .returning({ id: parentNotifications.id });
+
   return {
     admin: adminId,
     driver: driverId,
@@ -218,6 +254,8 @@ async function seedTenant(prefix: 'A' | 'B', companyId: string) {
     link: link.id,
     bus: bus.id,
     shift: shift.id,
+    linkCode: linkCode.id,
+    notice: notice.id,
   };
 }
 
@@ -267,11 +305,22 @@ export async function seedTwoTenants(): Promise<SeedIds> {
     { password: true },
   );
 
+  // driver_admin in A: the "same-company driver_admin" path of the check-in guard.
+  const driverAdminA = await insertUser(
+    { email: EMAILS.driverAdminA, firstName: 'A-DriverAdmin', lastName: 'Seed', role: 'driver_admin', companyId: companyA },
+    { password: true },
+  );
+  // Parent with no company and no children (SEC-20: null never matches null).
+  const parentNull = await insertUser(
+    { email: EMAILS.parentNull, firstName: 'Null-Parent', lastName: 'Seed', role: 'parent', companyId: null },
+    { password: true },
+  );
+
   return {
     companyA, companyB, companyC, companyD, companyA2,
     adminA: a.admin, driverA: a.driver, parentA: a.parent, driverA2: a.driver2, driverA_archived,
     adminB: b.admin, driverB: b.driver, parentB: b.parent, driverB2: b.driver2,
-    adminNull, master, adminC, adminD, adminA2,
+    adminNull, master, adminC, adminD, adminA2, driverAdminA, parentNull,
     schoolA: a.school, schoolB: b.school,
     routeA: a.route, routeB: b.route,
     stopA1: a.stop1, stopA2: a.stop2, stopB1: b.stop1, stopB2: b.stop2,
@@ -279,6 +328,8 @@ export async function seedTwoTenants(): Promise<SeedIds> {
     linkA: a.link, linkB: b.link,
     busA: a.bus, busB: b.bus,
     shiftA: a.shift, shiftB: b.shift,
+    linkCodeA: a.linkCode, linkCodeB: b.linkCode,
+    noticeA: a.notice, noticeB: b.notice,
   };
 }
 
@@ -300,13 +351,14 @@ export async function assertSeed(ids: SeedIds): Promise<void> {
     if (c.status !== 'approved' || c.isActive !== true) fail(`company ${c.id} is not approved+active`);
   }
 
-  const userIds = [ids.adminA, ids.driverA, ids.driverA2, ids.adminB, ids.driverB, ids.driverB2];
+  const userIds = [ids.adminA, ids.driverA, ids.driverA2, ids.driverAdminA, ids.adminB, ids.driverB, ids.driverB2, ids.parentNull];
   const userRows = await db
     .select({ id: users.id, companyId: users.companyId })
     .from(users)
     .where(inArray(users.id, userIds));
   const companyOf = new Map(userRows.map((u) => [u.id, u.companyId]));
-  for (const id of [ids.adminA, ids.driverA, ids.driverA2]) {
+  if (!companyOf.has(ids.parentNull) || companyOf.get(ids.parentNull) !== null) fail('parentNull must exist with a NULL companyId');
+  for (const id of [ids.adminA, ids.driverA, ids.driverA2, ids.driverAdminA]) {
     if (companyOf.get(id) !== ids.companyA) fail(`user ${id} is not in company A`);
   }
   for (const id of [ids.adminB, ids.driverB, ids.driverB2]) {
@@ -337,5 +389,28 @@ export async function assertSeed(ids: SeedIds): Promise<void> {
     .where(inArray(driverShiftReports.id, [ids.shiftA, ids.shiftB]));
   if (shiftRows.length !== 2 || shiftRows.some((r) => r.companyId !== null)) {
     fail('shift reports must exist with a NULL companyId');
+  }
+
+  const codeRows = await db
+    .select({ id: linkCodes.id, companyId: linkCodes.companyId, studentId: linkCodes.studentId, status: linkCodes.status })
+    .from(linkCodes)
+    .where(inArray(linkCodes.id, [ids.linkCodeA, ids.linkCodeB]));
+  const codeOf = new Map(codeRows.map((r) => [r.id, r]));
+  const cA = codeOf.get(ids.linkCodeA);
+  const cB = codeOf.get(ids.linkCodeB);
+  if (!cA || cA.companyId !== ids.companyA || cA.studentId !== ids.studentA || cA.status !== 'active') {
+    fail('linkCodeA is not an active company A code for studentA');
+  }
+  if (!cB || cB.companyId !== ids.companyB || cB.studentId !== ids.studentB || cB.status !== 'active') {
+    fail('linkCodeB is not an active company B code for studentB');
+  }
+
+  const noticeRows = await db
+    .select({ id: parentNotifications.id, companyId: parentNotifications.companyId, isGlobal: parentNotifications.isGlobal })
+    .from(parentNotifications)
+    .where(inArray(parentNotifications.id, [ids.noticeA, ids.noticeB]));
+  const noticeCompany = new Map(noticeRows.map((r) => [r.id, r.isGlobal === true ? r.companyId : 'not-global']));
+  if (noticeCompany.get(ids.noticeA) !== ids.companyA || noticeCompany.get(ids.noticeB) !== ids.companyB) {
+    fail('global notices are not in their companies');
   }
 }

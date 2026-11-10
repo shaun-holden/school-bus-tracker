@@ -11,6 +11,8 @@ import {
   parentChildLinks,
   buses,
   driverShiftReports,
+  linkCodes,
+  parentNotifications,
 } from '@shared/schema';
 import { useIntegrationHarness } from './harness';
 
@@ -64,6 +66,8 @@ describe('seedTwoTenants: every row lands in the right company', () => {
     expectUser(ids.adminC, 'admin', ids.companyC, true);
     expectUser(ids.adminD, 'admin', ids.companyD, true);
     expectUser(ids.adminA2, 'admin', ids.companyA2, true);
+    expectUser(ids.driverAdminA, 'driver_admin', ids.companyA, true);
+    expectUser(ids.parentNull, 'parent', null, true);
     expect(byId.get(ids.driverA_archived)!.isActive).toBe(false);
     expect(byId.get(ids.driverA)!.assignedRouteId).toBe(ids.routeA);
     expect(byId.get(ids.driverB)!.assignedRouteId).toBe(ids.routeB);
@@ -120,6 +124,32 @@ describe('seedTwoTenants: every row lands in the right company', () => {
     expect(bB).toMatchObject({ companyId: ids.companyB, busNumber: 'B-100', driverId: ids.driverB, currentRouteId: ids.routeB });
     expect(bA.currentLatitude).not.toBe(bB.currentLatitude);
     expect(rows.some((b) => b.driverId === ids.driverA2 || b.driverId === ids.driverB2)).toBe(false);
+  });
+
+  it('link codes and global notices: one per tenant, in its company', async () => {
+    const { ids, db } = h;
+    const codes = await db.select().from(linkCodes);
+    expect(codes).toHaveLength(2);
+    expect(codes.find((c) => c.id === ids.linkCodeA)).toMatchObject({
+      companyId: ids.companyA, studentId: ids.studentA, createdById: ids.adminA, status: 'active', code: 'A-LINK-0001',
+    });
+    expect(codes.find((c) => c.id === ids.linkCodeB)).toMatchObject({
+      companyId: ids.companyB, studentId: ids.studentB, createdById: ids.adminB, status: 'active', code: 'B-LINK-0001',
+    });
+
+    const notices = await db.select().from(parentNotifications);
+    expect(notices).toHaveLength(2);
+    expect(notices.find((n) => n.id === ids.noticeA)).toMatchObject({
+      companyId: ids.companyA, isGlobal: true, routeId: null, title: 'A-Notice',
+    });
+    expect(notices.find((n) => n.id === ids.noticeB)).toMatchObject({
+      companyId: ids.companyB, isGlobal: true, routeId: null, title: 'B-Notice',
+    });
+    // parentNull has no direct or linked child.
+    const kids = await db.select().from(students).where(eq(students.parentId, ids.parentNull));
+    expect(kids).toHaveLength(0);
+    const links = await db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, ids.parentNull));
+    expect(links).toHaveLength(0);
   });
 
   it('shift reports have a NULL companyId and point at the tenant driver', async () => {
