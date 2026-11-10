@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { insertCompanySchema } from '@shared/schema';
+import { isMasterAdminUser, companyScope } from '../server/tenant';
 
 describe('Multi-Tenant - Company Schema Validation', () => {
   it('should accept valid company data', () => {
@@ -211,27 +212,16 @@ describe('Multi-Tenant - Company Modules', () => {
 });
 
 // Policy-shape tests for the tenant-isolation helpers and enforcement
-// patterns documented in CLAUDE.md. These mirror the helpers inline (same
-// pattern as tests/role-access.test.ts) because the originals are declared
-// inside registerRoutes and not exported. If the policy changes in
-// routes.ts, update both places.
+// patterns documented in CLAUDE.md. isMasterAdminUser and companyScope are
+// the real helpers, imported from server/tenant.ts (routes.ts imports the
+// same module), so there is no inline copy to keep in sync. HTTP-level proof
+// that the handlers actually apply them lives in tests/integration/.
 
 type TestUser = {
   role?: string;
   companyId?: string | null;
   _masterAdminImpersonating?: boolean;
 };
-
-function isMasterAdminUser(user: TestUser | null | undefined): boolean {
-  if (!user) return false;
-  return user.role === 'master_admin' || user._masterAdminImpersonating === true;
-}
-
-function companyScope(user: TestUser | null | undefined): string | null | undefined {
-  if (isMasterAdminUser(user)) return undefined;
-  if (!user) return null;
-  return user.companyId ?? null;
-}
 
 describe('Multi-Tenant - isMasterAdminUser', () => {
   it('grants master access to master_admin role', () => {

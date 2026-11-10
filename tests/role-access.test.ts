@@ -1,13 +1,6 @@
 import { describe, it, expect } from 'vitest';
-
-// Replicate the role-check functions from routes.ts
-function isAdminRole(role: string | undefined | null): boolean {
-  return role === 'admin' || role === 'master_admin' || role === 'driver_admin';
-}
-
-function isDriverRole(role: string | undefined | null): boolean {
-  return role === 'driver' || role === 'driver_admin' || role === 'master_admin';
-}
+// The real role-check helpers (moved out of routes.ts into server/tenant.ts).
+import { isAdminRole, isDriverRole } from '../server/tenant';
 
 describe('Role-Based Access Control - Admin Role Check', () => {
   it('should grant admin access to admin role', () => {

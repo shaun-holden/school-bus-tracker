@@ -19,35 +19,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
-
-function isMasterAdminUser(user: any): boolean {
-  return user?.role === 'master_admin' || user?._masterAdminImpersonating === true;
-}
-
-// Returns the companyId filter to apply on list/read endpoints:
-//   undefined → caller should see everything (master-admin)
-//   string    → caller should be scoped to that companyId
-//   null      → caller should see nothing (authenticated but no company);
-//               handler should short-circuit with an empty list.
-// Keep these three states distinct — conflating null and undefined would
-// silently give unprivileged users an unscoped read.
-function companyScope(user: any): string | undefined | null {
-  if (isMasterAdminUser(user)) return undefined;
-  return user?.companyId ?? null;
-}
-
-// Record-by-id tenant guard: true when a non-master caller must get a 404
-// for a record owned by `recordCompanyId`. A non-master caller with no
-// company matches nothing (so null === null never grants access).
-function isOutsideCallerTenant(user: any, recordCompanyId: string | null | undefined): boolean {
-  if (isMasterAdminUser(user)) return false;
-  return !user?.companyId || recordCompanyId !== user.companyId;
-}
-
-// Foreign-key ids from a request body: null, undefined and "" all mean "none".
-function hasId(value: unknown): value is string {
-  return typeof value === 'string' && value !== '';
-}
+import { isMasterAdminUser, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
 
 // FK tenant checks. Each returns false (caller answers 404) when the record is
 // missing or not in `companyId`. A null/empty `companyId` matches nothing.
@@ -102,36 +74,6 @@ async function checkStudentForeignKeys(
     }
   }
   return null;
-}
-
-function isAdminRole(role: string | undefined | null): boolean {
-  return role === 'admin' || role === 'master_admin' || role === 'driver_admin';
-}
-
-function isDriverRole(roleOrUser: any): boolean {
-  // Accept either a role string (legacy) or a user object
-  if (typeof roleOrUser === 'string' || roleOrUser == null) {
-    return roleOrUser === 'driver' || roleOrUser === 'driver_admin' || roleOrUser === 'master_admin';
-  }
-  // User object
-  const role = roleOrUser.role;
-  return role === 'driver' || role === 'driver_admin' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
-}
-
-function isParentRole(roleOrUser: any): boolean {
-  if (typeof roleOrUser === 'string' || roleOrUser == null) {
-    return roleOrUser === 'parent' || roleOrUser === 'master_admin';
-  }
-  const role = roleOrUser.role;
-  return role === 'parent' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
-}
-
-function canAccessMessaging(roleOrUser: any): boolean {
-  if (typeof roleOrUser === 'string' || roleOrUser == null) {
-    return roleOrUser === 'parent' || roleOrUser === 'driver' || roleOrUser === 'master_admin';
-  }
-  const role = roleOrUser.role;
-  return role === 'parent' || role === 'driver' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
 }
 
 // Password-setup link for invite emails. Uses a trusted base URL, never a
