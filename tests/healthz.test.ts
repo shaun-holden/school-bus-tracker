@@ -67,6 +67,38 @@ describe('server/index.ts /healthz', () => {
     expect(handler).not.toMatch(/json\([^)]*(error|err|message|stack|version|commit)/i);
   });
 
+  // Structural status-code / header facts only. Timeout length and timer
+  // cleanup are behaviour and need the Q4 HTTP harness (or an exported handler).
+  function healthzHandlerSource(): string {
+    const rest = source.slice(healthzIndex + 1);
+    const nextReg = rest.search(/\napp\.(use|get|post)\(/);
+    return nextReg >= 0 ? rest.slice(0, nextReg) : rest;
+  }
+
+  it('sets Cache-Control: no-store so probes and proxies never cache a result', () => {
+    expect(healthzHandlerSource()).toMatch(
+      /res\.set\(\s*['"`]Cache-Control['"`]\s*,\s*['"`]no-store['"`]\s*\)/,
+    );
+  });
+
+  it('answers 200 only from the try block and 503 is the only status in catch', () => {
+    const handler = healthzHandlerSource();
+    const catchIndex = handler.search(/\}\s*catch\s*\(/);
+    const finallyIndex = handler.search(/\}\s*finally\s*\{/);
+    expect(catchIndex).toBeGreaterThanOrEqual(0);
+    expect(finallyIndex).toBeGreaterThan(catchIndex);
+
+    const tryPart = handler.slice(0, catchIndex);
+    const catchPart = handler.slice(catchIndex, finallyIndex);
+    const finallyPart = handler.slice(finallyIndex);
+
+    expect(tryPart.match(/status\(\s*200\s*\)/g) ?? []).toHaveLength(1);
+    // A DB error or timeout must never report healthy.
+    expect(catchPart.match(/status\(\s*\d+\s*\)/g)).toEqual(['status(503)']);
+    expect(catchPart).not.toMatch(/ok:\s*true/);
+    expect(finallyPart).not.toMatch(/\bres\.|status\(/);
+  });
+
   it('is not under /api (company gate and Origin guard do not apply)', () => {
     expect(source).not.toMatch(/['"`]\/api\/healthz['"`]/);
   });
