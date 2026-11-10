@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ALLOWED_ORIGINS } from '../server/index';
+import { ALLOWED_ORIGINS } from '../server/origins';
 
 describe('CORS allowlist', () => {
   it('contains the five plan-aligned origins', () => {

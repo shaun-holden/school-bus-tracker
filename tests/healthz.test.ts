@@ -3,17 +3,18 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// `server/index.ts` cannot be imported here: on import it seeds the master
-// admin and starts listening (see tests/webhook-ordering.test.ts). So, like
-// that test, this reads the source as text and asserts registration order.
-// A real HTTP test of GET /healthz (200 with a DB, 503 without) comes with the
-// Q4 HTTP/DB harness.
+// `/healthz` is registered by `createApp()` in `server/app.ts`; `server/index.ts`
+// then adds the Vite/static SPA handlers and listens. Importing either file
+// would load routes/storage and need a database (see
+// tests/webhook-ordering.test.ts), so this reads the sources as text and
+// asserts registration order. A real HTTP test of GET /healthz (200 with a DB,
+// 503 without) comes with the Q4 HTTP/DB harness.
 //
 // Invariants under guard:
-// - /healthz is registered before registerRoutes(app) and before the
-//   Vite/static SPA setup, so the SPA catch-all can never shadow it (a
-//   shadowed health check would return index.html with a 200 and Railway
-//   would mark a broken deploy healthy).
+// - /healthz is registered before registerRoutes(app), and createApp() (which
+//   registers it) runs before the Vite/static SPA setup in index.ts, so the SPA
+//   catch-all can never shadow it (a shadowed health check would return
+//   index.html with a 200 and Railway would mark a broken deploy healthy).
 // - It pings the database through the shared `pool` from server/db.ts.
 // - Its body is fixed ({ ok: true } / { ok: false }) and never carries
 //   error details.
@@ -21,28 +22,22 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-describe('server/index.ts /healthz', () => {
+describe('server/app.ts /healthz', () => {
   const source = fs.readFileSync(
-    path.resolve(__dirname, '../server/index.ts'),
+    path.resolve(__dirname, '../server/app.ts'),
     'utf-8',
   );
 
   const healthzIndex = source.search(/app\.get\(\s*['"`]\/healthz['"`]/);
   const registerRoutesIndex = source.indexOf('registerRoutes(app)');
-  const setupViteIndex = source.indexOf('setupVite(app');
-  const serveStaticIndex = source.indexOf('serveStatic(app');
   const webhookIndex = source.search(/['"`]\/api\/stripe\/webhook['"`]/);
   const corsIndex = source.indexOf('cors(');
 
-  it('registers GET /healthz before routes and the Vite/static SPA setup', () => {
+  it('registers GET /healthz before registerRoutes(app)', () => {
     expect(healthzIndex).toBeGreaterThanOrEqual(0);
     expect(registerRoutesIndex).toBeGreaterThanOrEqual(0);
-    expect(setupViteIndex).toBeGreaterThanOrEqual(0);
-    expect(serveStaticIndex).toBeGreaterThanOrEqual(0);
 
     expect(healthzIndex).toBeLessThan(registerRoutesIndex);
-    expect(healthzIndex).toBeLessThan(setupViteIndex);
-    expect(healthzIndex).toBeLessThan(serveStaticIndex);
   });
 
   it('registers /healthz after the Stripe webhook and cors()', () => {
@@ -57,7 +52,7 @@ describe('server/index.ts /healthz', () => {
 
     // The handler body: from the /healthz registration to the next app.use/app.get.
     const rest = source.slice(healthzIndex + 1);
-    const nextReg = rest.search(/\napp\.(use|get|post)\(/);
+    const nextReg = rest.search(/\n\s*app\.(use|get|post)\(/);
     const handler = nextReg >= 0 ? rest.slice(0, nextReg) : rest;
 
     expect(handler).toMatch(/pool\.query\(\s*['"`]SELECT 1['"`]/);
@@ -71,7 +66,7 @@ describe('server/index.ts /healthz', () => {
   // cleanup are behaviour and need the Q4 HTTP harness (or an exported handler).
   function healthzHandlerSource(): string {
     const rest = source.slice(healthzIndex + 1);
-    const nextReg = rest.search(/\napp\.(use|get|post)\(/);
+    const nextReg = rest.search(/\n\s*app\.(use|get|post)\(/);
     return nextReg >= 0 ? rest.slice(0, nextReg) : rest;
   }
 
@@ -101,5 +96,30 @@ describe('server/index.ts /healthz', () => {
 
   it('is not under /api (company gate and Origin guard do not apply)', () => {
     expect(source).not.toMatch(/['"`]\/api\/healthz['"`]/);
+  });
+
+  it('never sets up the Vite/static SPA handlers itself', () => {
+    expect(source).not.toMatch(/setupVite/);
+    expect(source).not.toMatch(/serveStatic/);
+  });
+});
+
+describe('server/index.ts SPA setup comes after createApp()', () => {
+  const indexSource = fs.readFileSync(
+    path.resolve(__dirname, '../server/index.ts'),
+    'utf-8',
+  );
+
+  const createAppIndex = indexSource.indexOf('createApp(');
+  const setupViteIndex = indexSource.indexOf('setupVite(');
+  const serveStaticIndex = indexSource.indexOf('serveStatic(');
+
+  it('calls setupVite( and serveStatic( only after createApp(', () => {
+    expect(createAppIndex).toBeGreaterThanOrEqual(0);
+    expect(setupViteIndex).toBeGreaterThanOrEqual(0);
+    expect(serveStaticIndex).toBeGreaterThanOrEqual(0);
+
+    expect(createAppIndex).toBeLessThan(setupViteIndex);
+    expect(createAppIndex).toBeLessThan(serveStaticIndex);
   });
 });

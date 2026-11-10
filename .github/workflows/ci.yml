@@ -15,6 +15,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
+    # Postgres 17 (same major as production) for the integration project
+    # (tests/integration/**). Its globalSetup creates the schema with
+    # drizzle-kit push; the DB guard only accepts local *_test databases.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: sbt_ci_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -38,11 +56,6 @@ jobs:
       - name: Run tests
         run: npm test
         env:
-          # tests/cors.test.ts imports server/index.ts, which pulls in server/db.ts.
-          # db.ts throws at import time if DATABASE_URL is unset (the pg Pool is lazy,
-          # so no real database is contacted — a placeholder URL is enough). NODE_ENV=test
-          # waives the SESSION_SECRET startup requirement. Without these the suite fails
-          # to load cors.test.ts in CI even though every real test passes.
           NODE_ENV: test
           SESSION_SECRET: ci-test-secret
-          DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci_test
+          TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sbt_ci_test

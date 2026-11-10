@@ -3,10 +3,11 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// `server/index.ts` cannot be imported here: on import it runs an IIFE
-// (`seedMasterAdmin()` + `server.listen()`), which would boot a real HTTP
-// server and hit the database. Instead we read the source as text and assert
-// the middleware registration order by string index — a zero-side-effect check.
+// The middleware stack is built by `createApp()` in `server/app.ts`, which
+// `server/index.ts` calls before adding the client handlers and listening.
+// Importing either file would load routes/storage and need a database, so we
+// read the source as text and assert the middleware registration order by
+// string index — a zero-side-effect check.
 //
 // The invariant under guard: the Stripe raw-body webhook handler
 // (`app.post('/api/stripe/webhook', express.raw(...))`) must be registered
@@ -21,9 +22,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-describe('server/index.ts middleware ordering', () => {
+describe('server/app.ts middleware ordering', () => {
   const source = fs.readFileSync(
-    path.resolve(__dirname, '../server/index.ts'),
+    path.resolve(__dirname, '../server/app.ts'),
     'utf-8',
   );
 
@@ -58,5 +59,19 @@ describe('server/index.ts middleware ordering', () => {
     expect(webhookIndex).toBeLessThan(originGuardIndex);
     expect(corsIndex).toBeLessThan(originGuardIndex);
     expect(source).not.toMatch(/express\.urlencoded\s*\(/);
+  });
+});
+
+describe('server/index.ts registers no middleware of its own', () => {
+  const indexSource = fs.readFileSync(
+    path.resolve(__dirname, '../server/index.ts'),
+    'utf-8',
+  );
+
+  // Everything order-sensitive lives in createApp(). A body parser or a
+  // second webhook route added in index.ts would bypass the guards above.
+  it('has no express.urlencoded and no Stripe webhook route', () => {
+    expect(indexSource).not.toMatch(/express\.urlencoded\s*\(/);
+    expect(indexSource).not.toMatch(/['"`]\/api\/stripe\/webhook['"`]/);
   });
 });
