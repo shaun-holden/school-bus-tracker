@@ -1,5 +1,14 @@
 import { Resend } from 'resend';
 
+// Masks an address for logs: "jane.doe@example.com" -> "j***@example.com".
+// Never log a full recipient address.
+function maskEmail(email: string | null | undefined): string {
+  if (!email) return '(none)';
+  const at = email.indexOf('@');
+  if (at <= 0) return '***';
+  return `${email[0]}***${email.slice(at)}`;
+}
+
 function getResendClient() {
   const apiKey = process.env.RESEND_API_KEY;
   if (!apiKey) {
@@ -14,7 +23,7 @@ function getResendClient() {
 
 export async function sendPasswordResetEmail(toEmail: string, resetToken: string, resetUrl: string) {
   try {
-    console.log('Attempting to send password reset email to:', toEmail);
+    console.log('Attempting to send password reset email to:', maskEmail(toEmail));
     const { client, fromEmail } = getResendClient();
 
     const result = await client.emails.send({
@@ -143,7 +152,7 @@ export async function sendDriverInvitationEmail(
   setupUrl: string
 ) {
   try {
-    console.log('Attempting to send driver invitation email to:', toEmail);
+    console.log('Attempting to send driver invitation email to:', maskEmail(toEmail));
     const { client, fromEmail } = getResendClient();
 
     const result = await client.emails.send({

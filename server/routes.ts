@@ -5,6 +5,7 @@ import { setupCustomAuth, isAuthenticated, authLimiter, registerLimiter } from "
 import { 
   insertStudentSchema,
   insertRouteSchema,
+  updateRouteSchema,
   insertRouteStopSchema,
   insertSchoolSchema,
   insertAttendanceSchema,
@@ -33,6 +34,74 @@ function isMasterAdminUser(user: any): boolean {
 function companyScope(user: any): string | undefined | null {
   if (isMasterAdminUser(user)) return undefined;
   return user?.companyId ?? null;
+}
+
+// Record-by-id tenant guard: true when a non-master caller must get a 404
+// for a record owned by `recordCompanyId`. A non-master caller with no
+// company matches nothing (so null === null never grants access).
+function isOutsideCallerTenant(user: any, recordCompanyId: string | null | undefined): boolean {
+  if (isMasterAdminUser(user)) return false;
+  return !user?.companyId || recordCompanyId !== user.companyId;
+}
+
+// Foreign-key ids from a request body: null, undefined and "" all mean "none".
+function hasId(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
+}
+
+// FK tenant checks. Each returns false (caller answers 404) when the record is
+// missing or not in `companyId`. A null/empty `companyId` matches nothing.
+async function isDriverInCompany(driverId: string, companyId: string | null | undefined): Promise<boolean> {
+  if (!companyId) return false;
+  const driver = await storage.getUser(driverId);
+  return !!driver && driver.companyId === companyId && (driver.role === 'driver' || driver.role === 'driver_admin');
+}
+
+async function isSchoolInCompany(schoolId: string, companyId: string | null | undefined): Promise<boolean> {
+  if (!companyId) return false;
+  const school = await storage.getSchoolById(schoolId);
+  return !!school && school.companyId === companyId;
+}
+
+async function isRouteInCompany(routeId: string, companyId: string | null | undefined): Promise<boolean> {
+  if (!companyId) return false;
+  const route = await storage.getRouteById(routeId);
+  return !!route && route.companyId === companyId;
+}
+
+// Student FK checks (SEC-15). routeId / schoolId must be in the student's
+// company; stopId's route must be too (route_stops has no companyId) and must
+// match routeId when both are given; parentId must be a user in the same
+// company (any role). Ids in `alwaysAllowedParentIds` (the caller, or the
+// unchanged parent on update) skip the parent check. Returns null when OK,
+// else the status + message to send.
+async function checkStudentForeignKeys(
+  studentCompanyId: string | null | undefined,
+  ids: { routeId?: unknown; schoolId?: unknown; stopId?: unknown; parentId?: unknown },
+  alwaysAllowedParentIds: Array<string | null | undefined> = [],
+): Promise<{ status: number; message: string } | null> {
+  if (hasId(ids.routeId) && !(await isRouteInCompany(ids.routeId, studentCompanyId))) {
+    return { status: 404, message: "Route not found" };
+  }
+  if (hasId(ids.schoolId) && !(await isSchoolInCompany(ids.schoolId, studentCompanyId))) {
+    return { status: 404, message: "School not found" };
+  }
+  if (hasId(ids.stopId)) {
+    const stop = await storage.getRouteStopById(ids.stopId);
+    if (!stop || !(await isRouteInCompany(stop.routeId, studentCompanyId))) {
+      return { status: 404, message: "Stop not found" };
+    }
+    if (hasId(ids.routeId) && stop.routeId !== ids.routeId) {
+      return { status: 400, message: "Stop does not belong to the selected route" };
+    }
+  }
+  if (hasId(ids.parentId) && !alwaysAllowedParentIds.includes(ids.parentId)) {
+    const parent = studentCompanyId ? await storage.getUser(ids.parentId) : undefined;
+    if (!parent || parent.companyId !== studentCompanyId) {
+      return { status: 404, message: "Parent not found" };
+    }
+  }
+  return null;
 }
 
 function isAdminRole(role: string | undefined | null): boolean {
@@ -280,15 +349,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid role" });
       }
 
-      // Check if user exists
+      // Check if user exists. A target in another company gets the same 404
+      // as a missing one (masks existence). A non-master caller with no
+      // company matches nobody.
       const existingUser = await storage.getUser(id);
+      const callerIsMaster = isMasterAdminUser(requestingUser);
       if (!existingUser) {
+        return res.status(404).json({ message: "User not found" });
+      }
+      if (!callerIsMaster && (!requestingUser.companyId || existingUser.companyId !== requestingUser.companyId)) {
         return res.status(404).json({ message: "User not found" });
       }
 
       // Prevent changing master_admin role
       if (existingUser.role === 'master_admin') {
         return res.status(403).json({ message: "Cannot change master admin role" });
+      }
+
+      const callerIsFullAdmin = callerIsMaster || requestingUser.role === 'admin';
+
+      // driver_admin may not change their own role (no self-escalation).
+      // admin and master may (role-selection and the admin team table use it).
+      if (existingUser.id === requestingUser.id && !callerIsFullAdmin) {
+        return res.status(400).json({ message: "You cannot change your own role" });
+      }
+
+      // Only admin or master may grant admin / driver_admin
+      if ((role === 'admin' || role === 'driver_admin') && !callerIsFullAdmin) {
+        return res.status(403).json({ message: "Only administrators can grant admin roles" });
+      }
+
+      // driver_admin may not change the role of an admin or driver_admin
+      if (!callerIsFullAdmin && (existingUser.role === 'admin' || existingUser.role === 'driver_admin')) {
+        return res.status(403).json({ message: "You cannot change the role of an administrator" });
       }
 
       const updatedUser = await storage.updateUserRole(id, role);
@@ -569,7 +662,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             buildPasswordSetupUrl(token)
           );
 
-          console.log(`Driver invitation email sent to ${driver.email}`);
+          console.log(`Driver invitation email sent for driver ${driver.id}`);
         } catch (emailError) {
           console.error("Error sending driver invitation email:", emailError);
           // Don't fail the request if email sending fails - driver was still created
@@ -598,6 +691,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { firstName, lastName, email, role } = req.body;
       if (!firstName || !lastName || !email || !['driver', 'admin'].includes(role)) {
         return res.status(400).json({ message: "firstName, lastName, email, and role (driver or admin) are required" });
+      }
+
+      // Only admin or master may invite an admin (a driver_admin may not)
+      if (role === 'admin' && requestingUser.role !== 'admin' && !isMasterAdminUser(requestingUser)) {
+        return res.status(403).json({ message: "Only administrators can invite admins" });
       }
 
       // Check plan limits
@@ -662,7 +760,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!isMasterAdminUser(user) && targetDriver.companyId !== user.companyId) {
         return res.status(404).json({ message: "Driver not found" });
       }
+      // Only driver profiles are editable here (not admins or parents)
+      if (targetDriver.role !== 'driver' && targetDriver.role !== 'driver_admin') {
+        return res.status(404).json({ message: "Driver not found" });
+      }
 
+      // Allow-listed fields only (see updateDriverProfileSchema .pick())
       const validatedData = updateDriverProfileSchema.partial().parse(req.body);
 
       // Convert date strings to Date objects for database storage
@@ -1052,7 +1155,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .parse(req.body);
 
       // A bus must never point at another tenant's driver (master admin included).
-      if (updateData.driverId) {
+      if (updateData.driverId != null) {
         const driver = await storage.getUser(updateData.driverId);
         if (!driver || !isDriverRole(driver.role) || driver.companyId !== existingBus.companyId) {
           return res.status(404).json({ message: "Driver not found" });
@@ -1094,10 +1197,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(updatedBus);
 
     } catch (error) {
-      console.error("Error updating bus:", error);
       if (error instanceof z.ZodError) {
+        // Log only the issue paths, never the submitted values
+        console.error("Invalid bus update, fields:", error.issues.map(issue => issue.path.join('.')));
         return res.status(400).json({ message: "Invalid bus data", errors: error.errors });
       }
+      console.error("Error updating bus:", error);
       res.status(500).json({ message: "Failed to update bus" });
     }
   });
@@ -1405,22 +1510,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
-      console.log('=== ROUTE CREATION REQUEST ===');
-      console.log('Raw request body:', JSON.stringify(req.body, null, 2));
-      
       try {
         const validatedData = insertRouteSchema.parse(req.body);
         // Force tenant scope from session; never trust client-supplied companyId.
         validatedData.companyId = user.companyId ?? null;
-        console.log('Validated route data:', JSON.stringify(validatedData, null, 2));
+
+        // FK ids must belong to the route's company (404 masks foreign ids)
+        if (hasId(validatedData.driverId) && !(await isDriverInCompany(validatedData.driverId, validatedData.companyId))) {
+          return res.status(404).json({ message: "Driver not found" });
+        }
+        if (hasId(validatedData.schoolId) && !(await isSchoolInCompany(validatedData.schoolId, validatedData.companyId))) {
+          return res.status(404).json({ message: "School not found" });
+        }
 
         const route = await storage.createRoute(validatedData);
         console.log('Created route successfully:', route.id);
         
         // If a school is assigned to this route, create a route stop for it
-        if (req.body.schoolId) {
+        if (hasId(validatedData.schoolId)) {
           try {
-            const school = await storage.getSchoolById(req.body.schoolId);
+            const school = await storage.getSchoolById(validatedData.schoolId);
             if (school) {
               const routeStop = {
                 routeId: route.id,
@@ -1469,10 +1578,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
       
-      console.log('=== ROUTE UPDATE REQUEST ===');
-      console.log('Route ID:', id);
-      console.log('Raw request body:', JSON.stringify(req.body, null, 2));
-      
       // Check if route exists
       const existingRoute = await storage.getRouteById(id);
       if (!existingRoute) {
@@ -1483,10 +1588,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       try {
-        // For partial updates, make all fields optional except the ones being updated
-        const partialRouteSchema = insertRouteSchema.partial();
-        const validatedData = partialRouteSchema.parse(req.body);
-        console.log('Validated update data:', JSON.stringify(validatedData, null, 2));
+        // Partial update; companyId is not accepted (updateRouteSchema omits it)
+        const validatedData = updateRouteSchema.parse(req.body);
+
+        // FK ids must belong to the route's company. Checked BEFORE any school
+        // data is copied into a stop. schoolId === "" still means "remove".
+        if (hasId(validatedData.driverId) && !(await isDriverInCompany(validatedData.driverId, existingRoute.companyId))) {
+          return res.status(404).json({ message: "Driver not found" });
+        }
+        if (hasId(validatedData.schoolId) && !(await isSchoolInCompany(validatedData.schoolId, existingRoute.companyId))) {
+          return res.status(404).json({ message: "School not found" });
+        }
         
         const updatedRoute = await storage.updateRoute(id, validatedData);
         if (!updatedRoute) {
@@ -1494,7 +1606,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
         
         // Handle school assignment/reassignment
-        if (req.body.schoolId && req.body.schoolId !== existingRoute.schoolId) {
+        if (hasId(validatedData.schoolId) && validatedData.schoolId !== existingRoute.schoolId) {
           try {
             // Remove old school stops if they exist
             if (existingRoute.schoolId) {
@@ -1506,7 +1618,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
             
             // Add new school stop
-            const school = await storage.getSchoolById(req.body.schoolId);
+            const school = await storage.getSchoolById(validatedData.schoolId);
             if (school) {
               const routeStop = {
                 routeId: id,
@@ -2339,11 +2451,51 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!driverId) {
         return res.status(400).json({ message: "Driver selection is required" });
       }
-      
-      // Verify the selected driver exists and is a driver
-      const selectedDriver = await storage.getUser(driverId);
-      if (!selectedDriver || selectedDriver.role !== 'driver') {
+      if (!routeId || !busId) {
+        return res.status(400).json({ message: "Route and bus selection are required" });
+      }
+
+      // Load the driver, route and bus. Each must exist and (for non-master
+      // callers) belong to the caller's company. A foreign id gets the same
+      // 404 as a missing one.
+      const [selectedDriver, checkInRoute, checkInBus] = await Promise.all([
+        storage.getUser(driverId),
+        storage.getRouteById(routeId),
+        storage.getBusById(busId),
+      ]);
+      if (!selectedDriver || !checkInRoute || !checkInBus) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      if (!isMasterAdminUser(user) && (
+        !user.companyId ||
+        selectedDriver.companyId !== user.companyId ||
+        checkInRoute.companyId !== user.companyId ||
+        checkInBus.companyId !== user.companyId
+      )) {
+        return res.status(404).json({ message: "Not found" });
+      }
+      // Every caller, master included: driver, route and bus share one company
+      if (
+        !selectedDriver.companyId ||
+        selectedDriver.companyId !== checkInRoute.companyId ||
+        checkInRoute.companyId !== checkInBus.companyId
+      ) {
+        return res.status(404).json({ message: "Not found" });
+      }
+
+      // Verify the selected profile is a driver
+      if (selectedDriver.role !== 'driver' && selectedDriver.role !== 'driver_admin') {
         return res.status(400).json({ message: "Invalid driver selection" });
+      }
+
+      // A driver checks in only themselves. A driver_admin may check in any
+      // driver of their own company. A master admin (who passes isDriverRole)
+      // may check in any driver, but only with a same-company route and bus
+      // (enforced above for every caller).
+      const isSelf = selectedDriver.id === user.id;
+      const isSameCompanyDriverAdmin = user.role === 'driver_admin' && selectedDriver.companyId === user.companyId;
+      if (!isSelf && !isSameCompanyDriverAdmin && !isMasterAdminUser(user)) {
+        return res.status(403).json({ message: "You can only check yourself in" });
       }
       
       // Update the selected driver's profile with check-in data
@@ -2409,7 +2561,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Error starting journey:", journeyError);
       }
       
-      res.json(updatedDriver);
+      // Trimmed driver: never return the full user row (phone, license, DOB...)
+      res.json(updatedDriver ? {
+        id: updatedDriver.id,
+        firstName: updatedDriver.firstName,
+        lastName: updatedDriver.lastName,
+        assignedRouteId: updatedDriver.assignedRouteId,
+        isOnDuty: updatedDriver.isOnDuty,
+      } : null);
     } catch (error) {
       console.error("Error during driver check-in:", error);
       res.status(500).json({ message: "Failed to complete check-in" });
@@ -2493,6 +2652,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // a foreign companyId and have it accepted.)
       validatedData.companyId = user.companyId ?? null;
 
+      // FK ids must belong to the student's company (404 masks foreign ids)
+      const fkError = await checkStudentForeignKeys(validatedData.companyId, validatedData, [userId]);
+      if (fkError) {
+        return res.status(fkError.status).json({ message: fkError.message });
+      }
+
       const student = await storage.createStudent(validatedData);
       console.log("Student created successfully:", student.id);
       
@@ -2520,26 +2685,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
       
+      let existingStudent;
       // For parents, verify they own the student
       if (user.role === 'parent') {
-        const student = await storage.getStudentById(id);
-        if (!student || student.parentId !== userId) {
+        existingStudent = await storage.getStudentById(id);
+        if (!existingStudent || existingStudent.parentId !== userId) {
           return res.status(403).json({ message: "Unauthorized - can only update your own students" });
         }
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
       } else {
         // Admin path: verify the student belongs to this admin's company
-        const student = await storage.getStudentById(id);
-        if (!student) {
+        existingStudent = await storage.getStudentById(id);
+        if (!existingStudent) {
           return res.status(404).json({ message: "Student not found" });
         }
-        if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+        if (!isMasterAdminUser(user) && existingStudent.companyId !== user.companyId) {
           return res.status(404).json({ message: "Student not found" });
         }
       }
 
       const validatedData = insertStudentSchema.partial().parse(req.body);
+      // Parents may not reassign the parent or the company
+      if (user.role === 'parent') {
+        delete validatedData.parentId;
+      }
+      // A student never moves company: force the existing record's value
+      validatedData.companyId = existingStudent.companyId;
+
+      // FK ids must belong to the student's company. An unchanged parentId is
+      // always allowed (legacy parents outside the company).
+      const fkError = await checkStudentForeignKeys(existingStudent.companyId, validatedData, [existingStudent.parentId]);
+      if (fkError) {
+        return res.status(fkError.status).json({ message: fkError.message });
+      }
+
       const updatedStudent = await storage.updateStudent(id, validatedData);
       
       if (!updatedStudent) {
@@ -2629,6 +2809,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
+      } else if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+        // Admin path (incl. driver_admin): record-by-id 404 masks existence
+        return res.status(404).json({ message: "Student not found" });
       }
       
       res.json(student);
@@ -3700,6 +3883,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { studentId } = req.params;
+      const student = await storage.getStudentById(studentId);
+      if (!student || isOutsideCallerTenant(user, student.companyId)) {
+        return res.status(404).json({ message: "Student not found" });
+      }
       const linkCodes = await storage.getLinkCodesByStudentId(studentId);
 
       res.json(linkCodes);
@@ -3723,6 +3910,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
+      const existingCode = await storage.getLinkCodeById(id);
+      if (!existingCode) {
+        return res.status(404).json({ message: "Link code not found" });
+      }
+      // Owner company: the student's company, falling back to the code's own
+      // companyId (old codes may have a null companyId).
+      const codeStudent = await storage.getStudentById(existingCode.studentId);
+      const codeCompanyId = codeStudent?.companyId ?? existingCode.companyId;
+      if (isOutsideCallerTenant(user, codeCompanyId)) {
+        return res.status(404).json({ message: "Link code not found" });
+      }
       const revoked = await storage.revokeLinkCode(id);
 
       if (!revoked) {
@@ -3751,11 +3949,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { studentId } = req.params;
       const student = await storage.getStudentById(studentId);
-      if (!student) {
+      if (!student || isOutsideCallerTenant(user, student.companyId)) {
         return res.status(404).json({ message: "Student not found" });
       }
 
-      const linkCode = await storage.regenerateLinkCode(studentId, userId);
+      // Parent portal gate, checked against the STUDENT's company so a master
+      // with no company does not skip it.
+      const studentCompany = student.companyId ? await storage.getCompanyById(student.companyId) : undefined;
+      if (!studentCompany?.parentPortalEnabled) {
+        return res.status(403).json({ message: "Link codes require the Parent Portal feature. Upgrade to Professional or Enterprise." });
+      }
+
+      const linkCode = await storage.regenerateLinkCode(studentId, userId, student.companyId);
       res.json(linkCode);
     } catch (error) {
       console.error("Error regenerating link code:", error);
@@ -3777,6 +3982,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { studentId } = req.params;
+      const student = await storage.getStudentById(studentId);
+      if (!student || isOutsideCallerTenant(user, student.companyId)) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+      // Storage projects id, firstName, lastName, email only
       const parents = await storage.getLinkedParentsByStudentId(studentId);
 
       res.json(parents);
@@ -3800,6 +4010,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { studentId, parentId } = req.params;
+      const student = await storage.getStudentById(studentId);
+      if (!student || isOutsideCallerTenant(user, student.companyId)) {
+        return res.status(404).json({ message: "Link not found" });
+      }
       const unlinked = await storage.unlinkParentFromStudent(parentId, studentId);
 
       if (!unlinked) {
@@ -3837,8 +4051,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid code - not found" });
       }
 
+      // Old codes may carry a null companyId: fall back to the student's company
+      let codeCompanyId = linkCodeRecord.companyId;
+      if (!codeCompanyId) {
+        const codeStudent = await storage.getStudentById(linkCodeRecord.studentId);
+        codeCompanyId = codeStudent?.companyId ?? null;
+      }
+
       // Determine company from the link code or the parent's existing company
-      const companyId = user.companyId || linkCodeRecord.companyId;
+      const companyId = user.companyId || codeCompanyId;
       if (companyId) {
         const company = await storage.getCompanyById(companyId);
         if (!company?.parentPortalEnabled) {
@@ -3853,8 +4074,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // If parent doesn't have a company, assign them to the link code's company
-      if (!user.companyId && linkCodeRecord.companyId) {
-        await storage.updateUserCompany(userId, linkCodeRecord.companyId);
+      if (!user.companyId && codeCompanyId) {
+        await storage.updateUserCompany(userId, codeCompanyId);
       }
 
       const student = await storage.getStudentById(result.link!.studentId);

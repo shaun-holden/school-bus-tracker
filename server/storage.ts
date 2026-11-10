@@ -101,6 +101,9 @@ import {
 import { db } from "./db";
 import { eq, and, desc, asc, sql, or, inArray, getTableColumns } from "drizzle-orm";
 
+// Trimmed parent row for admin-facing linked-parent lists (SEC-12).
+export type LinkedParentSummary = Pick<User, 'id' | 'firstName' | 'lastName' | 'email'>;
+
 export interface IStorage {
   // User operations (required for Replit Auth)
   getUser(id: string): Promise<User | undefined>;
@@ -271,14 +274,15 @@ export interface IStorage {
   // Link code operations (Parent-Child linking system)
   generateLinkCode(studentId: string, createdById: string, maxUses?: number, expiresInDays?: number, companyId?: string): Promise<LinkCode>;
   getLinkCodeByCode(code: string): Promise<LinkCode | undefined>;
+  getLinkCodeById(id: string): Promise<LinkCode | undefined>;
   getLinkCodesByStudentId(studentId: string): Promise<LinkCode[]>;
   useLinkCode(code: string, parentId: string): Promise<{ success: boolean; error?: string; link?: ParentChildLink }>;
   revokeLinkCode(codeId: string): Promise<LinkCode | undefined>;
-  regenerateLinkCode(studentId: string, createdById: string): Promise<LinkCode>;
+  regenerateLinkCode(studentId: string, createdById: string, companyId: string | null): Promise<LinkCode>;
   
   // Parent-Child link operations
   getLinkedStudentsByParentId(parentId: string): Promise<Student[]>;
-  getLinkedParentsByStudentId(studentId: string): Promise<User[]>;
+  getLinkedParentsByStudentId(studentId: string): Promise<LinkedParentSummary[]>;
   unlinkParentFromStudent(parentId: string, studentId: string): Promise<boolean>;
   getParentChildLink(parentId: string, studentId: string): Promise<ParentChildLink | undefined>;
 
@@ -1610,7 +1614,7 @@ export class DatabaseStorage implements IStorage {
     
     // Get parent's children's routes (direct children via parentId)
     const directStudents = await db
-      .select({ routeId: students.routeId })
+      .select({ routeId: students.routeId, companyId: students.companyId })
       .from(students)
       .where(eq(students.parentId, parentId));
     
@@ -1626,6 +1630,40 @@ export class DatabaseStorage implements IStorage {
       if (s.routeId) routeIdsSet.add(s.routeId);
     }
     const routeIds = Array.from(routeIdsSet);
+
+    // Parent with no company (SEC-20): never fall back to an unfiltered
+    // "1=1". Global rows are limited to the companies of the parent's direct
+    // and linked children; route rows are already bounded by the children's
+    // route ids.
+    if (!parentCompanyId) {
+      const companyIdsSet = new Set<string>();
+      for (const s of directStudents) {
+        if (s.companyId) companyIdsSet.add(s.companyId);
+      }
+      for (const s of linkedStudents) {
+        if (s.companyId) companyIdsSet.add(s.companyId);
+      }
+      const childCompanyIds = Array.from(companyIdsSet);
+
+      const conditions = [];
+      if (childCompanyIds.length > 0) {
+        conditions.push(and(
+          eq(parentNotifications.isGlobal, true),
+          inArray(parentNotifications.companyId, childCompanyIds)
+        ));
+      }
+      if (routeIds.length > 0) {
+        conditions.push(inArray(parentNotifications.routeId, routeIds));
+      }
+      if (conditions.length === 0) {
+        return [];
+      }
+      return await db
+        .select()
+        .from(parentNotifications)
+        .where(or(...conditions))
+        .orderBy(desc(parentNotifications.createdAt));
+    }
     
     if (routeIds.length === 0) {
       // Only return global notifications for this company
@@ -1635,7 +1673,7 @@ export class DatabaseStorage implements IStorage {
         .where(
           and(
             eq(parentNotifications.isGlobal, true),
-            parentCompanyId ? eq(parentNotifications.companyId, parentCompanyId) : sql`1=1`
+            eq(parentNotifications.companyId, parentCompanyId)
           )
         )
         .orderBy(desc(parentNotifications.createdAt));
@@ -1648,7 +1686,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           sql`(${parentNotifications.isGlobal} = true OR ${parentNotifications.routeId} IN (${sql.join(routeIds.map(id => sql`${id}`), sql`, `)}))`,
-          parentCompanyId ? eq(parentNotifications.companyId, parentCompanyId) : sql`1=1`
+          eq(parentNotifications.companyId, parentCompanyId)
         )
       )
       .orderBy(desc(parentNotifications.createdAt));
@@ -1936,6 +1974,11 @@ export class DatabaseStorage implements IStorage {
     return linkCode;
   }
 
+  async getLinkCodeById(id: string): Promise<LinkCode | undefined> {
+    const [linkCode] = await db.select().from(linkCodes).where(eq(linkCodes.id, id));
+    return linkCode;
+  }
+
   async getLinkCodesByStudentId(studentId: string): Promise<LinkCode[]> {
     return await db
       .select()
@@ -2000,7 +2043,7 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async regenerateLinkCode(studentId: string, createdById: string): Promise<LinkCode> {
+  async regenerateLinkCode(studentId: string, createdById: string, companyId: string | null): Promise<LinkCode> {
     await db.update(linkCodes)
       .set({ status: 'revoked' })
       .where(and(
@@ -2008,7 +2051,7 @@ export class DatabaseStorage implements IStorage {
         eq(linkCodes.status, 'active')
       ));
 
-    return await this.generateLinkCode(studentId, createdById);
+    return await this.generateLinkCode(studentId, createdById, undefined, undefined, companyId || undefined);
   }
 
   // Parent-Child link operations
@@ -2031,7 +2074,8 @@ export class DatabaseStorage implements IStorage {
     return linkedStudents;
   }
 
-  async getLinkedParentsByStudentId(studentId: string): Promise<User[]> {
+  // Returns only id, names and email (never the full user row).
+  async getLinkedParentsByStudentId(studentId: string): Promise<LinkedParentSummary[]> {
     const links = await db
       .select({ parentId: parentChildLinks.parentId })
       .from(parentChildLinks)
@@ -2043,7 +2087,12 @@ export class DatabaseStorage implements IStorage {
 
     const parentIds = links.map(l => l.parentId);
     const linkedParents = await db
-      .select()
+      .select({
+        id: users.id,
+        firstName: users.firstName,
+        lastName: users.lastName,
+        email: users.email,
+      })
       .from(users)
       .where(sql`${users.id} IN (${sql.join(parentIds.map(id => sql`${id}`), sql`, `)})`);
 
