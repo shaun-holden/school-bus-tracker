@@ -589,11 +589,23 @@ export const updateDriverProfileSchema = createInsertSchema(users, {
   emergencyContactName: z.string().min(1, "Emergency contact name is required").optional(),
   emergencyContactPhone: z.string().min(10, "Emergency contact phone must be at least 10 digits").optional(),
   hireDate: z.string().optional(),
-}).omit({
-  id: true,
-  createdAt: true,
-  updatedAt: true,
-  role: true,
+}).pick({
+  // Explicit allow-list (SEC-1 / SEC-2). Anything not listed here is
+  // stripped, including companyId, companyRoleId, departmentId, isActive,
+  // isOnDuty, dutyStartTime, assignedRouteId, lastCheckIn*, role and
+  // profileImageUrl. Do not switch back to an .omit() deny-list.
+  firstName: true,
+  lastName: true,
+  email: true,
+  phone: true,
+  address: true,
+  licenseNumber: true,
+  licenseState: true,
+  licenseExpiryDate: true,
+  dateOfBirth: true,
+  emergencyContactName: true,
+  emergencyContactPhone: true,
+  hireDate: true,
 });
 
 export type UpdateDriverProfile = z.infer<typeof updateDriverProfileSchema>;
@@ -698,6 +710,8 @@ export type InsertDriverShiftReport = typeof driverShiftReports.$inferInsert;
 // Zod schemas for inserts
 export const insertSchoolSchema = createInsertSchema(schools).omit({ id: true, createdAt: true });
 export const insertRouteSchema = createInsertSchema(routes).omit({ id: true, createdAt: true, updatedAt: true });
+// PATCH /api/routes/:id: a route can never be moved to another company (SEC-14)
+export const updateRouteSchema = insertRouteSchema.omit({ companyId: true }).partial();
 export const insertRouteStopSchema = createInsertSchema(routeStops).omit({ id: true, createdAt: true });
 export const insertStudentSchema = createInsertSchema(students).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertAttendanceSchema = createInsertSchema(attendance).omit({ id: true, createdAt: true });
