@@ -2,54 +2,6 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "Coach 🧭",
-      "detail": "Claude window you talk to in plain English; drafts prompts for Dev/Shell",
-      "type": "shell",
-      "command": "claude",
-      "runOptions": { "runOn": "folderOpen" },
-      "presentation": {
-        "group": "dashboard",
-        "panel": "dedicated",
-        "reveal": "always",
-        "focus": false,
-        "echo": false,
-        "showReuseMessage": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Dev 🔨",
-      "detail": "Claude window that writes app code (drives react-builder / express-api)",
-      "type": "shell",
-      "command": "claude",
-      "runOptions": { "runOn": "folderOpen" },
-      "presentation": {
-        "group": "dashboard",
-        "panel": "dedicated",
-        "reveal": "always",
-        "focus": false,
-        "echo": false,
-        "showReuseMessage": false
-      },
-      "problemMatcher": []
-    },
-    {
-      "label": "Shell 🐚",
-      "detail": "Claude window for ops/tests/review/git (never writes app code)",
-      "type": "shell",
-      "command": "claude",
-      "runOptions": { "runOn": "folderOpen" },
-      "presentation": {
-        "group": "dashboard",
-        "panel": "dedicated",
-        "reveal": "always",
-        "focus": false,
-        "echo": false,
-        "showReuseMessage": false
-      },
-      "problemMatcher": []
-    },
-    {
       "label": "🚀 dev",
       "type": "shell",
       "command": "npm run dev",
@@ -82,8 +34,8 @@
       "problemMatcher": []
     },
     {
-      "label": "🟢 Open Dashboard (Coach + Dev + Shell + dev)",
-      "dependsOn": ["Coach 🧭", "Dev 🔨", "Shell 🐚", "🚀 dev", "🌐 open site"],
+      "label": "🟢 Open Dashboard (dev server + site)",
+      "dependsOn": ["🚀 dev", "🌐 open site"],
       "dependsOrder": "parallel",
       "problemMatcher": []
     }
