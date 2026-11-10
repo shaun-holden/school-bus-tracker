@@ -1,14 +1,19 @@
-name: Run Tests
+name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging, production]
   pull_request:
-    branches: [main]
+    branches: [main, staging, production]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  ci:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code
@@ -17,11 +22,18 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # Same major as production (nixpacks.toml nodejs_20).
+          node-version-file: .node-version
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm install
+        run: npm ci
+
+      - name: Type-check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
 
       - name: Run tests
         run: npm test
