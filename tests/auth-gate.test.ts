@@ -93,6 +93,16 @@ describe('isCompanyGateAllowed (SEC-7: unapproved companies)', () => {
     })).toBe(false);
   });
 
+  it('blocks a pending or suspended company even when companyIsActive is true/null [status must be approved]', () => {
+    for (const companyStatus of ['pending_approval', 'suspended', 'rejected']) {
+      for (const companyIsActive of [true, null]) {
+        expect(isCompanyGateAllowed('/api/drivers', {
+          role: 'admin', companyId: 'co-1', companyStatus, companyIsActive,
+        })).toBe(false);
+      }
+    }
+  });
+
   it('blocks a missing company row (companyId set, no status) [approved requirement]', () => {
     expect(isCompanyGateAllowed('/api/drivers', {
       role: 'admin', companyId: 'co-gone', companyStatus: null, companyIsActive: null,
@@ -154,6 +164,11 @@ describe('isCrossSiteWriteBlocked (SEC-18: cross-site writes)', () => {
 
   it('allows GET from a foreign Origin [safe-method pass]', () => {
     expect(isCrossSiteWriteBlocked('GET', '/api/buses', 'https://evil.example', self, allowed)).toBe(false);
+  });
+
+  it('treats a lowercase safe method as safe [method compared uppercased]', () => {
+    expect(isCrossSiteWriteBlocked('get', '/api/buses', 'https://evil.example', self, allowed)).toBe(false);
+    expect(isCrossSiteWriteBlocked('options', '/api/buses', 'https://evil.example', self, allowed)).toBe(false);
   });
 
   it('blocks PATCH and DELETE from a foreign Origin [only GET/HEAD/OPTIONS are safe]', () => {
