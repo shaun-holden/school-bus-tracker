@@ -99,7 +99,7 @@ import {
   type InsertRouteStopCompletion,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, inArray } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, inArray, getTableColumns } from "drizzle-orm";
 
 export interface IStorage {
   // User operations (required for Replit Auth)
@@ -218,7 +218,7 @@ export interface IStorage {
 
   // Driver shift report operations
   createDriverShiftReport(report: InsertDriverShiftReport): Promise<DriverShiftReport>;
-  getDriverShiftReports(driverId?: string): Promise<DriverShiftReport[]>;
+  getDriverShiftReports(driverId?: string, companyId?: string): Promise<DriverShiftReport[]>;
   getDriverShiftReportsByDateRange(startDate: Date, endDate: Date, driverId?: string): Promise<DriverShiftReport[]>;
 
   // Admin request operations
@@ -1499,10 +1499,23 @@ export class DatabaseStorage implements IStorage {
     return newReport;
   }
 
-  async getDriverShiftReports(driverId?: string): Promise<DriverShiftReport[]> {
+  async getDriverShiftReports(driverId?: string, companyId?: string): Promise<DriverShiftReport[]> {
     // Drizzle's .where() returns a narrower select type than the bare
     // .from(), so reassigning to a `let query` loses methods. Build the
     // condition list once instead — same pattern as markConversationAsRead.
+    if (companyId) {
+      // Scope by the DRIVER's company: legacy rows have a NULL
+      // driverShiftReports.companyId, so don't filter on that column.
+      return await db
+        .select(getTableColumns(driverShiftReports))
+        .from(driverShiftReports)
+        .innerJoin(users, eq(users.id, driverShiftReports.driverId))
+        .where(and(
+          eq(users.companyId, companyId),
+          driverId ? eq(driverShiftReports.driverId, driverId) : undefined,
+        ))
+        .orderBy(desc(driverShiftReports.shiftEndTime));
+    }
     return await db
       .select()
       .from(driverShiftReports)

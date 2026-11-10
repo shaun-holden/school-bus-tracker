@@ -65,6 +65,13 @@ function canAccessMessaging(roleOrUser: any): boolean {
   return role === 'parent' || role === 'driver' || role === 'master_admin' || roleOrUser._masterAdminImpersonating === true;
 }
 
+// Password-setup link for invite emails. Uses a trusted base URL, never a
+// request header such as x-forwarded-host.
+function buildPasswordSetupUrl(token: string): string {
+  const base = process.env.APP_URL || (process.env.NODE_ENV === 'production' ? 'https://www.schoolbustracker.org' : `http://localhost:${process.env.PORT || 5000}`);
+  return `${base}/driver/password-setup?token=${token}`;
+}
+
 // Batch-load school + route for a list of students. Replaces the N+1 pattern
 // of fetching each related record inside a Promise.all(map) loop.
 async function enrichStudentsWithSchoolAndRoute(students: any[]): Promise<any[]> {
@@ -558,8 +565,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           await sendDriverInvitationEmail(
             driver.email,
             `${driver.firstName || ''} ${driver.lastName || ''}`.trim() || 'Driver',
-            token,
-            companyName
+            companyName,
+            buildPasswordSetupUrl(token)
           );
 
           console.log(`Driver invitation email sent to ${driver.email}`);
@@ -620,9 +627,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         await storage.createDriverInvitation(newEmployee.id, email, requestingUser.companyId!, tokenHash, expiresAt);
 
-        const protocol = req.headers['x-forwarded-proto'] || req.protocol;
-        const host = req.headers['x-forwarded-host'] || req.get('host');
-        const setupUrl = `${protocol}://${host}/driver/password-setup?token=${token}`;
+        const setupUrl = buildPasswordSetupUrl(token);
 
         await sendEmployeeInvitationEmail(email, `${firstName} ${lastName}`.trim(), role, companyName, setupUrl);
       } catch (emailError) {
@@ -711,9 +716,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Driver does not have an email address" });
       }
 
-      // Check if driver belongs to same company
+      // Check if driver belongs to same company. 404 (not 403) masks existence.
       if (driver.companyId !== user.companyId) {
-        return res.status(403).json({ message: "Cannot send invitation to driver from different company" });
+        return res.status(404).json({ message: "Driver not found" });
       }
 
       // Check if driver already has password set up
@@ -738,8 +743,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await sendDriverInvitationEmail(
         driver.email,
         `${driver.firstName || ''} ${driver.lastName || ''}`.trim() || 'Driver',
-        token,
-        companyName
+        companyName,
+        buildPasswordSetupUrl(token)
       );
 
       res.json({ message: "Invitation sent successfully" });
@@ -1020,22 +1025,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/buses/:id', isAuthenticated, async (req: any, res) => {
     try {
       const { id } = req.params;
-      const updateData = req.body;
       const userId = req.user?.id;
-      
+
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
-      
+
       const user = await storage.getUser(userId);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
-      console.log('=== BUS UPDATE REQUEST ===');
-      console.log('Bus ID:', id);
-      console.log('Update data:', JSON.stringify(updateData, null, 2));
-      
       // Get the current bus to check if it exists
       const existingBus = await storage.getBusById(id);
       if (!existingBus) {
@@ -1043,6 +1043,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (!isMasterAdminUser(user) && existingBus.companyId !== user.companyId) {
         return res.status(404).json({ message: "Bus not found" });
+      }
+
+      // companyId and currentRouteId are never accepted from the body.
+      const updateData = insertBusSchema
+        .omit({ companyId: true, currentRouteId: true })
+        .partial()
+        .parse(req.body);
+
+      // A bus must never point at another tenant's driver (master admin included).
+      if (updateData.driverId) {
+        const driver = await storage.getUser(updateData.driverId);
+        if (!driver || !isDriverRole(driver.role) || driver.companyId !== existingBus.companyId) {
+          return res.status(404).json({ message: "Driver not found" });
+        }
       }
 
       // Check for duplicate driver assignment if driverId is being updated
@@ -1058,15 +1072,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           });
         }
-      }
-      
-      // Special handling for status changes to maintenance
-      if (updateData.status === 'maintenance' && existingBus.status !== 'maintenance') {
-        console.log('Moving bus to maintenance mode');
-        updateData.maintenanceDate = new Date();
-        
-        // If the bus was assigned to a driver and going into maintenance, 
-        // we might want to notify them, but we'll keep the assignment for now
       }
       
       if (updateData.status === 'inactive' && existingBus.status !== 'inactive') {
@@ -1087,9 +1092,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       console.log('Bus updated successfully:', updatedBus.id);
       res.json(updatedBus);
-      
+
     } catch (error) {
       console.error("Error updating bus:", error);
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid bus data", errors: error.errors });
+      }
       res.status(500).json({ message: "Failed to update bus" });
     }
   });
@@ -1133,61 +1141,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: error.message });
       }
       res.status(500).json({ message: 'Failed to delete bus' });
-    }
-  });
-
-  // Driver selects their bus and activates it
-  app.post('/api/driver/select-bus/:busId', isAuthenticated, async (req: any, res) => {
-    try {
-      const { busId } = req.params;
-      const userId = req.user?.id;
-      
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized - no user ID" });
-      }
-      
-      const user = await storage.getUser(userId);
-      if (!user || !isDriverRole(user.role)) {
-        return res.status(403).json({ message: "Unauthorized - driver required" });
-      }
-
-      console.log('=== DRIVER BUS SELECTION ===');
-      console.log('Driver ID:', userId);
-      console.log('Bus ID:', busId);
-      
-      // Get the bus to ensure it exists and is available
-      const bus = await storage.getBusById(busId);
-      if (!bus) {
-        return res.status(404).json({ message: "Bus not found" });
-      }
-      
-      // Check if bus is available for assignment (not under maintenance or assigned to another driver)
-      if (bus.status === 'maintenance') {
-        return res.status(400).json({ message: "Bus is under maintenance and cannot be selected" });
-      }
-      
-      if (bus.driverId && bus.driverId !== userId) {
-        return res.status(400).json({ message: "Bus is already assigned to another driver" });
-      }
-      
-      // Assign the bus to the driver and set it to active mode
-      const updatedBus = await storage.updateBus(busId, {
-        driverId: userId,
-        status: 'on_route', // Set to active mode
-        lastUpdated: new Date(),
-      });
-      
-      console.log('Bus assigned and activated:', updatedBus);
-      
-      res.json({
-        message: "Bus selected and activated successfully",
-        bus: updatedBus,
-        status: "active"
-      });
-      
-    } catch (error) {
-      console.error("Error selecting bus:", error);
-      res.status(500).json({ message: "Failed to select bus" });
     }
   });
 
@@ -1605,17 +1558,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Route stops
-  app.get('/api/routes/:routeId/stops', isAuthenticated, async (req: any, res) => {
-    try {
-      const { routeId } = req.params;
-      const stops = await storage.getStopsByRouteId(routeId);
-      res.json(stops);
-    } catch (error) {
-      console.error("Error fetching route stops:", error);
-      res.status(500).json({ message: "Failed to fetch route stops" });
-    }
-  });
-
   app.post('/api/routes/:routeId/stops', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -1940,45 +1882,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.put('/api/buses/:id', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized - no user ID" });
-      }
-      
-      const user = await storage.getUser(userId);
-      
-      if (!user || !isAdminRole(user.role)) {
-        return res.status(403).json({ message: "Unauthorized - admin required" });
-      }
-
-      const { id } = req.params;
-      const existingBus = await storage.getBusById(id);
-      if (!existingBus) {
-        return res.status(404).json({ message: "Bus not found" });
-      }
-      if (!isMasterAdminUser(user) && existingBus.companyId !== user.companyId) {
-        return res.status(404).json({ message: "Bus not found" });
-      }
-
-      const validatedData = insertBusSchema.parse(req.body);
-      const bus = await storage.updateBus(id, validatedData);
-
-      if (!bus) {
-        return res.status(404).json({ message: "Bus not found" });
-      }
-
-      res.json(bus);
-    } catch (error: any) {
-      console.error("Error updating bus:", error);
-      if (error?.name === 'ZodError') {
-        return res.status(400).json({ message: "Invalid bus data", errors: error.errors });
-      }
-      res.status(500).json({ message: "Failed to update bus" });
-    }
-  });
-
   // Driver activates their route (updates bus to on_route status)
   app.post('/api/driver/activate-route', isAuthenticated, async (req: any, res) => {
     try {
@@ -2122,17 +2025,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Vehicle issues
-  app.get('/api/buses/:busId/issues', isAuthenticated, async (req: any, res) => {
-    try {
-      const { busId } = req.params;
-      const issues = await storage.getIssuesByBusId(busId);
-      res.json(issues);
-    } catch (error) {
-      console.error("Error fetching vehicle issues:", error);
-      res.status(500).json({ message: "Failed to fetch vehicle issues" });
-    }
-  });
-
   app.post('/api/vehicle-issues', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -2340,6 +2232,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           const studentAttendance = user.assignedRouteId ? await storage.getTodaysStudentAttendance(userId, user.assignedRouteId, tz) : [];
 
           const shiftReport = {
+            companyId: user.companyId ?? null,
             driverId: userId,
             driverName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown Driver',
             busId: assignedBus?.id || null,
@@ -2536,10 +2429,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
-      // Drivers can only see their own reports, admins can see all
+      // Drivers can only see their own reports; admins see their company's
+      // (scoped by the driver's company — old rows have a NULL companyId).
       let reports;
       if (isAdminRole(user.role)) {
-        reports = await storage.getDriverShiftReports();
+        const scope = companyScope(user);
+        if (scope === null) return res.json([]);
+        reports = await storage.getDriverShiftReports(undefined, scope);
       } else if (user.role === 'driver') {
         reports = await storage.getDriverShiftReports(userId);
       } else {
@@ -2549,27 +2445,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.json(reports);
     } catch (error) {
       console.error("Error fetching driver shift reports:", error);
-      res.status(500).json({ message: "Failed to fetch shift reports" });
-    }
-  });
-
-  app.get('/api/driver-shift-reports/:driverId', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized - no user ID" });
-      }
-      
-      const user = await storage.getUser(userId);
-      if (!user || !isAdminRole(user.role)) {
-        return res.status(403).json({ message: "Unauthorized - admin access required" });
-      }
-
-      const { driverId } = req.params;
-      const reports = await storage.getDriverShiftReports(driverId);
-      res.json(reports);
-    } catch (error) {
-      console.error("Error fetching driver shift reports by ID:", error);
       res.status(500).json({ message: "Failed to fetch shift reports" });
     }
   });
@@ -2594,38 +2469,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Student management routes
-  app.get('/api/students', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized - no user ID" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user) {
-        return res.status(404).json({ message: "User not found" });
-      }
-
-      let students;
-      if (isAdminRole(user.role)) {
-        const scope = companyScope(user);
-        if (scope === null) return res.json([]);
-        students = await storage.getAllStudents(scope);
-      } else if (user.role === 'parent') {
-        students = await storage.getStudentsByParentId(userId);
-      } else {
-        return res.status(403).json({ message: "Unauthorized access" });
-      }
-
-      const enrichedStudents = await enrichStudentsWithSchoolAndRoute(students || []);
-
-      res.json(enrichedStudents);
-    } catch (error) {
-      console.error("Error fetching students:", error);
-      res.status(500).json({ message: "Failed to fetch students" });
-    }
-  });
-
   app.post('/api/students', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -2795,30 +2638,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Get students by route
-  app.get('/api/routes/:routeId/students', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized - no user ID" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user || (!isAdminRole(user.role) && !isDriverRole(user.role))) {
-        return res.status(403).json({ message: "Unauthorized - admin or driver access required" });
-      }
-
-      const { routeId } = req.params;
-      const students = await storage.getStudentsByRouteId(routeId);
-      const enrichedStudents = await enrichStudentsWithSchoolAndRoute(students || []);
-
-      res.json(enrichedStudents);
-    } catch (error) {
-      console.error("Error fetching students by route:", error);
-      res.status(500).json({ message: "Failed to fetch students by route" });
-    }
-  });
-
   // Get stops for a route
   app.get('/api/routes/:routeId/stops', isAuthenticated, async (req: any, res) => {
     try {
@@ -2833,8 +2652,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { routeId } = req.params;
+      // Tenant scope on URL-supplied routeId. 404 (not 403) masks existence.
+      const route = await storage.getRouteById(routeId);
+      if (!route) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
       const stops = await storage.getStopsByRouteId(routeId);
-      
+
       res.json(stops);
     } catch (error) {
       console.error("Error fetching stops by route:", error);
@@ -4593,34 +4421,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Reset route stops (called when driver starts a new run)
-  app.post('/api/driver/reset-route-stops', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user || !isDriverRole(user.role)) {
-        return res.status(403).json({ message: "Only drivers can reset stops" });
-      }
-
-      const { routeId } = req.body;
-      if (!routeId) {
-        return res.status(400).json({ message: "Route ID is required" });
-      }
-
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
-      const tz = company?.timezone || 'UTC';
-      await storage.resetRouteStops(routeId, tz);
-      res.json({ success: true, message: "Route stops reset" });
-    } catch (error) {
-      console.error("Error resetting route stops:", error);
-      res.status(500).json({ message: "Failed to reset stops" });
-    }
-  });
-
   // ============ BLUETOOTH CHECK-IN ROUTES ============
 
   // Parent enables check-in for a student (broadcasts student ID)
@@ -5427,128 +5227,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // BUS JOURNEY TRACKING ENDPOINTS
   // ============================================
 
-  // Driver starts a journey (called when driver checks in)
-  app.post('/api/journey/start', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user || !isDriverRole(user.role)) {
-        return res.status(403).json({ message: "Only drivers can start journeys" });
-      }
-
-      if (!user.companyId) {
-        return res.status(400).json({ message: "Driver must be associated with a company" });
-      }
-
-      const { busId, routeId, homebaseAddress } = req.body;
-      if (!busId || !routeId) {
-        return res.status(400).json({ message: "Bus ID and route ID are required" });
-      }
-
-      // Verify bus belongs to driver's company
-      const bus = await storage.getBusById(busId);
-      if (!bus || bus.companyId !== user.companyId) {
-        return res.status(403).json({ message: "Bus not found or not in your company" });
-      }
-
-      // Check if there's already a journey for this bus today
-      const company = await storage.getCompanyById(user.companyId);
-      const tz = company?.timezone || 'UTC';
-      const existingJourney = await storage.getTodayBusJourney(busId, tz);
-      if (existingJourney) {
-        return res.json({ journey: existingJourney, message: "Journey already started today" });
-      }
-
-      const journey = await storage.createBusJourney(
-        busId,
-        userId,
-        routeId,
-        user.companyId,
-        homebaseAddress
-      );
-
-      res.json({ journey, message: "Journey started" });
-    } catch (error) {
-      console.error("Error starting journey:", error);
-      res.status(500).json({ message: "Failed to start journey" });
-    }
-  });
-
-  // Driver updates journey event (arrive/depart school, arrive homebase)
-  app.post('/api/journey/event', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user || !isDriverRole(user.role)) {
-        return res.status(403).json({ message: "Only drivers can update journey events" });
-      }
-
-      const { busId, eventType, schoolId } = req.body;
-      if (!busId || !eventType) {
-        return res.status(400).json({ message: "Bus ID and event type are required" });
-      }
-
-      const validEvents = ['depart_homebase', 'arrive_school', 'depart_school', 'arrive_homebase'];
-      if (!validEvents.includes(eventType)) {
-        return res.status(400).json({ message: "Invalid event type" });
-      }
-
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
-      const tz = company?.timezone || 'UTC';
-      const journey = await storage.getTodayBusJourney(busId, tz);
-      if (!journey) {
-        return res.status(404).json({ message: "No active journey found for this bus today" });
-      }
-
-      const updated = await storage.updateJourneyEvent(journey.id, eventType, schoolId);
-      res.json({ journey: updated, message: `Journey event '${eventType}' recorded` });
-    } catch (error) {
-      console.error("Error updating journey event:", error);
-      res.status(500).json({ message: "Failed to update journey event" });
-    }
-  });
-
-  // Get today's journey for a bus
-  app.get('/api/journey/today/:busId', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-      const { busId } = req.params;
-
-      // Tenant scope on URL-supplied busId. 404 (not 403) masks existence.
-      const bus = await storage.getBusById(busId);
-      if (!bus) {
-        return res.status(404).json({ message: "Bus not found" });
-      }
-      if (!isMasterAdminUser(user) && bus.companyId !== user.companyId) {
-        return res.status(404).json({ message: "Bus not found" });
-      }
-
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
-      const tz = company?.timezone || 'UTC';
-      const journey = await storage.getTodayBusJourney(busId, tz);
-      res.json(journey || null);
-    } catch (error) {
-      console.error("Error fetching today's journey:", error);
-      res.status(500).json({ message: "Failed to fetch journey" });
-    }
-  });
-
   // Admin: Get journey reports for date range
   app.get('/api/reports/journeys', isAuthenticated, async (req: any, res) => {
     try {
@@ -5602,30 +5280,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching journey reports:", error);
       res.status(500).json({ message: "Failed to fetch journey reports" });
-    }
-  });
-
-  // Admin: Get journey history for a specific bus
-  app.get('/api/reports/journeys/bus/:busId', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await storage.getUser(userId);
-      if (!user || !isAdminRole(user.role)) {
-        return res.status(403).json({ message: "Only admins can view journey reports" });
-      }
-
-      const { busId } = req.params;
-      const limit = req.query.limit ? parseInt(req.query.limit as string) : 30;
-
-      const journeys = await storage.getBusJourneysByBus(busId, limit);
-      res.json(journeys);
-    } catch (error) {
-      console.error("Error fetching bus journey history:", error);
-      res.status(500).json({ message: "Failed to fetch bus journey history" });
     }
   });
 
