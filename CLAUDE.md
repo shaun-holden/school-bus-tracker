@@ -10,7 +10,7 @@ Run from the repo root.
 - `npm run build` — production build: `vite build` emits the client to `dist/public`, then `esbuild` bundles the server to `dist/index.js`.
 - `npm start` — run the built server. Requires a prior `npm run build`.
 - `npm run check` — TypeScript check (`tsc --noEmit`). There is no separate lint step; type-check is the gate.
-- `npm test` — run the full vitest suite. CI runs this on push/PR to `main` (`.github/workflows/test.yml`).
+- `npm test` — run the full vitest suite. CI runs this on push/PR to `main` (`.github/workflows/ci.yml`, job `ci`, with a `postgres:17` service). Locally `npm test` needs Postgres 17 on port 5433 and `TEST_DATABASE_URL` (a local `*_test` DB) in `.env`; `npm run test:unit` runs without a DB.
 - `npm run test:watch`, `npm run test:coverage` — same runner, different modes.
 - `npm run db:push` — apply `shared/schema.ts` to Postgres via Drizzle Kit (requires `DATABASE_URL`).
 
@@ -43,7 +43,7 @@ Deployed on Railway. Build and deploy settings live in the Railway dashboard (Co
 
 **Big central files.** `server/routes.ts` (5200+ lines, 120+ handlers) and `server/storage.ts` (2800+ lines, one `DatabaseStorage` class implementing `IStorage`). When adding a feature, the pattern is: new handler in `routes.ts`, new method on `IStorage` + `DatabaseStorage`. There is no per-domain file split yet — splitting would be a multi-hour refactor worth its own PR. `shared/schema.ts` (~30 tables) is the single source of truth for DB shape and client-side Zod validation.
 
-**Multi-tenant model.** Nearly every table carries `companyId` referencing `companies`. A "company" is a tenant (school district, camp, etc.). Two helpers at the top of `routes.ts` are load-bearing:
+**Multi-tenant model.** Nearly every table carries `companyId` referencing `companies`. A "company" is a tenant (school district, camp, etc.). Two helpers in `server/tenant.ts` (pure, no imports; `routes.ts` imports them, along with `isOutsideCallerTenant`, `hasId` and the role helpers) are load-bearing:
 
 - `isMasterAdminUser(user)` — true for `role === 'master_admin'` or `user._masterAdminImpersonating === true`.
 - `companyScope(user)` — returns `undefined` for master-admin (no filter), the string `companyId` for a normal admin, or `null` if the user has no company (caller must short-circuit with `[]`).
@@ -54,9 +54,9 @@ Deployed on Railway. Build and deploy settings live in the Railway dashboard (Co
 - *Creates* (POST): after `zodSchema.parse(req.body)`, force `validatedData.companyId = user.companyId ?? null`. Never trust a `companyId` from the body.
 - *List reads* (GET collections): `const scope = companyScope(user); if (scope === null) return res.json([]); const rows = await storage.getAllX(scope);`. The `getAll*` methods take an optional `companyId` filter.
 
-Master admin can impersonate a tenant via `POST /api/master-admin/impersonate/:companyId`. Impersonation rewrites `user.companyId` at the session layer, so all the guards above work unchanged without special cases.
+Master admin can impersonate a tenant via `POST /api/master-admin/impersonate/:companyId`. Impersonation rewrites `user.companyId` at the session layer, so all the guards above work unchanged without special cases, except handlers that re-fetch the user with `storage.getUser` (SEC-45/DUP-2, pinned by an `it.fails` test, fix queued as Q7).
 
-**Roles.** `parent`, `driver`, `admin`, `driver_admin`, `master_admin`. Helpers in `routes.ts`: `isAdminRole`, `isDriverRole`, `isParentRole`, plus `isMasterAdminUser`.
+**Roles.** `parent`, `driver`, `admin`, `driver_admin`, `master_admin`. Helpers in `server/tenant.ts`: `isAdminRole`, `isDriverRole`, `isParentRole`, `canAccessMessaging`, plus `isMasterAdminUser`.
 
 **Name collision to avoid.** `registerRoutes` declares a middleware `const isMasterAdmin = (req, res, next) => ...` around line 4650 (for master-admin-only routes). That `const` shadows any module-level function of the same name for the entire `registerRoutes` scope. That's why the boolean helper is `isMasterAdminUser`, not `isMasterAdmin`. Do not reintroduce the collision by renaming it back.
 
@@ -70,9 +70,9 @@ Master admin can impersonate a tenant via `POST /api/master-admin/impersonate/:c
 
 **Parent-child linking.** Admins generate codes like `TNT-483921` via `/api/link-codes`. Parents redeem at `/api/link-child`. The relationship is many-to-many through `parentChildLinks`. For parent-facing reads of a parent's kids, use `storage.getLinkedStudentsByParentId(userId)`, **not** `getStudentsByParentId(userId)` — the latter only returns students where `students.parentId === userId` (the single-parent shortcut) and misses the link-code flow.
 
-**Capacitor / iOS.** The iOS app serves the bundled React build (`dist/public`) from `capacitor://localhost` in a WKWebView; the API stays on `https://www.schoolbustracker.org`, so **every API call is cross-origin**. This is handled by the Phase A CORS allowlist (`ALLOWED_ORIGINS` in `server/index.ts`) plus the `SameSite=None; Secure` production session cookie (`server/customAuth.ts`). The `PRODUCTION_SERVER_URL` env var in `capacitor.config.ts` is the code-free rollback escape hatch: set it to resurrect the old behavior where the WKWebView loads the remote site directly (same-origin, no CORS). App id `com.TopNotchTrainingCenter.SchoolBusTracker`. Plugins: PushNotifications, Geolocation, StatusBar, Keyboard, Haptics. `capacitor.config.ts` controls this. Any server change that alters cookie policy or auth redirects should be tested in the iOS app, not just the browser.
+**Capacitor / iOS.** The iOS app serves the bundled React build (`dist/public`) from `capacitor://localhost` in a WKWebView; the API stays on `https://www.schoolbustracker.org`, so **every API call is cross-origin**. This is handled by the Phase A CORS allowlist (`ALLOWED_ORIGINS` in `server/origins.ts`) plus the `SameSite=None; Secure` production session cookie (`server/customAuth.ts`). The `PRODUCTION_SERVER_URL` env var in `capacitor.config.ts` is the code-free rollback escape hatch: set it to resurrect the old behavior where the WKWebView loads the remote site directly (same-origin, no CORS). App id `com.TopNotchTrainingCenter.SchoolBusTracker`. Plugins: PushNotifications, Geolocation, StatusBar, Keyboard, Haptics. `capacitor.config.ts` controls this. Any server change that alters cookie policy or auth redirects should be tested in the iOS app, not just the browser.
 
-**Cross-origin readiness (Phase A, shipped 2026-05-17).** Server has CORS middleware (`cors` npm package) at `server/index.ts`, registered between the Stripe webhook raw-body handler and `app.use(express.json())`. Allowlist is exported as `ALLOWED_ORIGINS` and includes `capacitor://localhost`, `ionic://localhost`, `http://localhost`, `https://www.schoolbustracker.org`, and `https://schoolbustracker.org`. Disallowed origins receive a clean 403 via `callback(null, false)` — no 500s in logs from rejected origins. The middleware is inert for same-origin web traffic (browser doesn't trigger preflights). Allowlist is regression-tested in `tests/cors.test.ts`.
+**Cross-origin readiness (Phase A, shipped 2026-05-17).** Server has CORS middleware (`cors` npm package) in the `createApp()` middleware chain in `server/app.ts`, registered between the Stripe webhook raw-body handler and `app.use(express.json())`. Allowlist is exported as `ALLOWED_ORIGINS` and includes `capacitor://localhost`, `ionic://localhost`, `http://localhost`, `https://www.schoolbustracker.org`, and `https://schoolbustracker.org`. Disallowed origins receive a clean 403 via `callback(null, false)` — no 500s in logs from rejected origins. The middleware is inert for same-origin web traffic (browser doesn't trigger preflights). Allowlist is regression-tested in `tests/cors.test.ts`.
 
 Client has an `apiUrl(path)` helper at `client/src/lib/apiBase.ts`. It returns the path unchanged on web (no-op for same-origin) and prepends `import.meta.env.VITE_API_BASE_URL` (or falls back to `https://www.schoolbustracker.org`) when `Capacitor.isNativePlatform()` is true. All `fetch('/api/...')` call sites in the client are wrapped: `queryClient.ts` (default fetcher), `App.tsx` (role PATCH), `pages/admin-dashboard.tsx` (6 sites), `pages/driver-password-setup.tsx`. The wrap is also a no-op for web because `getApiBase()` returns an empty string.
 
@@ -88,7 +88,7 @@ A passive `<OfflineBanner />` component at `client/src/components/shared/Offline
 
 ## Tests
 
-Vitest, configured in `vitest.config.ts`. Tests live in `tests/` (not colocated). Suite covers schema validation, role/tenant access, plan limits, bus-status transitions, driver and parent features, input validation, and auth. Coverage is shallow relative to the handler count — roughly 10%. When you add tenant-sensitive logic, extend `tests/multi-tenant.test.ts`.
+Vitest, configured in `vitest.config.ts`. Tests live in `tests/` (not colocated). Suite covers schema validation, role/tenant access, plan limits, bus-status transitions, driver and parent features, input validation, and auth. Coverage is shallow relative to the handler count — roughly 10%. When you add tenant-sensitive logic, add an HTTP-level test under `tests/integration/` whose title names the guard clause whose deletion turns it red, with the foreign row seeded so it is reachable (checklist X-1/X-2).
 
 **Perf & security checklist.** `docs/perf-security-checklist.md` is the merge checklist (OWASP / CWE-sourced, IDs T/S/P/M/X).
 - Every new or changed tenant query path needs a cross-tenant test that names the clause whose deletion turns it red (section X).
