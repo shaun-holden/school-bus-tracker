@@ -45,46 +45,83 @@ Railway settings live in the dashboard only. There is no `railway.json` and no `
 
 ## Apply the schema and (re)seed
 
-Do this in a **plain terminal**, never in a Claude window, and never via the `!` prefix: that records into the session transcript. Set ONLY the staging database address, and only in that terminal. Paste the commands **one line at a time**; there are no comments inside the blocks, because zsh treats a pasted `#` comment as arguments.
+Do this in a **plain terminal**, never in a Claude window, and never via the `!` prefix: that records into the session transcript. Paste the commands **one line at a time**; there are no comments inside the blocks, because zsh treats a pasted `#` comment as arguments.
+
+Staging Postgres has no public URL on purpose; don't turn on TCP Proxy. You reach it through a local tunnel that `railway connect` opens on `127.0.0.1:6544`.
+
+**The tunnel line decides which database you reach.** It must name `Postgres-cKuC` and `--environment staging`. If it doesn't, don't run anything after it.
 
 **Before you start:**
-- `DATABASE_PUBLIC_URL` exists only when **TCP Proxy / Public Networking** is turned on for `Postgres-cKuC` in the Railway dashboard (staging's public host is `*.proxy.rlwy.net`). Turn it on before reseeding. It can stay on (fake data only, password-protected) or be turned off afterwards.
-- The seed's `MASTER_ADMIN_EMAIL` check only works if that variable is exported in **this** terminal: `railway run --service Postgres-cKuC` injects the database's variables, not the app's. Export the staging master-admin email first (the same value as the staging app's `MASTER_ADMIN_EMAIL`).
+- **Point the app at its database.** The staging **app** service's `DATABASE_URL` must be the reference `${{Postgres-cKuC.DATABASE_URL}}` (fixed in the dashboard on 2026-11-10). Check it in the Railway dashboard before reseeding.
+- The seed's `MASTER_ADMIN_EMAIL` check only works if that variable is exported in **this** terminal: `railway run --service Postgres-cKuC` injects the database's variables, not the app's. Step 4 exports it (the same value as the staging app's `MASTER_ADMIN_EMAIL`).
 
 **1. Link the project and select staging.** Pick the School Bus project when `railway link` asks. `railway status` must show environment **staging**; if it doesn't, stop.
 
 ```sh
+cd ~/Projects/school-bus-tracker
 railway link
 railway environment staging
 railway status
 ```
 
-**2. Check the host FIRST.** It must print the STAGING Postgres host (`*.proxy.rlwy.net`, from `Postgres-cKuC`). If it prints anything else, stop.
+**2. Open the tunnel in the background.** The first line starts it, the second remembers its process id, and `jobs` must show it as **running**.
 
 ```sh
-railway run --environment staging --service Postgres-cKuC sh -c 'node -e "console.log(new URL(process.env.DATABASE_PUBLIC_URL).host)"'
+railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544 > /tmp/sbt-tunnel.log 2>&1 &
+TUNNEL_PID=$!
+jobs
 ```
 
-**3. Apply the schema.** `db:push` has no data guard of its own, which is why the host check comes first.
+If `jobs` shows the tunnel as `exit 1`, the port is usually already in use by an old tunnel. Find it with the first line below and stop it with `kill <the PID it shows>` (replace the placeholder including the angle brackets), or use another port in every line of this section. `cat /tmp/sbt-tunnel.log` shows the tunnel's own error.
 
 ```sh
-railway run --environment staging --service Postgres-cKuC sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" npm run db:push'
+lsof -nP -iTCP:6544 -sTCP:LISTEN
 ```
 
-**4. Export the staging master-admin email and read the seed password.** `read -rs` doesn't echo the password, which keeps it out of shell history. In the first line, replace `<the staging master-admin email>` **including the angle brackets** (zsh reads a leftover `<` as a redirect). In the second, type a staging-only password (at least 12 characters) and press Enter.
+Wait a few seconds, then check the tunnel is up. It must print `tunnel-up`; run it again if it fails straight after step 2.
 
 ```sh
-export MASTER_ADMIN_EMAIL=<the staging master-admin email>
+sleep 5
+nc -z 127.0.0.1 6544 && echo tunnel-up
+```
+
+**3. Apply the schema.** `db:push` has no data guard of its own, which is why the tunnel line must name staging.
+
+```sh
+railway run --environment staging --service Postgres-cKuC sh -c 'DATABASE_URL="postgresql://$PGUSER:$PGPASSWORD@127.0.0.1:6544/$PGDATABASE" npm run db:push'
+```
+
+The single quotes stop your terminal from expanding `$PGUSER`, `$PGPASSWORD` and `$PGDATABASE`. They reach `sh` unchanged, `railway run` fills them in with `Postgres-cKuC`'s own values, and the password never shows on screen or in shell history.
+
+**If the database was empty,** restart the staging app service in the Railway dashboard now, so it creates the master admin from its `MASTER_ADMIN_EMAIL` / `MASTER_ADMIN_PASSWORD` on boot. Log in at https://school-bus-tracker-staging.up.railway.app as that master admin before you seed.
+
+**4. Export the staging master-admin email and read the seed password.** In the first line, replace `REPLACE-WITH-STAGING-MASTER-EMAIL` with the staging master-admin email, keeping the single quotes around it. The second line waits for you to type a staging-only password (at least 12 characters) and press Enter; `read -rs` doesn't echo it, which keeps it out of shell history. The third line must print **12 or more**. If it prints `0`, the `read` was skipped (this happens when several lines are pasted at once): run the second line again on its own.
+
+```sh
+export MASTER_ADMIN_EMAIL='REPLACE-WITH-STAGING-MASTER-EMAIL'
 read -rs STAGING_SEED_PASSWORD && export STAGING_SEED_PASSWORD
+echo ${#STAGING_SEED_PASSWORD}
 ```
 
-**5. Seed.** It can be re-run, because every row is upserted.
+**5. Seed.** It can be re-run, because every row is upserted. Through the tunnel it prints `host=127.0.0.1`; that's expected, and the company and user guards below still refuse any database that holds anything but seed data.
 
 ```sh
-railway run --environment staging --service Postgres-cKuC sh -c 'DATABASE_URL="$DATABASE_PUBLIC_URL" SEED_TARGET=staging npx tsx scripts/seed-staging.ts'
+railway run --environment staging --service Postgres-cKuC sh -c 'DATABASE_URL="postgresql://$PGUSER:$PGPASSWORD@127.0.0.1:6544/$PGDATABASE" SEED_TARGET=staging npx tsx scripts/seed-staging.ts'
 ```
 
-The app's own `DATABASE_URL` is Railway's internal address, which only works inside Railway, so these commands use the staging Postgres's public address. Once `DATABASE_URL` is set in a terminal, the generic host check is `node -e 'console.log(new URL(process.env.DATABASE_URL).host)'`.
+**6. Close the tunnel.**
+
+```sh
+kill $TUNNEL_PID
+```
+
+**Alternative: two terminals.** Instead of step 2, open a second plain terminal and leave this running in it (it closes with Ctrl-C when you're done):
+
+```sh
+railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544
+```
+
+Then run steps 1 and 3–5 in the first terminal, skip step 6, and close the second terminal's tunnel with Ctrl-C at the end.
 
 ### What the seed refuses
 It exits 1 and writes nothing if any of these fail:
