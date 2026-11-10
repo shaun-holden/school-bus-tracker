@@ -35,11 +35,9 @@ describe('S1 companyScope via GET /api/schools', () => {
   });
 });
 
-describe('SEC-45 / DUP-2 impersonation (known failure)', () => {
+describe('SEC-45 / DUP-2 impersonation', () => {
   let impersonator: Agent;
 
-  // Preconditions live here, outside it.fails, so a broken login or
-  // impersonation fails the file instead of "passing" the known failure.
   beforeAll(async () => {
     impersonator = await h.loginAs('master');
     const imp = await impersonator.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({});
@@ -48,14 +46,9 @@ describe('SEC-45 / DUP-2 impersonation (known failure)', () => {
     expect(me.body).toMatchObject({ role: 'master_admin', companyId: h.ids.companyA, _masterAdminImpersonating: true });
   });
 
-  // Today GET /api/schools re-fetches the user with storage.getUser(), which
-  // drops the impersonation overlay (companyId), so companyScope() sees the
-  // real master_admin and returns A+B. Once DUP-2 makes handlers use the
-  // req.user overlay, this starts passing: change it.fails to it.
-  it.fails('SEC-45/DUP-2: master impersonating A sees only A schools (red until handlers use the req.user overlay)', async () => {
+  it('SEC-45/DUP-2: master impersonating A sees only A schools (red if companyScope bypasses on isMasterAdminUser instead of isUnscopedMaster, or if GET /api/schools re-fetches with storage.getUser instead of getCaller(req))', async () => {
     const res = await impersonator.get('/api/schools');
-    // A non-200 does not throw here, so it.fails turns red and gets looked at.
-    if (res.status !== 200) return;
+    expect(res.status).toBe(200);
     expect(ids(res.body)).toEqual([h.ids.schoolA]);
   });
 });

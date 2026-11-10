@@ -1,10 +1,13 @@
 import { describe, it, expect } from 'vitest';
 // Unit tests for the pure helpers in server/tenant.ts that had no test of
-// their own: isOutsideCallerTenant, hasId, isParentRole, canAccessMessaging
-// and the user-object form of isDriverRole. (isMasterAdminUser / companyScope
+// their own: isUnscopedMaster, isOutsideCallerTenant, hasId, isParentRole,
+// canAccessMessaging and the user-object form of isDriverRole, plus the
+// impersonation cases of companyScope. (isMasterAdminUser / companyScope
 // are covered in tests/multi-tenant.test.ts, isAdminRole / isDriverRole string
 // form in tests/role-access.test.ts.)
 import {
+  isUnscopedMaster,
+  companyScope,
   isOutsideCallerTenant,
   hasId,
   isDriverRole,
@@ -38,14 +41,64 @@ describe('tenant - isOutsideCallerTenant (record-by-id 404 guard)', () => {
     expect(isOutsideCallerTenant(undefined, null)).toBe(true);
   });
 
-  it('master admin (role or impersonating flag) is never outside', () => {
+  it('a non-impersonating master admin is never outside', () => {
     expect(isOutsideCallerTenant({ role: 'master_admin', companyId: null }, 'co-2')).toBe(false);
     expect(isOutsideCallerTenant({ role: 'master_admin' }, null)).toBe(false);
-    expect(isOutsideCallerTenant({ role: 'admin', companyId: 'co-1', _masterAdminImpersonating: true }, 'co-2')).toBe(false);
+    expect(isOutsideCallerTenant({ role: 'master_admin', _masterAdminImpersonating: false }, 'co-2')).toBe(false);
+  });
+
+  it('an impersonating master is scoped to the impersonated company (red if isOutsideCallerTenant bypasses on isMasterAdminUser instead of isUnscopedMaster)', () => {
+    const imp = { role: 'master_admin', companyId: 'co-1', _masterAdminImpersonating: true };
+    expect(isOutsideCallerTenant(imp, 'co-1')).toBe(false);
+    expect(isOutsideCallerTenant(imp, 'co-2')).toBe(true);
+    expect(isOutsideCallerTenant(imp, null)).toBe(true);
+  });
+
+  it('the impersonation flag on a non-master does not exempt', () => {
+    expect(isOutsideCallerTenant({ role: 'admin', companyId: 'co-1', _masterAdminImpersonating: true }, 'co-2')).toBe(true);
+    expect(isOutsideCallerTenant({ role: 'admin', companyId: 'co-1', _masterAdminImpersonating: true }, 'co-1')).toBe(false);
   });
 
   it('_masterAdminImpersonating: false does not exempt', () => {
     expect(isOutsideCallerTenant({ role: 'admin', companyId: 'co-1', _masterAdminImpersonating: false }, 'co-2')).toBe(true);
+  });
+});
+
+describe('tenant - isUnscopedMaster (the only tenant bypass)', () => {
+  it('a master admin who is not impersonating is unscoped', () => {
+    expect(isUnscopedMaster({ role: 'master_admin' })).toBe(true);
+    expect(isUnscopedMaster({ role: 'master_admin', companyId: null })).toBe(true);
+    expect(isUnscopedMaster({ role: 'master_admin', _masterAdminImpersonating: false })).toBe(true);
+  });
+
+  it('an impersonating master admin is scoped (red if isUnscopedMaster ignores _masterAdminImpersonating)', () => {
+    expect(isUnscopedMaster({ role: 'master_admin', companyId: 'co-1', _masterAdminImpersonating: true })).toBe(false);
+  });
+
+  it('no other role is unscoped, with or without the flag', () => {
+    for (const role of ['admin', 'driver_admin', 'driver', 'parent', undefined]) {
+      expect(isUnscopedMaster({ role })).toBe(false);
+      expect(isUnscopedMaster({ role, _masterAdminImpersonating: true })).toBe(false);
+    }
+  });
+
+  it('null / undefined are not unscoped', () => {
+    expect(isUnscopedMaster(null)).toBe(false);
+    expect(isUnscopedMaster(undefined)).toBe(false);
+  });
+});
+
+describe('tenant - companyScope impersonation cases', () => {
+  it('non-impersonating master: undefined (sees all)', () => {
+    expect(companyScope({ role: 'master_admin', companyId: null })).toBeUndefined();
+  });
+
+  it('impersonating master: the impersonated companyId (red if companyScope bypasses on isMasterAdminUser)', () => {
+    expect(companyScope({ role: 'master_admin', companyId: 'co-1', _masterAdminImpersonating: true })).toBe('co-1');
+  });
+
+  it('impersonating master with no companyId: null (sees nothing, never unscoped)', () => {
+    expect(companyScope({ role: 'master_admin', companyId: null, _masterAdminImpersonating: true })).toBeNull();
   });
 });
 

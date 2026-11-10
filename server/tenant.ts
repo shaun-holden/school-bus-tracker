@@ -1,24 +1,38 @@
+// "Has master powers": true for a master admin, impersonating or not. Use it
+// for power checks (master-only actions, role rules), NOT for tenant bypass.
 export function isMasterAdminUser(user: any): boolean {
   return user?.role === 'master_admin' || user?._masterAdminImpersonating === true;
 }
 
+// True only for a master admin who is NOT impersonating. This is the one
+// caller that skips tenant scoping. An impersonating master is acting as the
+// impersonated school, so it is scoped to that company like its admins
+// (SEC-45/DUP-2). Use this (not isMasterAdminUser) for tenant bypass.
+export function isUnscopedMaster(user: any): boolean {
+  return user?.role === 'master_admin' && user?._masterAdminImpersonating !== true;
+}
+
 // Returns the companyId filter to apply on list/read endpoints:
-//   undefined → caller should see everything (master-admin)
+//   undefined → caller should see everything (master-admin, not impersonating;
+//               an impersonating master is scoped to the impersonated company)
 //   string    → caller should be scoped to that companyId
 //   null      → caller should see nothing (authenticated but no company);
 //               handler should short-circuit with an empty list.
 // Keep these three states distinct — conflating null and undefined would
 // silently give unprivileged users an unscoped read.
 export function companyScope(user: any): string | undefined | null {
-  if (isMasterAdminUser(user)) return undefined;
+  // isUnscopedMaster, not isMasterAdminUser: impersonation scopes to the school.
+  if (isUnscopedMaster(user)) return undefined;
   return user?.companyId ?? null;
 }
 
-// Record-by-id tenant guard: true when a non-master caller must get a 404
-// for a record owned by `recordCompanyId`. A non-master caller with no
-// company matches nothing (so null === null never grants access).
+// Record-by-id tenant guard: true when the caller must get a 404 for a record
+// owned by `recordCompanyId`. Only a non-impersonating master is exempt; an
+// impersonating master is checked against the impersonated company
+// (impersonation scopes to the school). A scoped caller with no company
+// matches nothing (so null === null never grants access).
 export function isOutsideCallerTenant(user: any, recordCompanyId: string | null | undefined): boolean {
-  if (isMasterAdminUser(user)) return false;
+  if (isUnscopedMaster(user)) return false;
   return !user?.companyId || recordCompanyId !== user.companyId;
 }
 

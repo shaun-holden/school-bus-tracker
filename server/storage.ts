@@ -290,7 +290,7 @@ export interface IStorage {
   sendDirectMessage(message: InsertDirectMessage): Promise<DirectMessage>;
   getConversation(userId1: string, userId2: string, studentId?: string, companyId?: string): Promise<DirectMessage[]>;
   getConversationsForUser(userId: string, companyId?: string): Promise<{ recipientId: string; recipientName: string; lastMessage: string; unreadCount: number; lastMessageAt: Date }[]>;
-  markMessageAsRead(messageId: string): Promise<DirectMessage | undefined>;
+  markMessageAsRead(messageId: string, recipientId: string): Promise<DirectMessage | undefined>;
   markConversationAsRead(userId: string, otherUserId: string, companyId?: string): Promise<void>;
   getUnreadMessageCount(userId: string, companyId?: string): Promise<number>;
   getDriversForParent(parentId: string, companyId?: string): Promise<User[]>;
@@ -2197,11 +2197,11 @@ export class DatabaseStorage implements IStorage {
     return conversations.sort((a, b) => b.lastMessageAt.getTime() - a.lastMessageAt.getTime());
   }
 
-  async markMessageAsRead(messageId: string): Promise<DirectMessage | undefined> {
+  async markMessageAsRead(messageId: string, recipientId: string): Promise<DirectMessage | undefined> {
     const [updated] = await db
       .update(directMessages)
       .set({ isRead: true, readAt: new Date() })
-      .where(eq(directMessages.id, messageId))
+      .where(and(eq(directMessages.id, messageId), eq(directMessages.recipientId, recipientId)))
       .returning();
     return updated;
   }
