@@ -8,6 +8,7 @@ import { setupVite, serveStatic, log } from "./vite";
 import { WebhookHandlers } from './webhookHandlers';
 import { seedMasterAdmin } from '../scripts/seed-master-admin';
 import { isCrossSiteWriteBlocked } from './authGate';
+import { pool } from "./db";
 
 export const ALLOWED_ORIGINS = [
   'capacitor://localhost',
@@ -72,6 +73,29 @@ app.use((req, res, next) => {
     return res.status(403).json({ message: 'Cross-site request blocked' });
   }
   next();
+});
+
+// Public DB health check. Registered before registerRoutes() and the SPA
+// catch-all so it can't be shadowed, and outside /api so the company gate and
+// the Origin guard don't apply. Fixed body only: no version, commit or error
+// details are ever returned.
+app.get('/healthz', async (_req: Request, res: Response) => {
+  res.set('Cache-Control', 'no-store');
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      pool.query('SELECT 1'),
+      new Promise((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error('Health check timed out after 3000ms')), 3000);
+      }),
+    ]);
+    res.status(200).json({ ok: true });
+  } catch (error: any) {
+    console.error('Health check failed:', error?.message ?? String(error));
+    res.status(503).json({ ok: false });
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 });
 
 // JSON bodies only. express.urlencoded was removed (HF3 / SEC-18) so plain

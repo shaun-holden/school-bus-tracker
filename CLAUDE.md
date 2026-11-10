@@ -19,7 +19,7 @@ Filter by name: `npx vitest run -t "pattern"`
 
 One-off scripts live in `scripts/`: `seed-master-admin.ts`, `seed-stripe-products.ts`, and `setup-native.sh` for local Capacitor setup.
 
-Deployed on Railway via nixpacks (`nixpacks.toml`, `railway.json`). Health check hits `/`.
+Deployed on Railway. Build and deploy settings live in the Railway dashboard (Config as Code / `railway.json` was retired before Railway's 2026-12-01 cutoff). Builder: Railpack, Node pinned to 20 via `package.json` `engines` and `.node-version`. Health check: `GET /healthz` (DB ping).
 
 ## Architecture
 
