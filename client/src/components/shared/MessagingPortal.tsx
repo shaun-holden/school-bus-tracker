@@ -10,6 +10,7 @@ import { MessageCircle, Send, ArrowLeft, Users, Loader2, AlertCircle } from "luc
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { formatDistanceToNow } from "date-fns";
 import { useToast } from "@/hooks/use-toast";
+import { formatRole } from "@/lib/roleLabel";
 
 interface Contact {
   id: string;
@@ -151,8 +152,8 @@ export function MessagingPortal({ currentUserId, userRole }: MessagingPortalProp
               <CardTitle className="text-base" data-testid="text-contact-name">
                 {selectedContact.name}
               </CardTitle>
-              <p className="text-sm text-muted-foreground capitalize">
-                {selectedContact.role}
+              <p className="text-sm text-muted-foreground">
+                {formatRole(selectedContact.role)}
               </p>
             </div>
           </div>
@@ -381,8 +382,8 @@ export function MessagingPortal({ currentUserId, userRole }: MessagingPortalProp
                   </Avatar>
                   <div className="flex-1 min-w-0">
                     <span className="font-medium">{contact.name}</span>
-                    <p className="text-sm text-muted-foreground capitalize">
-                      {contact.role}
+                    <p className="text-sm text-muted-foreground">
+                      {formatRole(contact.role)}
                     </p>
                   </div>
                 </button>

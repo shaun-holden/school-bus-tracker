@@ -34,7 +34,7 @@ export default function ParentNotifications() {
   }
 
   return (
-    <div className="font-inter bg-background text-gray-800 min-h-screen">
+    <div className="font-inter bg-background text-gray-800 min-h-screen safe-area-page-below-nav">
       <Navigation />
       
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-6">

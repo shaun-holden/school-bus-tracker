@@ -29,8 +29,9 @@ export default function Navigation() {
     window.location.href = '/';
   };
 
+  // Q31: the page wrapper (.safe-area-page-below-nav) insets left/right; the negative margins let the bar span the full width while its padding keeps content clear of the notch.
   return (
-    <nav className="bg-primary shadow-lg sticky top-0 z-50" style={{ paddingTop: 'env(safe-area-inset-top)', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}>
+    <nav className="bg-primary shadow-lg sticky top-0 z-50" style={{ paddingTop: 'env(safe-area-inset-top)', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)', marginLeft: 'calc(-1 * env(safe-area-inset-left))', marginRight: 'calc(-1 * env(safe-area-inset-right))' }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center min-w-0 flex-1">

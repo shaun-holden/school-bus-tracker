@@ -15,7 +15,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export default function PrivacyPolicy() {
   return (
-    <div className="min-h-screen bg-slate-50" data-testid="page-privacy">
+    <div className="min-h-screen bg-slate-50 safe-area-page" data-testid="page-privacy">
       <header className="bg-blue-700 text-white">
         <div className="mx-auto max-w-3xl px-6 py-6">
           <Link

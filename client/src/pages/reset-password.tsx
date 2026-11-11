@@ -69,7 +69,7 @@ export default function ResetPasswordPage() {
 
   if (!token) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-orange-50 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-orange-50 flex items-center justify-center p-4 safe-area-page">
         <Card className="w-full max-w-md" data-testid="reset-password-card">
           <CardHeader className="text-center">
             <div className="flex justify-center mb-4">
@@ -94,7 +94,7 @@ export default function ResetPasswordPage() {
 
   if (resetSuccess) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-orange-50 flex items-center justify-center p-4">
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-orange-50 flex items-center justify-center p-4 safe-area-page">
         <Card className="w-full max-w-md" data-testid="reset-success-card">
           <CardHeader className="text-center">
             <div className="flex justify-center mb-4">
@@ -118,7 +118,7 @@ export default function ResetPasswordPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-orange-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-orange-50 flex items-center justify-center p-4 safe-area-page">
       <Card className="w-full max-w-md" data-testid="reset-password-card">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">

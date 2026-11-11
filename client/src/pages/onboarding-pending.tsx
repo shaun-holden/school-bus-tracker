@@ -31,7 +31,7 @@ export default function OnboardingPending() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 safe-area-page">
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
       </div>
     );
@@ -85,7 +85,7 @@ export default function OnboardingPending() {
   const statusInfo = getStatusInfo();
 
   return (
-    <div className="min-h-screen bg-gray-50 py-12 px-4">
+    <div className="min-h-screen bg-gray-50 py-12 px-4 safe-area-page">
       <div className="max-w-lg mx-auto">
         <Card>
           <CardHeader className="text-center">

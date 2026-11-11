@@ -14,7 +14,7 @@ function Faq({ q, children }: { q: string; children: React.ReactNode }) {
 
 export default function Support() {
   return (
-    <div className="min-h-screen bg-slate-50" data-testid="page-support">
+    <div className="min-h-screen bg-slate-50 safe-area-page" data-testid="page-support">
       <header className="bg-blue-700 text-white">
         <div className="mx-auto max-w-3xl px-6 py-6">
           <Link

@@ -8,6 +8,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { Users, Car, Shield, Lock } from "lucide-react";
 import { useLocation } from "wouter";
+import { formatRole } from "@/lib/roleLabel";
 
 const roles = [
   {
@@ -48,7 +49,7 @@ export default function RoleSelection() {
 
   if (!isAdmin && (userRole === 'parent' || userRole === 'driver')) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+      <div className="min-h-screen bg-background flex items-center justify-center p-6 safe-area-page">
         <Card className="max-w-md w-full text-center">
           <CardHeader>
             <div className="flex justify-center mb-4">
@@ -105,7 +106,7 @@ export default function RoleSelection() {
   };
 
   return (
-    <div className="min-h-screen bg-background p-6">
+    <div className="min-h-screen bg-background p-6 safe-area-page">
       <div className="max-w-6xl mx-auto">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-gray-900 mb-4">
@@ -175,7 +176,7 @@ export default function RoleSelection() {
           {(user as any)?.role && (
             <div className="mt-4">
               <p className="text-sm text-gray-500 mb-2">
-                Current role: <span className="font-medium capitalize">{(user as any).role}</span>
+                Current role: <span className="font-medium">{formatRole((user as any).role)}</span>
               </p>
               <Button
                 variant="outline"

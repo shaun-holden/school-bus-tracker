@@ -183,7 +183,7 @@ export default function MasterAdminDashboard() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center safe-area-page">
         <div className="flex items-center gap-2 text-lg text-gray-600">
           <RefreshCw className="w-5 h-5 animate-spin" />
           Loading platform data...
@@ -193,7 +193,7 @@ export default function MasterAdminDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 safe-area-page">
       {/* Header */}
       <header className="bg-white border-b px-6 py-4 shadow-sm">
         <div className="flex justify-between items-center max-w-7xl mx-auto">

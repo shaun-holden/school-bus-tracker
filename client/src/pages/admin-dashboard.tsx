@@ -2717,7 +2717,7 @@ export default function AdminDashboard() {
   });
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background safe-area-page-below-nav">
       {isImpersonating && (
         <div className="bg-orange-500 text-white px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2">

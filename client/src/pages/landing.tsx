@@ -44,7 +44,7 @@ export default function Landing() {
 
   if (showRoleSelection) {
     return (
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen bg-background safe-area-page">
         {/* Navigation */}
         <nav className="bg-primary shadow-lg">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -139,7 +139,7 @@ export default function Landing() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background safe-area-page">
       {/* Navigation */}
       <nav className="bg-primary shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

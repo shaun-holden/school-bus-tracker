@@ -1104,7 +1104,7 @@ export default function DriverDashboard() {
       ];
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background safe-area-page-below-nav">
       <AppNavigation />
       
       {/* Header */}

@@ -70,7 +70,7 @@ export default function ParentDashboard() {
   }
 
   return (
-    <div className="font-inter bg-background text-gray-800 min-h-screen">
+    <div className="font-inter bg-background text-gray-800 min-h-screen safe-area-page-below-nav">
       <Navigation />
       
       <RoleHeader

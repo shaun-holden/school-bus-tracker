@@ -28,7 +28,7 @@ export default function OnboardingSuccess() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-emerald-100">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-green-50 to-emerald-100 safe-area-page">
         <Loader2 className="w-8 h-8 animate-spin text-green-500" />
       </div>
     );
@@ -38,7 +38,7 @@ export default function OnboardingSuccess() {
   const isApproved = status?.status === 'approved';
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-gradient-to-br from-green-50 to-emerald-100 flex items-center justify-center p-4 safe-area-page">
       <Card className="w-full max-w-md text-center">
         <CardHeader>
           <div className="mx-auto mb-4 w-16 h-16 rounded-full flex items-center justify-center bg-green-100">

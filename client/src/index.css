@@ -139,6 +139,27 @@
   }
 }
 
+@layer components {
+  /* Q31: iOS safe-area insets (env() is 0 on the web, so desktop/Safari is unchanged).
+     Transparent borders instead of padding so the inset ADDS to the page's own
+     p-4 / p-6 / py-12 padding instead of fighting it, and background-origin:
+     border-box keeps the page background (gradients too) under the notch. */
+  .safe-area-page {
+    border-style: solid;
+    border-color: transparent;
+    border-width: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background-origin: border-box;
+  }
+
+  /* Pages that render <Navigation />: Navigation owns the top inset, so no top here. */
+  .safe-area-page-below-nav {
+    border-style: solid;
+    border-color: transparent;
+    border-width: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    background-origin: border-box;
+  }
+}
+
 @layer utilities {
   .text-primary {
     color: var(--primary);

@@ -60,14 +60,14 @@ export default function OnboardingPlans() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center safe-area-page">
         <Loader2 className="w-8 h-8 animate-spin text-blue-500" />
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 py-12 px-4 safe-area-page">
       <div className="max-w-5xl mx-auto">
         <div className="text-center mb-12">
           <h1 className="text-3xl font-bold text-gray-900 mb-4" data-testid="text-page-title">
