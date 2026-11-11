@@ -258,10 +258,15 @@ describe('Multi-Tenant - companyScope', () => {
     expect(companyScope({ role: 'master_admin' })).toBeUndefined();
   });
 
-  it('returns undefined for impersonating session (still treated as master)', () => {
-    // Important: impersonation rewrites user.companyId at the session layer
-    // but the master flag survives, so storage queries remain unscoped.
-    expect(companyScope({ role: 'admin', companyId: 'co-1', _masterAdminImpersonating: true })).toBeUndefined();
+  it('returns the impersonated companyId for an impersonating master (impersonation scopes to the school; red if companyScope bypasses on isMasterAdminUser instead of isUnscopedMaster)', () => {
+    // Impersonation rewrites user.companyId at the session layer and sets the
+    // flag; the impersonating master is then scoped like an admin of that company.
+    expect(companyScope({ role: 'master_admin', companyId: 'co-1', _masterAdminImpersonating: true })).toBe('co-1');
+  });
+
+  it('a non-master carrying the impersonation flag is scoped to its own companyId', () => {
+    expect(companyScope({ role: 'admin', companyId: 'co-1', _masterAdminImpersonating: true })).toBe('co-1');
+    expect(companyScope({ role: 'admin', companyId: null, _masterAdminImpersonating: true })).toBeNull();
   });
 
   it('returns the user companyId for tenant admin', () => {

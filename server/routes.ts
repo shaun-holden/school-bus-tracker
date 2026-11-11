@@ -19,7 +19,23 @@ import { z } from "zod";
 import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
-import { isMasterAdminUser, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
+import { isMasterAdminUser, isUnscopedMaster, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
+
+// Re-fetch the CALLER (never another user). Keeps the fresh DB row (current
+// role and isActive) and re-applies the impersonation overlay for a master
+// admin who is impersonating, reading the same session field the overlay
+// middleware uses. Without this, a re-fetch drops the overlay and an
+// impersonating master looks unscoped (SEC-45/DUP-2).
+// The result is a view of the caller: NEVER pass it (or a spread of it) to a
+// storage.update* call — the master's own row must keep companyId null.
+async function getCaller(req: any) {
+  const fresh = await storage.getUser(req.user?.id);
+  if (!fresh) return fresh;
+  if (fresh.role === 'master_admin' && req.session?.impersonatedCompanyId) {
+    return { ...fresh, companyId: req.session.impersonatedCompanyId as string, _masterAdminImpersonating: true };
+  }
+  return fresh;
+}
 
 // FK tenant checks. Each returns false (caller answers 404) when the record is
 // missing or not in `companyId`. A null/empty `companyId` matches nothing.
@@ -210,7 +226,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/company-users', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -229,7 +245,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/my-company', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role) || !user.companyId) {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -244,7 +260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/my-company', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role) || !user.companyId) {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -292,14 +308,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Check if user exists. A target in another company gets the same 404
-      // as a missing one (masks existence). A non-master caller with no
-      // company matches nobody.
+      // as a missing one (masks existence). A scoped caller with no company
+      // matches nobody. An impersonating master is scoped to the impersonated
+      // company (requestingUser is req.user, which carries the overlay).
       const existingUser = await storage.getUser(id);
+      // Power check only (master may grant admin roles); not a tenant bypass.
       const callerIsMaster = isMasterAdminUser(requestingUser);
       if (!existingUser) {
         return res.status(404).json({ message: "User not found" });
       }
-      if (!callerIsMaster && (!requestingUser.companyId || existingUser.companyId !== requestingUser.companyId)) {
+      if (isOutsideCallerTenant(requestingUser, existingUser.companyId)) {
         return res.status(404).json({ message: "User not found" });
       }
 
@@ -348,7 +366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -376,7 +394,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -401,7 +419,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -426,7 +444,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -457,7 +475,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -488,7 +506,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !user.companyId) {
         return res.status(400).json({ message: "No company associated with user" });
       }
@@ -517,7 +535,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver access required" });
       }
@@ -555,7 +573,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -625,7 +643,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/employees/invite', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const requestingUser = await storage.getUser(userId);
+      const requestingUser = await getCaller(req);
       if (!requestingUser || !isAdminRole(requestingUser.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -690,7 +708,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -699,7 +717,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!targetDriver) {
         return res.status(404).json({ message: "Driver not found" });
       }
-      if (!isMasterAdminUser(user) && targetDriver.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && targetDriver.companyId !== user.companyId) {
         return res.status(404).json({ message: "Driver not found" });
       }
       // Only driver profiles are editable here (not admins or parents)
@@ -747,7 +765,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -889,7 +907,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -914,7 +932,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/admin-requests', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -1025,7 +1043,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/admin-requests', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
 
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
@@ -1040,7 +1058,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!targetDriver) {
           return res.status(404).json({ message: "Driver not found" });
         }
-        if (!isMasterAdminUser(user) && targetDriver.companyId !== user.companyId) {
+        if (!isUnscopedMaster(user) && targetDriver.companyId !== user.companyId) {
           return res.status(404).json({ message: "Driver not found" });
         }
       }
@@ -1076,7 +1094,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -1086,7 +1104,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingBus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isMasterAdminUser(user) && existingBus.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && existingBus.companyId !== user.companyId) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -1159,7 +1177,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -1168,7 +1186,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!bus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isMasterAdminUser(user) && bus.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && bus.companyId !== user.companyId) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -1200,7 +1218,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
@@ -1233,7 +1251,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/students', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -1294,7 +1312,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/routes', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -1320,7 +1338,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/available-routes', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -1341,7 +1359,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/available-buses', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -1379,7 +1397,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/driver-route-students', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -1403,7 +1421,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/driver-route-stops', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -1425,7 +1443,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/driver-route-schools', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -1446,7 +1464,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/routes', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -1512,7 +1530,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/routes/:id', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -1525,7 +1543,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingRoute) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isMasterAdminUser(user) && existingRoute.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && existingRoute.companyId !== user.companyId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -1615,7 +1633,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/routes/:routeId/stops', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
 
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -1628,7 +1646,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -1645,7 +1663,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/schools', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -1662,7 +1680,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/schools', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
 
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -1683,7 +1701,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/schools/:id', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -1692,7 +1710,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existing) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isMasterAdminUser(user) && existing.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && existing.companyId !== user.companyId) {
         return res.status(404).json({ message: "School not found" });
       }
       const updated = await storage.updateSchool(id, req.body);
@@ -1710,7 +1728,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.delete('/api/schools/:id', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -1719,7 +1737,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!school) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isMasterAdminUser(user) && school.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && school.companyId !== user.companyId) {
         return res.status(404).json({ message: "School not found" });
       }
       await storage.deleteSchool(id);
@@ -1734,7 +1752,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/attendance', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -1777,7 +1795,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/attendance', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -1802,7 +1820,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -1833,7 +1851,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         console.error('User not found:', userId);
         return res.status(401).json({ message: "User not found" });
@@ -1945,7 +1963,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver access required" });
       }
@@ -1992,7 +2010,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver access required" });
       }
@@ -2038,7 +2056,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       // Allow both drivers and admins to update location (admins for testing)
       if (!user || (!isDriverRole(user.role) && !isAdminRole(user.role))) {
@@ -2061,7 +2079,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingBus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isMasterAdminUser(user) && existingBus.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && existingBus.companyId !== user.companyId) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -2082,7 +2100,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/vehicle-issues', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -2103,7 +2121,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/driver-tasks', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user) {
         return res.status(404).json({ message: "User not found" });
@@ -2130,7 +2148,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/driver-tasks', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -2155,7 +2173,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/driver-tasks/:taskId/complete', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -2176,7 +2194,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/students/:studentId/absence', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -2214,7 +2232,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/driver/profile', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -2242,7 +2260,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.patch('/api/driver/duty-status', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -2381,7 +2399,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/driver-check-in', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
@@ -2408,7 +2426,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!selectedDriver || !checkInRoute || !checkInBus) {
         return res.status(404).json({ message: "Not found" });
       }
-      if (!isMasterAdminUser(user) && (
+      if (!isUnscopedMaster(user) && (
         !user.companyId ||
         selectedDriver.companyId !== user.companyId ||
         checkInRoute.companyId !== user.companyId ||
@@ -2525,7 +2543,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -2554,7 +2572,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/on-duty-drivers', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admins only" });
@@ -2577,7 +2595,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || (!isAdminRole(user.role) && !isParentRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - admin or parent access required" });
       }
@@ -2620,7 +2638,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -2642,7 +2660,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!existingStudent) {
           return res.status(404).json({ message: "Student not found" });
         }
-        if (!isMasterAdminUser(user) && existingStudent.companyId !== user.companyId) {
+        if (!isUnscopedMaster(user) && existingStudent.companyId !== user.companyId) {
           return res.status(404).json({ message: "Student not found" });
         }
       }
@@ -2685,7 +2703,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -2706,7 +2724,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!student) {
           return res.status(404).json({ message: "Student not found" });
         }
-        if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+        if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
           return res.status(404).json({ message: "Student not found" });
         }
       }
@@ -2731,7 +2749,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -2751,7 +2769,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
-      } else if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+      } else if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
         // Admin path (incl. driver_admin): record-by-id 404 masks existence
         return res.status(404).json({ message: "Student not found" });
       }
@@ -2771,7 +2789,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || (!isAdminRole(user.role) && !isDriverRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - admin or driver access required" });
       }
@@ -2782,7 +2800,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -2800,7 +2818,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/routes/:routeId/schools/reorder', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
@@ -2824,7 +2842,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
@@ -2846,7 +2864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
@@ -2864,7 +2882,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!parentSchool) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isMasterAdminUser(user)) {
+      if (!isUnscopedMaster(user)) {
         if (parentRoute.companyId !== user.companyId) {
           return res.status(404).json({ message: "Route not found" });
         }
@@ -2914,7 +2932,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
@@ -2926,7 +2944,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -2955,7 +2973,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
@@ -2982,7 +3000,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
@@ -3052,7 +3070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
@@ -3120,7 +3138,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get('/api/driver/today-journey', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
@@ -3144,7 +3162,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post('/api/driver/arrive-homebase', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
@@ -3177,7 +3195,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || (!isDriverRole(user.role) && !isAdminRole(user.role))) {
         return res.status(403).json({ message: "Unauthorized - driver or admin required" });
       }
@@ -3213,7 +3231,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
@@ -3259,7 +3277,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3275,7 +3293,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -3309,7 +3327,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3332,7 +3350,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
@@ -3353,7 +3371,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
@@ -3374,7 +3392,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
@@ -3454,7 +3472,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3504,7 +3522,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
@@ -3526,7 +3544,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
@@ -3547,7 +3565,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3578,7 +3596,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3616,7 +3634,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
@@ -3655,7 +3673,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -3707,7 +3725,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
       }
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
@@ -3731,7 +3749,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
       
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -3766,7 +3784,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3792,7 +3810,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify the student belongs to this admin's company before issuing a
       // link code — otherwise an admin in Company A could hand out a code that
       // grants a parent live tracking of Company B's student.
-      if (!isMasterAdminUser(user) && student.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
         return res.status(404).json({ message: "Student not found" });
       }
 
@@ -3819,7 +3837,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3846,7 +3864,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3884,7 +3902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3918,7 +3936,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3946,7 +3964,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
@@ -3977,7 +3995,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
+      // A master admin (impersonating or not) never links children: the
+      // redeem below writes companyId onto the caller's own row, and the
+      // master's row must keep companyId null. Checked before any write.
+      if (user?.role === 'master_admin') {
+        return res.status(403).json({ message: "Master admins can't link children" });
+      }
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent role required" });
       }
@@ -4040,7 +4064,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - parent role required" });
       }
@@ -4063,12 +4087,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -4124,12 +4148,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -4158,12 +4182,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
@@ -4199,12 +4223,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
 
-      if (!canAccessMessaging(user.role)) {
+      if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can send messages" });
       }
 
@@ -4273,7 +4297,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
@@ -4303,8 +4327,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
+      // Only the recipient may mark a message read. Anyone else gets the same
+      // 404 as a missing message (masks existence).
       const { messageId } = req.params;
-      const updated = await storage.markMessageAsRead(messageId);
+      const updated = await storage.markMessageAsRead(messageId, userId);
 
       if (!updated) {
         return res.status(404).json({ message: "Message not found" });
@@ -4327,7 +4353,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can update location" });
       }
@@ -4381,7 +4407,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can access this" });
       }
@@ -4409,7 +4435,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can mark stops" });
       }
@@ -4485,7 +4511,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
       }
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user) {
         return res.status(401).json({ message: "Unauthorized" });
       }
@@ -4498,7 +4524,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -4520,7 +4546,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can access this" });
       }
@@ -4594,7 +4620,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can enable check-in" });
       }
@@ -4630,7 +4656,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can disable check-in" });
       }
@@ -4666,7 +4692,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can view check-in status" });
       }
@@ -4712,7 +4738,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can view attendance" });
       }
@@ -4752,7 +4778,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isParentRole(user.role)) {
         return res.status(403).json({ message: "Only parents can set check-in status" });
       }
@@ -4810,7 +4836,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can confirm boarding" });
       }
@@ -4887,7 +4913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can confirm drop-off" });
       }
@@ -4940,7 +4966,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can view waiting check-ins" });
       }
@@ -4955,7 +4981,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isMasterAdminUser(user) && route.companyId !== user.companyId) {
+      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -5123,7 +5149,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !user.companyId) {
         return res.status(404).json({ message: "Company not found" });
       }
@@ -5155,7 +5181,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !user.companyId) {
         return res.status(404).json({ message: "Company not found" });
       }
@@ -5253,7 +5279,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role) || !user.companyId) {
         return res.status(403).json({ message: "Only company admins can create checkout sessions" });
       }
@@ -5364,7 +5390,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !user.companyId) {
         return res.status(404).json({ message: "No company associated with user" });
       }
@@ -5398,7 +5424,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const user = await storage.getUser(userId);
+      const user = await getCaller(req);
       if (!user || !isAdminRole(user.role)) {
         return res.status(403).json({ message: "Only admins can view journey reports" });
       }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { insertParentNotificationSchema, insertDirectMessageSchema, insertLinkCodeSchema } from '@shared/schema';
+import { canAccessMessaging } from '../server/tenant';
 
 describe('Parent Features - Absence Reporting', () => {
   function canReportAbsence(params: {
@@ -226,10 +227,8 @@ describe('Parent Features - Notification Schema', () => {
   });
 });
 
+// The real helper (server/tenant.ts), not an inline copy.
 describe('Parent Features - Messaging Access Control', () => {
-  function canAccessMessaging(role: string): boolean {
-    return role === 'parent' || role === 'driver';
-  }
 
   it('should allow parents to access messaging', () => {
     expect(canAccessMessaging('parent')).toBe(true);
@@ -243,8 +242,16 @@ describe('Parent Features - Messaging Access Control', () => {
     expect(canAccessMessaging('admin')).toBe(false);
   });
 
-  it('should deny master_admin from messaging', () => {
+  it('should deny master_admin from messaging (role string)', () => {
     expect(canAccessMessaging('master_admin')).toBe(false);
+  });
+
+  it('should deny a non-impersonating master_admin user object', () => {
+    expect(canAccessMessaging({ role: 'master_admin', companyId: null })).toBe(false);
+  });
+
+  it('should allow a master_admin who is impersonating a school', () => {
+    expect(canAccessMessaging({ role: 'master_admin', companyId: 'company-1', _masterAdminImpersonating: true })).toBe(true);
   });
 
   it('should deny unknown roles from messaging', () => {

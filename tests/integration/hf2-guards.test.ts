@@ -99,14 +99,14 @@ describe('SEC-2 PUT /api/driver/profile', () => {
 });
 
 describe('SEC-3 PATCH /api/users/:id/role', () => {
-  it("adminA changing company B's driverB2 gets 404 and the role is unchanged (red if `if (!callerIsMaster && (!requestingUser.companyId || existingUser.companyId !== requestingUser.companyId))` 404 is removed)", async () => {
+  it("adminA changing company B's driverB2 gets 404 and the role is unchanged (red if the `isOutsideCallerTenant(requestingUser, existingUser.companyId)` 404 is removed)", async () => {
     const res = await adminA.patch(`/api/users/${h.ids.driverB2}/role`).send({ role: 'parent' });
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ message: 'User not found' });
     expect((await getUser(h.ids.driverB2)).role).toBe('driver');
   });
 
-  it("adminA targeting the company-less master gets 404, not the master_admin 403 (red if `if (!callerIsMaster && (!requestingUser.companyId || existingUser.companyId !== requestingUser.companyId))` 404 is removed)", async () => {
+  it("adminA targeting the company-less master gets 404, not the master_admin 403 (red if the `isOutsideCallerTenant(requestingUser, existingUser.companyId)` 404 is removed)", async () => {
     const res = await adminA.patch(`/api/users/${h.ids.master}/role`).send({ role: 'parent' });
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ message: 'User not found' });

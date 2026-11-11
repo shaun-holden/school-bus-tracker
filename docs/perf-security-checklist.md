@@ -114,7 +114,6 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | T-5 | Foreign-key ids from the body not tenant-checked | SEC-25, SEC-33 | `driver-school-arrival` (`schoolId`), `driver-school-departure` (`visitId`), `mark-stop-completed` (`routeStopId`/`routeId`), `POST /api/routes/:routeId/stops` (`schoolId`), `POST /api/buses` (`driverId`/`currentRouteId`) |
 | T-7 | Raw `req.body` into an update | SEC-26 | `PATCH /api/schools/:id` → `storage.updateSchool(id, req.body)` |
 | T-9, S-2 | Parents (any non-driver) get every company bus/route; staff routes without a role check | SEC-29, SEC-21 | `GET /api/buses` and `GET /api/routes` else-branches; `GET /api/attendance`, `GET /api/admin-requests`, admin-requests ack/complete |
-| T-10, T-4 | Impersonation: handlers re-fetch the user and lose the impersonated `companyId`; `companyScope` returns `undefined` for an impersonating master | DUP-2, SEC-45 | ~125 `storage.getUser(userId)` sites in `server/routes.ts` |
 | S-5 | `http://localhost` is allowed with credentials in production (also used by the HF3 Origin guard) | SEC-44 | `ALLOWED_ORIGINS` in `server/index.ts` |
 | S-7, S-16 | Impersonation start/stop doesn't regenerate the session and isn't logged; password reset doesn't revoke other sessions | SEC-41, SEC-45 | `/api/master-admin/impersonate/:companyId`, `/stop-impersonating`; `/api/auth/reset-password` |
 | S-6 | Default cookie name `connect.sid`; no server-side absolute session timeout (7-day TTL only) | (gaps S2n, S5n) | `getSession` in `server/customAuth.ts` |
@@ -134,10 +133,11 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | X-1 | Tenant tests re-implement helpers instead of calling handlers | (gaps A5) | `tests/multi-tenant.test.ts` (older tests); the Q4 harness is on `main` (`fa85158`), so new paths use `tests/integration/` |
 | S-24 | Existing `npm audit` baseline (32 advisories) | Q2 | dependency plan |
 
-**Closed since the audit (verified in code; 26 IDs):**
+**Closed since the audit (verified in code; 27 IDs, plus part of SEC-45):**
 - **HF1 `ffee2c8` (10):** SEC-6, SEC-9, SEC-10, SEC-13, SEC-16, SEC-23, DUP-1, DUP-3, DUP-7, DUP-8. It also closed parts of LEAK-1 (tenant scope), SEC-25, SEC-28 and SEC-36 (by deleting dead routes) and SEC-46 (invite argument order).
 - **HF2 `594f8b6` (12):** SEC-1, SEC-2, SEC-3, SEC-4, SEC-5, SEC-11, SEC-12, SEC-14, SEC-15, SEC-17, SEC-20, SEC-27. It also closed part of SEC-36 (route log dumps, masked emails).
 - **HF3 `05656a4` (4):** SEC-7, SEC-8, SEC-18, SEC-19.
+- **Q7 (DEV-1, `dev1/work`):** DUP-2 and the impersonation-scoping part of SEC-45 (T-10, T-4): `getCaller(req)` keeps the overlay on re-fetch, and `companyScope`/`isOutsideCallerTenant` use `isUnscopedMaster`, so an impersonating master is scoped to the impersonated company. SEC-45's session-regeneration and audit-log parts (S-7, S-16 rows) stay open.
 
 ## Sources
 
