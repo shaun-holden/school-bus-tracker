@@ -32,7 +32,7 @@ describe('login rate limit (Q23)', () => {
     }
   }, 60000);
 
-  it('10 failed logins for email A → the 11th for A is 429, but email B on the same IP still logs in (clause: keyGenerator includes the email)', async () => {
+  it('10 failed logins for email A → the 11th for A is 429, but email B on the same IP still logs in (clause: keyGenerator includes the trimmed, lower-cased email)', async () => {
     for (let i = 1; i <= 10; i++) {
       const res = await login(EMAILS.driverA, 'wrong-password-' + i);
       expect(res.status, `failed login #${i}`).toBe(401);
@@ -46,6 +46,12 @@ describe('login rate limit (Q23)', () => {
     // The key is lower-cased: a case variant of A shares A's counter.
     const blockedUpper = await login(EMAILS.driverA.toUpperCase(), SEED_PASSWORD);
     expect(blockedUpper.status).toBe(429);
+
+    // The key is trimmed: a padded variant of A shares A's counter (red if
+    // .trim() is dropped from loginLimiter's keyGenerator).
+    const blockedPadded = await login(`  ${EMAILS.driverA}  `, SEED_PASSWORD);
+    expect(blockedPadded.status).toBe(429);
+    expect(blockedPadded.body).toEqual(TOO_MANY);
 
     // Another person on the same IP is not locked out.
     const other = await login(EMAILS.parentB, SEED_PASSWORD);

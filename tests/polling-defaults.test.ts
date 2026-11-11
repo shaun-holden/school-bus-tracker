@@ -57,6 +57,25 @@ describe('client polling defaults', () => {
     expect(tooShort).toEqual([]);
   });
 
+  // Q25: the driver's routes and buses poll every 30 s on duty and not at all off
+  // duty (Q9a2). Evaluate each query's refetchInterval expression for both states,
+  // so a fixed number (or a missing interval) turns this red.
+  it.each(['/api/routes', '/api/buses'])(
+    'driver dashboard %s polls at 30 s on duty and pauses off duty (red on a fixed refetchInterval)',
+    (key) => {
+      const src = fs.readFileSync(path.join(CLIENT_SRC, 'pages/driver-dashboard.tsx'), 'utf8');
+      const start = src.indexOf(`queryKey: ["${key}"],`);
+      expect(start, `useQuery with queryKey ["${key}"]`).toBeGreaterThan(-1);
+      const end = src.indexOf('});', start);
+      const block = src.slice(start, end);
+      const m = block.match(/refetchInterval:\s*([^,\n}]+)/);
+      expect(m, `refetchInterval in the ["${key}"] query`).not.toBeNull();
+      const interval = new Function('isOnDuty', `return (${m![1]});`) as (onDuty: boolean) => unknown;
+      expect(interval(true)).toBe(30000);
+      expect(interval(false)).toBe(false);
+    },
+  );
+
   it('every allow-listed file exists, so a rename cannot silently widen the exemption', () => {
     for (const rel of ONBOARDING_ALLOW_LIST) {
       expect(fs.existsSync(path.join(CLIENT_SRC, rel)), rel).toBe(true);

@@ -22,8 +22,14 @@ import { seedTwoTenants, assertSeed, EMAILS, SEED_PASSWORD, type Persona, type S
 // other's data. (global-setup.ts holds a different, run-wide key.)
 export const FILE_LOCK_KEY = 4_701_001;
 
-// authLimiter allows 10 POST /api/auth/login attempts per 15 min per process.
-// Each test file gets fresh modules (so a fresh limiter); stop well before 10.
+// Since Q23, POST /api/auth/login has loginLimiter (10 FAILED logins per
+// IP + email per 15 min) and loginIpLimiter (100 failed per IP); successful
+// logins don't count. Each test file gets fresh modules (so fresh limiters).
+// The cap stays: loginAttempt() is also used for deliberate failed logins, and
+// 8 keeps any one email well under the 10-failure limit. It also keeps files
+// reusing agents from beforeAll instead of logging in per test. Files that
+// test the limiters themselves call the endpoint directly
+// (auth-rate-limit*.test.ts).
 export const MAX_LOGINS_PER_FILE = 8;
 let loginAttempts = 0;
 
@@ -111,7 +117,7 @@ export function useIntegrationHarness(): Harness {
       loginAttempts += 1;
       if (loginAttempts > MAX_LOGINS_PER_FILE) {
         throw new Error(
-          `Login attempt ${loginAttempts} in one file: authLimiter allows 10 per process. ` +
+          `Login attempt ${loginAttempts} in one file: the harness caps loginAttempt() at ${MAX_LOGINS_PER_FILE} (see MAX_LOGINS_PER_FILE). ` +
             'Split this test file (or reuse an agent from beforeAll).',
         );
       }
