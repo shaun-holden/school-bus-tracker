@@ -26,8 +26,8 @@ async function loadApiBase() {
 describe('apiBase source: static import.meta.env access (Vite inlining)', () => {
   const source = fs.readFileSync(SOURCE_PATH, 'utf8');
 
-  it('reads import.meta.env.VITE_API_BASE_URL literally — goes red if the old `(import.meta as any)?.env?.VITE_API_BASE_URL` line returns', () => {
-    expect(source).toContain('import.meta.env.VITE_API_BASE_URL');
+  it('assigns envBase from import.meta.env.VITE_API_BASE_URL in real code (stricter form: a comment-only literal does not count) — goes red if the old `(import.meta as any)?.env?.VITE_API_BASE_URL` line returns', () => {
+    expect(source).toMatch(/const envBase = import\.meta\.env\.VITE_API_BASE_URL/);
     expect(source).not.toContain('import.meta as any');
     expect(source).not.toContain('import.meta)?.');
     expect(source).not.toContain('import.meta?.');

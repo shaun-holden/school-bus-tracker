@@ -196,3 +196,5 @@ npm run build && npx cap sync ios
 ```
 
 Check first that `VITE_API_BASE_URL` isn't still exported in that terminal (`echo $VITE_API_BASE_URL` prints nothing) and isn't in a local `.env`. Then run from Xcode again. Never ship a TestFlight or App Store build made while pointed at staging.
+
+Fastlane enforces this: `fastlane ios beta` and `fastlane android beta` refuse to run if `VITE_API_BASE_URL` is set, or if the synced bundle (`ios/App/App/public`, `android/app/src/main/assets/public`) contains a staging/`.up.railway.app` URL. The error says how to fix it: unset the variable, `npm run build && npx cap sync <platform>`, re-run.
