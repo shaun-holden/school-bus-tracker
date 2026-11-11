@@ -162,7 +162,7 @@ export default function OnboardingPlans() {
           <p className="font-medium text-gray-700">All plans include a 30-day free trial. Cancel anytime before your trial ends.</p>
           <p className="mt-2">
             Need a custom plan?{" "}
-            <a href="mailto:sales@example.com" className="text-blue-600 hover:underline">
+            <a href="mailto:support@schoolbustracker.org" className="text-blue-600 hover:underline">
               Contact our sales team
             </a>
           </p>

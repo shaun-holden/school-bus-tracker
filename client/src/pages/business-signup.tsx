@@ -101,17 +101,14 @@ export default function BusinessSignup() {
 
             <div className="space-y-2">
               <Label htmlFor="companySlug">Company URL Slug</Label>
-              <div className="flex items-center">
-                <span className="text-sm text-gray-500 mr-2">app.example.com/</span>
-                <Input
-                  id="companySlug"
-                  placeholder="abc-transport"
-                  value={formData.companySlug}
-                  onChange={(e) => setFormData({ ...formData, companySlug: generateSlug(e.target.value) })}
-                  required
-                  data-testid="input-company-slug"
-                />
-              </div>
+              <Input
+                id="companySlug"
+                placeholder="abc-transport"
+                value={formData.companySlug}
+                onChange={(e) => setFormData({ ...formData, companySlug: generateSlug(e.target.value) })}
+                required
+                data-testid="input-company-slug"
+              />
             </div>
 
             <div className="grid grid-cols-2 gap-4">

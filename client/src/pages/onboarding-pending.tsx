@@ -5,7 +5,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Clock, CheckCircle, XCircle, AlertTriangle, Mail, Phone, Loader2 } from "lucide-react";
+import { Clock, CheckCircle, XCircle, AlertTriangle, Mail, Loader2 } from "lucide-react";
 
 interface BusinessStatus {
   status: string;
@@ -152,20 +152,12 @@ export default function OnboardingPending() {
               <h3 className="font-medium text-gray-800 mb-3">Need Help?</h3>
               <div className="space-y-2 text-sm text-gray-600">
                 <a 
-                  href="mailto:support@example.com" 
+                  href="mailto:support@schoolbustracker.org" 
                   className="flex items-center hover:text-blue-600"
                   data-testid="link-email-support"
                 >
                   <Mail className="w-4 h-4 mr-2" />
-                  support@example.com
-                </a>
-                <a 
-                  href="tel:+15550000000" 
-                  className="flex items-center hover:text-blue-600"
-                  data-testid="link-phone-support"
-                >
-                  <Phone className="w-4 h-4 mr-2" />
-                  +1 (555) 000-0000
+                  support@schoolbustracker.org
                 </a>
               </div>
             </div>
