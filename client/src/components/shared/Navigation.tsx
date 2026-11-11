@@ -1,6 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
+import { formatRole } from "@/lib/roleLabel";
 import { useQuery } from "@tanstack/react-query";
 import { UserCog, Bell, Eye, Sun, Moon, Menu } from "lucide-react";
 import { Link } from "wouter";
@@ -29,15 +30,15 @@ export default function Navigation() {
   };
 
   return (
-    <nav className="bg-primary shadow-lg sticky top-0 z-50" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+    <nav className="bg-primary shadow-lg sticky top-0 z-50" style={{ paddingTop: 'env(safe-area-inset-top)', paddingLeft: 'env(safe-area-inset-left)', paddingRight: 'env(safe-area-inset-right)' }}>
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16">
           <div className="flex items-center min-w-0 flex-1">
             <i className="fas fa-bus text-white text-2xl mr-3 shrink-0"></i>
             <h1 className="text-white text-lg sm:text-xl font-semibold truncate min-w-0">SchoolBus Tracker</h1>
             {user?.role && (
-              <span className="hidden min-[380px]:inline-flex shrink-0 ml-2 sm:ml-4 px-2 py-1 bg-white/20 text-white text-sm rounded-md capitalize">
-                {user.role}
+              <span className="hidden min-[380px]:inline-flex shrink-0 ml-2 sm:ml-4 px-2 py-1 bg-white/20 text-white text-sm rounded-md">
+                {formatRole(user.role)}
               </span>
             )}
           </div>
@@ -126,7 +127,7 @@ export default function Navigation() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    className="h-11 w-11 text-white hover:bg-blue-700"
+                    className="h-11 w-11 text-white hover:bg-blue-700 [&_svg]:size-6"
                     aria-label="Menu"
                     data-testid="button-mobile-menu"
                   >

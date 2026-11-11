@@ -51,7 +51,8 @@ const config: CapacitorConfig = {
     },
   },
   ios: {
-    contentInset: 'automatic',
+    // One inset source: the CSS env(safe-area-inset-*) padding (viewport-fit=cover). 'automatic' added a second native inset that WKWebView recalculates on rotation (Q30).
+    contentInset: 'never',
     backgroundColor: '#ffffff',
   },
   android: {
