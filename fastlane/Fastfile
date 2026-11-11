@@ -27,6 +27,59 @@ PROJECT   = "ios/App/App.xcodeproj"
 SCHEME    = "App"
 APP_ID    = "com.TopNotchTrainingCenter.SchoolBusTracker"
 
+# --- Staging guard (Q26/Q27) -------------------------------------------------
+# VITE_API_BASE_URL is baked into the web bundle at build time. A store build
+# made while pointed at staging would send real users to staging, so both
+# lanes refuse to ship one: an env check, plus a scan of the synced bundle.
+STAGING_PATTERN = /school-bus-tracker-staging|\.up\.railway\.app/
+
+# Repo root, whatever directory fastlane happens to run from.
+def repo_root
+  candidates = []
+  candidates << File.expand_path("..", __dir__) if __dir__
+  candidates << File.expand_path("..") << Dir.pwd
+  root = candidates.find { |d| File.exist?(File.join(d, "capacitor.config.ts")) }
+  UI.user_error!("Could not find the repo root (no capacitor.config.ts near #{Dir.pwd}).") unless root
+  root
+end
+
+def staging_fix_hint(platform)
+  "Fix: `unset VITE_API_BASE_URL` (and make sure it isn't in a local .env), then " \
+  "`npm run build && npx cap sync #{platform}` from the repo root, then re-run this lane."
+end
+
+def ensure_no_staging_env!(platform)
+  if ENV["VITE_API_BASE_URL"].to_s.strip != ""
+    UI.user_error!(
+      "VITE_API_BASE_URL is set (#{ENV["VITE_API_BASE_URL"]}). Store builds must use the " \
+      "production default. #{staging_fix_hint(platform)}"
+    )
+  end
+end
+
+# Fails if the env var is set, the synced bundle is missing/empty, or any file
+# in it mentions a staging/Railway URL. bundle_rel is relative to the repo root.
+def ensure_not_staging!(bundle_rel, platform)
+  ensure_no_staging_env!(platform)
+
+  bundle_dir = File.join(repo_root, bundle_rel)
+  files = Dir.glob(File.join(bundle_dir, "**", "*")).select { |f| File.file?(f) }
+  if files.empty?
+    UI.user_error!(
+      "No web bundle at #{bundle_rel}. Run `npm run build && npx cap sync #{platform}` first."
+    )
+  end
+
+  hits = files.select { |f| File.binread(f).match?(STAGING_PATTERN) }
+  unless hits.empty?
+    shown = hits.first(5).map { |f| f.sub("#{repo_root}/", "") }.join(", ")
+    UI.user_error!(
+      "The synced bundle points at staging (#{shown}). #{staging_fix_hint(platform)}"
+    )
+  end
+  UI.message("Staging guard: #{files.length} bundle files in #{bundle_rel}, no staging URL.")
+end
+
 platform :ios do
   desc "Build the app and upload a new build to TestFlight"
   lane :beta do
@@ -39,6 +92,10 @@ platform :ios do
         "The bundled build would be bypassed. Unset it before building for TestFlight."
       )
     end
+
+    # Guard: this lane does NOT build the web bundle; it ships whatever
+    # `npx cap sync ios` last copied in. Refuse a staging bundle.
+    ensure_not_staging!("ios/App/App/public", "ios")
 
     api_key = app_store_connect_api_key(
       key_id: ENV.fetch("ASC_KEY_ID"),
@@ -93,9 +150,15 @@ end
 platform :android do
   desc "Build the release AAB and upload to Play Store internal testing"
   lane :beta do
+    # Guard: refuse before building if the bundle would be pointed at staging.
+    ensure_no_staging_env!("android")
+
     # Build the web bundle and sync it into the Android project (fastlane runs
     # from ./fastlane, so step up to the repo root first).
     sh("cd .. && npm run build && npx cap sync android")
+
+    # Guard: scan what was actually synced (catches a value from a local .env).
+    ensure_not_staging!("android/app/src/main/assets/public", "android")
 
     # Release signing comes from android/keystore.properties (gitignored). If it
     # is missing the AAB is unsigned and Play will reject it — set it up first
