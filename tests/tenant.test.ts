@@ -68,6 +68,7 @@ describe('tenant - isUnscopedMaster (the only tenant bypass)', () => {
   it('a master admin who is not impersonating is unscoped', () => {
     expect(isUnscopedMaster({ role: 'master_admin' })).toBe(true);
     expect(isUnscopedMaster({ role: 'master_admin', companyId: null })).toBe(true);
+    expect(isUnscopedMaster({ role: 'master_admin', companyId: 'co-master' })).toBe(true);
     expect(isUnscopedMaster({ role: 'master_admin', _masterAdminImpersonating: false })).toBe(true);
   });
 
@@ -82,6 +83,12 @@ describe('tenant - isUnscopedMaster (the only tenant bypass)', () => {
     }
   });
 
+  it('an admin with a company and a user with no company are not unscoped', () => {
+    expect(isUnscopedMaster({ role: 'admin', companyId: 'co-1' })).toBe(false);
+    expect(isUnscopedMaster({ role: 'admin', companyId: null })).toBe(false);
+    expect(isUnscopedMaster({ role: 'parent', companyId: null })).toBe(false);
+  });
+
   it('null / undefined are not unscoped', () => {
     expect(isUnscopedMaster(null)).toBe(false);
     expect(isUnscopedMaster(undefined)).toBe(false);
@@ -91,6 +98,17 @@ describe('tenant - isUnscopedMaster (the only tenant bypass)', () => {
 describe('tenant - companyScope impersonation cases', () => {
   it('non-impersonating master: undefined (sees all)', () => {
     expect(companyScope({ role: 'master_admin', companyId: null })).toBeUndefined();
+    // A plain master with a companyId still sees all (red if the master bypass is dropped).
+    expect(companyScope({ role: 'master_admin', companyId: 'co-master' })).toBeUndefined();
+  });
+
+  it('admin: its own companyId', () => {
+    expect(companyScope({ role: 'admin', companyId: 'co-1' })).toBe('co-1');
+  });
+
+  it('user with no company: null (caller short-circuits [])', () => {
+    expect(companyScope({ role: 'admin', companyId: null })).toBeNull();
+    expect(companyScope({ role: 'parent' })).toBeNull();
   });
 
   it('impersonating master: the impersonated companyId (red if companyScope bypasses on isMasterAdminUser)', () => {

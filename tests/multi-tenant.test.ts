@@ -255,6 +255,10 @@ describe('Multi-Tenant - isMasterAdminUser', () => {
 
 describe('Multi-Tenant - companyScope', () => {
   it('returns undefined for master_admin (no filter, sees all tenants)', () => {
+    // The master carries a companyId on purpose: without the master check,
+    // companyScope would fall through to user.companyId and return 'co-master'
+    // (red if companyScope drops the isUnscopedMaster bypass).
+    expect(companyScope({ role: 'master_admin', companyId: 'co-master' })).toBeUndefined();
     expect(companyScope({ role: 'master_admin' })).toBeUndefined();
   });
 

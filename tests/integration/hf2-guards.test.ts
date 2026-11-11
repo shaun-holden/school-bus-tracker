@@ -7,7 +7,7 @@
 //
 // Describes run in order and share one seeded DB: refusals are asserted before
 // the positive check-ins, and the driver_admin self-role test runs last.
-import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import crypto from 'crypto';
 import { and, eq } from 'drizzle-orm';
 import {

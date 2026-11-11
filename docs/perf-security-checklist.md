@@ -4,13 +4,13 @@ Used by the reviewer agent on every diff before merge (CLAUDE.md, Perf + securit
 
 **How to grade.** For every line the diff touches, answer PASS / FAIL / N/A with `file:line` evidence. A FAIL takes the line's severity unless the evidence makes it worse. Lines the diff doesn't touch are N/A. Issues listed under "Known open items" at the bottom are the baseline: don't re-report them unless the diff makes them worse or adds a new instance.
 
-Terms: `isMasterAdminUser`, `companyScope`, `isOutsideCallerTenant`, `isDriverInCompany` / `isSchoolInCompany` / `isRouteInCompany` and `hasId` are the helpers at the top of `server/routes.ts`. "Record-by-id" = `PATCH` / `PUT` / `DELETE` / `GET …/:id`.
+Terms: `isMasterAdminUser` (power checks only), `isUnscopedMaster` (the tenant bypass: a master who is not impersonating), `companyScope`, `isOutsideCallerTenant` and `hasId` live in `server/tenant.ts`; `getCaller(req)`, `isDriverInCompany` / `isSchoolInCompany` / `isRouteInCompany` and `checkStudentForeignKeys` are at the top of `server/routes.ts`. "Record-by-id" = `PATCH` / `PUT` / `DELETE` / `GET …/:id`.
 
 ## 1. Tenant safety (T)
 
 | ID | Check | Sev | Source |
 |---|---|---|---|
-| T-1 | Every record-by-id handler fetches the record and returns 404 when it is missing or when the caller is outside its company (`!isMasterAdminUser(user) && record.companyId !== user.companyId`, or `isOutsideCallerTenant`). | critical | [S2 API1] [S5] [S8 CWE-639] |
+| T-1 | Every record-by-id handler fetches the record and returns 404 when it is missing or when the caller is outside its company (`!isUnscopedMaster(user) && record.companyId !== user.companyId`, or `isOutsideCallerTenant`). | critical | [S2 API1] [S5] [S8 CWE-639] |
 | T-2 | The cross-tenant case returns **404, never 403**, and the tenant 404 runs before any role 403 that would reveal the target exists. | high | [S2 API1] [S8 CWE-200] |
 | T-3 | Every create forces `companyId = user.companyId ?? null` after `zodSchema.parse`; a `companyId` in the body is never used. | critical | [S2 API3] [S4] |
 | T-4 | Every list GET uses `companyScope(user)`, returns `[]` on `null`, and passes the scope to `storage.getAll*`, with no fail-open fallback (`user.companyId \|\| undefined`, `sql\`1=1\``, or a `where` that becomes `undefined` when the value is missing). | critical | [S4] [S5 deny-by-default] |
@@ -19,7 +19,7 @@ Terms: `isMasterAdminUser`, `companyScope`, `isOutsideCallerTenant`, `isDriverIn
 | T-7 | Update schemas are allow-lists (`.pick(...)`, or `insert*Schema.omit({ companyId, ... }).partial()`); no `req.body` spread into an update; `companyId`, `role`, `isActive`, `assignedRouteId`, plan / Stripe fields and `_masterAdmin*` can't be set from a body. | critical | [S2 API3] [S8 CWE-915] |
 | T-8 | Any storage method that reads or writes by raw id has a tenant check at its call site (storage methods don't scope). | critical | [S4] [S5 every-request] |
 | T-9 | Parent reads go through `getLinkedStudentsByParentId`, and parents reach buses, routes, stops and locations only for linked children. | high | [S2 API1] [S5] [P] |
-| T-10 | Tenant decisions in new or changed code use the session user (`req.user`, which carries the impersonation overlay), not a re-fetched `storage.getUser` user; a diff never adds a new re-fetch-then-scope site (DUP-2). | high | [S4] |
+| T-10 | Tenant decisions in new or changed code use `getCaller(req)` (or `req.user`), which carry the impersonation overlay, never a re-fetch that drops the overlay (a bare `storage.getUser(req.user.id)`); a diff never adds a new re-fetch-then-scope site (DUP-2). | high | [S4] |
 | T-11 | Tenant data cached on the client is either keyed by company or wiped on logout / impersonation (`queryClient.clear()` and the full reload stay in place). | medium | [S4] |
 
 ## 2. Auth & session (S)
@@ -108,7 +108,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 
 | Line | Open item | IDs | Where (current `main`) |
 |---|---|---|---|
-| T-1 | Record-by-id handlers without a tenant check | SEC-21, SEC-22, SEC-28, SEC-40 | `PATCH /api/admin-requests/:id/acknowledge` + `/complete`; `DELETE /api/notifications/:id`; `DELETE` / `PATCH …/read` `/api/system-notifications/:id`; `GET /api/drivers/:id/invitation-status`; `GET /api/routes/:routeId/schools`; `PUT /api/routes/:routeId/schools/reorder`; `PATCH /api/messages/:messageId/read` |
+| T-1 | Record-by-id handlers without a tenant check | SEC-21, SEC-22, SEC-28, SEC-40 | `PATCH /api/admin-requests/:id/acknowledge` + `/complete`; `DELETE /api/notifications/:id`; `DELETE` / `PATCH …/read` `/api/system-notifications/:id`; `GET /api/drivers/:id/invitation-status`; `GET /api/routes/:routeId/schools`; `PUT /api/routes/:routeId/schools/reorder` |
 | T-2 | Cross-tenant or ownership 403s that reveal a record exists | (R1 route table) | `POST /api/messages` ("outside your organization"); parent paths of GET/PUT/DELETE `/api/students/:id` |
 | T-4, T-6 | Fail-open or null-matches-null tenant checks | SEC-47, SEC-49, SEC-50 | `GET /api/on-duty-drivers` (`user.companyId \|\| undefined`); `POST /api/messages` (null === null); `confirm-boarded` skips checks on a null company; `send-invitation` and `PATCH /api/drivers/:id` bare `!==` |
 | T-5 | Foreign-key ids from the body not tenant-checked | SEC-25, SEC-33 | `driver-school-arrival` (`schoolId`), `driver-school-departure` (`visitId`), `mark-stop-completed` (`routeStopId`/`routeId`), `POST /api/routes/:routeId/stops` (`schoolId`), `POST /api/buses` (`driverId`/`currentRouteId`) |
@@ -130,14 +130,14 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | P-5 | N+1 loops | LEAK-5, LEAK-6, LEAK-8, LEAK-9, LEAK-20, LEAK-21 | `driver-school-arrival`/`departure`, `mark-stop-completed`, `GET /api/reports/journeys`, `GET /api/check-in/waiting/:routeId`, `getConversationsForUser`, `markAllNotificationsRead`, `reorderRouteSchool` |
 | P-6 | Unbounded lists on polled endpoints | LEAK-1 (LIMIT only), LEAK-6, LEAK-7, LEAK-9, LEAK-14 | `getDriverShiftReports`, `getNotificationsForParent`, `getSystemNotificationsFor*`, `getConversation`; `GET /api/available-buses` reads every on-duty driver (all tenants, ids only) |
 | P-9 | Session store opens a second pool | LEAK-16 | `new PgStore({ conString })` in `server/customAuth.ts` |
-| X-1 | Tenant tests re-implement helpers instead of calling handlers | (gaps A5) | `tests/multi-tenant.test.ts` (older tests); the Q4 harness is on `main` (`fa85158`), so new paths use `tests/integration/` |
+| X-1 | Older tenant unit tests check helper policy, not handlers | (gaps A5) | `tests/multi-tenant.test.ts` (older tests). The copied helpers are gone: tests import the real ones from `server/tenant.ts` (`92d4d8b`; the last copy, in `tests/parent-features.test.ts`, went in Q7 `8f4cddb`). The Q4 harness is on `main` (`fa85158`), so new paths use `tests/integration/` |
 | S-24 | Existing `npm audit` baseline (32 advisories) | Q2 | dependency plan |
 
 **Closed since the audit (verified in code; 27 IDs, plus part of SEC-45):**
 - **HF1 `ffee2c8` (10):** SEC-6, SEC-9, SEC-10, SEC-13, SEC-16, SEC-23, DUP-1, DUP-3, DUP-7, DUP-8. It also closed parts of LEAK-1 (tenant scope), SEC-25, SEC-28 and SEC-36 (by deleting dead routes) and SEC-46 (invite argument order).
 - **HF2 `594f8b6` (12):** SEC-1, SEC-2, SEC-3, SEC-4, SEC-5, SEC-11, SEC-12, SEC-14, SEC-15, SEC-17, SEC-20, SEC-27. It also closed part of SEC-36 (route log dumps, masked emails).
 - **HF3 `05656a4` (4):** SEC-7, SEC-8, SEC-18, SEC-19.
-- **Q7 (DEV-1, `dev1/work`):** DUP-2 and the impersonation-scoping part of SEC-45 (T-10, T-4): `getCaller(req)` keeps the overlay on re-fetch, and `companyScope`/`isOutsideCallerTenant` use `isUnscopedMaster`, so an impersonating master is scoped to the impersonated company. SEC-45's session-regeneration and audit-log parts (S-7, S-16 rows) stay open.
+- **Q7 `8f4cddb`:** DUP-2 and the impersonation-scoping part of SEC-45 (T-10, T-4): `getCaller(req)` keeps the overlay on re-fetch, and `companyScope`/`isOutsideCallerTenant` use `isUnscopedMaster`, so an impersonating master is scoped to the impersonated company. SEC-45's session-regeneration and audit-log parts (S-7, S-16 rows) stay open.
 
 ## Sources
 
