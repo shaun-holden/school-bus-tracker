@@ -7,7 +7,7 @@ describe('Multi-Tenant - Company Schema Validation', () => {
     const result = insertCompanySchema.safeParse({
       name: 'ABC Transport',
       slug: 'abc-transport',
-      contactEmail: 'info@abctransport.com',
+      contactEmail: 'info@abctransport.test',
     });
     expect(result.success).toBe(true);
   });
@@ -33,7 +33,7 @@ describe('Multi-Tenant - Company Schema Validation', () => {
       logo: 'https://example.com/logo.png',
       primaryColor: '#ff0000',
       secondaryColor: '#0000ff',
-      contactEmail: 'contact@test.com',
+      contactEmail: 'contact@company.test',
       contactPhone: '555-0100',
     });
     expect(result.success).toBe(true);

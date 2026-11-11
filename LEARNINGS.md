@@ -80,7 +80,7 @@ backfires because the folder is still navigable.**
 ### Verify `pwd` before every session
 
 Before any Claude Code session work, the first command should be `pwd`.
-The expected output is `/Users/deshaunholden/Desktop/school-bus-tracker`.
+The expected output is `~/Projects/school-bus-tracker`.
 If anything else, stop and re-`cd`. The two wrong-directory incidents both
 happened because I started Claude Code without verifying where the terminal
 actually was. **30 seconds of paranoia prevents 15 minutes of patch-and-apply
@@ -125,7 +125,7 @@ thought it was in. **Always run `git status` in plain zsh before committing.**
 
 ## Standing rules
 
-- Before any session: `pwd` must show `/Users/deshaunholden/Desktop/school-bus-tracker`.
+- Before any session: `pwd` must show `~/Projects/school-bus-tracker`.
 - Never `cd` between codebases in the same terminal. Open a new terminal instead.
 - Never `git add -A` or `git add .`. Always stage by explicit path.
 - Always run `git status` after `git add`, before `git commit`.

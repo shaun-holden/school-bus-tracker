@@ -13,8 +13,8 @@ describe('Input Validation - Email Format', () => {
 
   it('should accept valid email addresses', () => {
     expect(isValidEmail('user@example.com')).toBe(true);
-    expect(isValidEmail('driver@school.org')).toBe(true);
-    expect(isValidEmail('parent.name@district.edu')).toBe(true);
+    expect(isValidEmail('driver@school.test')).toBe(true);
+    expect(isValidEmail('parent.name@district.test')).toBe(true);
   });
 
   it('should reject emails without @', () => {

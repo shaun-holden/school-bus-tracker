@@ -13,7 +13,7 @@ SchoolBusTracker is a multi-tenant school bus tracking SaaS:
 - **Backend**: Node.js + Express, PostgreSQL via Drizzle ORM, hosted on Railway.
 - **Integrations**: Stripe (3-tier subscriptions: Starter/Professional/Enterprise), Firebase FCM for push notifications, Capacitor Geolocation for live tracking.
 - **iOS bundle ID**: `com.TopNotchTrainingCenter.SchoolBusTracker`
-- **Owner**: DeShaun Holden (solo developer, prefers step-by-step guidance with confirmation checkpoints).
+- **Owner**: DeShaun (solo developer, prefers step-by-step guidance with confirmation checkpoints).
 
 ## What you do — every time
 
