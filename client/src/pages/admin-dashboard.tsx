@@ -2506,7 +2506,7 @@ export default function AdminDashboard() {
     staleTime: 0,
     refetchOnWindowFocus: true,
     refetchOnMount: true,
-    refetchInterval: 10000,
+    refetchInterval: 15000,
   });
 
   const { data: students } = useQuery({

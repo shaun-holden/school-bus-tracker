@@ -438,6 +438,8 @@ export default function DriverDashboard() {
     queryKey: ["/api/routes"],
     enabled: !!user,
     retry: false,
+    // Newly assigned route shows within 30 s on duty; paused off duty (initial load still runs).
+    refetchInterval: isOnDuty ? 30000 : false,
   });
 
   // Query for available routes during check-in
@@ -569,7 +571,7 @@ export default function DriverDashboard() {
     queryKey: ["/api/buses"],
     enabled: !!user,
     retry: false,
-    refetchInterval: 30000,
+    refetchInterval: isOnDuty ? 30000 : false,
   });
 
   const { data: driverTasks } = useQuery({

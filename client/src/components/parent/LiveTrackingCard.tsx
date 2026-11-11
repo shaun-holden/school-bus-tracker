@@ -65,7 +65,7 @@ interface StopProgress {
 export default function LiveTrackingCard() {
   const { data: childrenBuses = [], isLoading, error, refetch, isFetching, dataUpdatedAt } = useQuery<ChildBusData[]>({
     queryKey: ['/api/parent/children-buses'],
-    refetchInterval: 10000,
+    refetchInterval: 15000,
   });
 
   const { data: checkInStatuses = [] } = useQuery<CheckInStatus[]>({
@@ -88,7 +88,7 @@ export default function LiveTrackingCard() {
     queries: studentIds.map(studentId => ({
       queryKey: ['/api/parent/stop-progress', studentId],
       enabled: studentIds.length > 0,
-      refetchInterval: 10000,
+      refetchInterval: 15000,
     })),
   });
 
