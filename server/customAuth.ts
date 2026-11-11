@@ -5,7 +5,7 @@ import session from "express-session";
 import bcrypt from "bcryptjs";
 import connectPg from "connect-pg-simple";
 import crypto from "crypto";
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { eq } from "drizzle-orm";
 import { storage } from "./storage";
 import { db } from "./db";
@@ -14,6 +14,40 @@ import { sessionDecision, isCompanyGateAllowed } from "./authGate";
 import { sendPasswordResetEmail } from "./emailService";
 
 // Rate limiters for auth endpoints
+
+// Login, per IP + email: 10 FAILED logins per 15 min. Successful logins are
+// not counted (skipSuccessfulRequests: status < 400), so staff sharing one
+// school Wi-Fi don't lock each other out, and one person's typos only block
+// that email from that IP. express.json runs app-wide before routes, so
+// req.body is parsed here.
+export const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10, // 10 failed attempts per IP + email per window
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => {
+    const rawEmail = req.body?.email;
+    const email = typeof rawEmail === "string" ? rawEmail.trim().toLowerCase() : "";
+    return `${ipKeyGenerator(req.ip ?? "")}|${email}`;
+  },
+  message: { message: "Too many attempts, please try again in 15 minutes" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Login, per IP backstop: 100 FAILED logins per 15 min across all emails,
+// against password spraying from one address. Runs before loginLimiter.
+export const loginIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 failed attempts per IP per window
+  skipSuccessfulRequests: true,
+  message: { message: "Too many attempts, please try again in 15 minutes" },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Sensitive non-login auth routes (forgot-password, reset-password, driver
+// invitation verify/complete): 10 requests per 15 min per IP, ALL requests
+// counted. One shared instance; no longer shared with login.
 export const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 10, // 10 attempts per window
@@ -287,7 +321,7 @@ export async function setupCustomAuth(app: Express) {
     }
   });
 
-  app.post("/api/auth/login", authLimiter, (req, res, next) => {
+  app.post("/api/auth/login", loginIpLimiter, loginLimiter, (req, res, next) => {
     passport.authenticate('local', (err: any, user: any, info: any) => {
       if (err) {
         return res.status(500).json({ message: "Login failed" });

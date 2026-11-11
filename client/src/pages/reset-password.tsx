@@ -11,6 +11,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Bus, CheckCircle } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { friendlyErrorText } from "@/lib/errorText";
 
 const resetPasswordSchema = z.object({
   password: z.string().min(8, "Password must be at least 8 characters"),
@@ -48,7 +49,7 @@ export default function ResetPasswordPage() {
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to reset password",
+        description: friendlyErrorText(error, "Failed to reset password"),
         variant: "destructive",
       });
     },

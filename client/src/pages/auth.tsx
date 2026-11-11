@@ -14,6 +14,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Loader2, Bus, ArrowLeft } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
+import { friendlyErrorText } from "@/lib/errorText";
 
 const loginSchema = z.object({
   email: z.string().email("Please enter a valid email"),
@@ -84,7 +85,7 @@ export default function AuthPage() {
     onError: (error: any) => {
       toast({
         title: "Error",
-        description: error.message || "Failed to send reset email",
+        description: friendlyErrorText(error, "Failed to send reset email"),
         variant: "destructive",
       });
     },
@@ -101,7 +102,7 @@ export default function AuthPage() {
     } catch (error: any) {
       toast({
         title: "Login failed",
-        description: error.message || "Invalid email or password",
+        description: friendlyErrorText(error, "Invalid email or password"),
         variant: "destructive",
       });
     }
@@ -125,7 +126,7 @@ export default function AuthPage() {
     } catch (error: any) {
       toast({
         title: "Registration failed",
-        description: error.message || "Could not create account",
+        description: friendlyErrorText(error, "Could not create account"),
         variant: "destructive",
       });
     }
