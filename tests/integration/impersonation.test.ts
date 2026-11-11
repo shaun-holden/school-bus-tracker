@@ -119,6 +119,25 @@ describe("2. B's records by id are 404 while impersonating A", () => {
     expect(after.name).toBe(before.name);
     expect(after.companyId).toBe(h.ids.companyB);
   });
+
+  it("POST /api/driver-check-in of driverB on routeB + busB → 404 and nothing in B is written (red if POST /api/driver-check-in uses `isMasterAdminUser(user)` instead of `isUnscopedMaster(user)` in its caller-company 404, or re-fetches with storage.getUser)", async () => {
+    const busBefore = await getBus(h.ids.busB);
+    const routeBefore = await getRoute(h.ids.routeB);
+    const res = await impersonator.post('/api/driver-check-in').send({
+      driverId: h.ids.driverB, routeId: h.ids.routeB, busId: h.ids.busB,
+      fuelLevel: 'Full', interiorClean: true, exteriorClean: true,
+    });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Not found' });
+    const dB = await getUser(h.ids.driverB);
+    expect(dB.isOnDuty).toBe(false);
+    expect(dB.lastCheckInTime).toBeNull();
+    const busAfter = await getBus(h.ids.busB);
+    expect(busAfter.driverId).toBe(busBefore.driverId);
+    expect(busAfter.fuelLevel).toBe(busBefore.fuelLevel);
+    expect(busAfter.status).toBe(busBefore.status);
+    expect((await getRoute(h.ids.routeB)).driverId).toBe(routeBefore.driverId);
+  });
 });
 
 describe('B1. PATCH /api/users/:id/role while impersonating A', () => {
