@@ -22,9 +22,8 @@ export function getApiBase(): string {
     typeof Capacitor.isNativePlatform === "function" &&
     Capacitor.isNativePlatform()
   ) {
-    const envBase = (import.meta as any)?.env?.VITE_API_BASE_URL as
-      | string
-      | undefined;
+    // Must be the literal import.meta.env.VITE_* form so Vite inlines it at build time.
+    const envBase = import.meta.env.VITE_API_BASE_URL as string | undefined;
     const base = (envBase && envBase.trim()) || DEFAULT_NATIVE_API_BASE;
     return base.replace(/\/+$/, "");
   }
