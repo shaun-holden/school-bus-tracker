@@ -10,7 +10,7 @@ Run from the repo root.
 - `npm run build` — production build: `vite build` emits the client to `dist/public`, then `esbuild` bundles the server to `dist/index.js`.
 - `npm start` — run the built server. Requires a prior `npm run build`.
 - `npm run check` — TypeScript check (`tsc --noEmit`). There is no separate lint step; type-check is the gate.
-- `npm test` — run the full vitest suite. CI runs this on push/PR to `main` (`.github/workflows/ci.yml`, job `ci`, with a `postgres:17` service). Locally `npm test` needs Postgres 17 on port 5433 and `TEST_DATABASE_URL` (a local `*_test` DB) in `.env`; `npm run test:unit` runs without a DB.
+- `npm test` — run the full vitest suite. CI (`.github/workflows/ci.yml`, workflow `CI`, job `ci`) runs on every push and pull request to `main`, `staging` and `production`: `npm ci`, `npm run check`, `npm run build`, then `npm test` against a `postgres:17` service (`TEST_DATABASE_URL` → `sbt_ci_test`). A newer push to the same ref cancels the running job. Locally `npm test` needs Postgres 17 on port 5433 and `TEST_DATABASE_URL` (a local `*_test` DB) in `.env`; `npm run test:unit` runs without a DB.
 - `npm run test:watch`, `npm run test:coverage` — same runner, different modes.
 - `npm run db:push` — apply `shared/schema.ts` to Postgres via Drizzle Kit (requires `DATABASE_URL`).
 
@@ -45,12 +45,13 @@ Deployed on Railway. Build and deploy settings live in the Railway dashboard (Co
 
 **Multi-tenant model.** Nearly every table carries `companyId` referencing `companies`. A "company" is a tenant (school district, camp, etc.). Two helpers in `server/tenant.ts` (pure, no imports; `routes.ts` imports them, along with `isOutsideCallerTenant`, `hasId` and the role helpers) are load-bearing:
 
-- `isMasterAdminUser(user)` — true for `role === 'master_admin'` or `user._masterAdminImpersonating === true`.
-- `companyScope(user)` — returns `undefined` for master-admin (no filter), the string `companyId` for a normal admin, or `null` if the user has no company (caller must short-circuit with `[]`).
+- `isMasterAdminUser(user)` — true for `role === 'master_admin'` or `user._masterAdminImpersonating === true`. **Power checks only** (master-only actions, role rules); never use it to skip a `companyId` comparison.
+- `isUnscopedMaster(user)` — true only for a master admin who is NOT impersonating. This is the tenant-bypass helper.
+- `companyScope(user)` — returns `undefined` only for a non-impersonating master (no filter; an impersonating master gets the impersonated `companyId`), the string `companyId` for a normal admin, or `null` if the user has no company (caller must short-circuit with `[]`).
 
 **Enforcement patterns.** Every mutating handler for a tenant-scoped entity follows one of two shapes:
 
-- *Record-by-id* (PATCH / PUT / DELETE): fetch the record, 404 if missing, 404 if `!isMasterAdminUser(user) && record.companyId !== user.companyId` (masks existence — do not leak "exists but forbidden").
+- *Record-by-id* (PATCH / PUT / DELETE): fetch the record, 404 if missing, 404 if `!isUnscopedMaster(user) && record.companyId !== user.companyId` or `isOutsideCallerTenant(user, record.companyId)` (masks existence — do not leak "exists but forbidden").
 - *Creates* (POST): after `zodSchema.parse(req.body)`, force `validatedData.companyId = user.companyId ?? null`. Never trust a `companyId` from the body.
 - *List reads* (GET collections): `const scope = companyScope(user); if (scope === null) return res.json([]); const rows = await storage.getAllX(scope);`. The `getAll*` methods take an optional `companyId` filter.
 
@@ -58,7 +59,7 @@ Master admin can impersonate a tenant via `POST /api/master-admin/impersonate/:c
 
 **Roles.** `parent`, `driver`, `admin`, `driver_admin`, `master_admin`. Helpers in `server/tenant.ts`: `isAdminRole`, `isDriverRole`, `isParentRole`, `canAccessMessaging`, plus `isMasterAdminUser`.
 
-**Name collision to avoid.** `registerRoutes` declares a middleware `const isMasterAdmin = (req, res, next) => ...` around line 4650 (for master-admin-only routes). That `const` shadows any module-level function of the same name for the entire `registerRoutes` scope. That's why the boolean helper is `isMasterAdminUser`, not `isMasterAdmin`. Do not reintroduce the collision by renaming it back.
+**Name collision to avoid.** `registerRoutes` declares a middleware `const isMasterAdmin = (req, res, next) => ...` around line 5012 (for master-admin-only routes). That `const` shadows any module-level function of the same name for the entire `registerRoutes` scope. That's why the boolean helper is `isMasterAdminUser`, not `isMasterAdmin`. Do not reintroduce the collision by renaming it back.
 
 **Client.** Wouter for routing. Role-based dashboards (`/admin`, `/driver`, `/parent`, `/` for master admin). `client/src/pages/` is flat, `components/` is split by role (`admin/`, `driver/`, `parent/`, `shared/`, `ui/`). Server state via TanStack Query (`client/src/lib/queryClient.ts`). Auth state via `useAuth()` in `client/src/hooks/use-auth.ts` — `logout` calls `queryClient.clear()` to wipe per-user caches. Forms use React Hook Form + Zod schemas imported from `shared/schema.ts`.
 

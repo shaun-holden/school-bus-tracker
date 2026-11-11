@@ -5280,6 +5280,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await getCaller(req);
+      // Billing is the school's own decision (Q7b): an impersonating master
+      // may not start checkout or create a Stripe customer for the school.
+      if ((user as any)?._masterAdminImpersonating === true) {
+        return res.status(403).json({ message: "Billing is managed by the school's own admin, not while impersonating" });
+      }
       if (!user || !isAdminRole(user.role) || !user.companyId) {
         return res.status(403).json({ message: "Only company admins can create checkout sessions" });
       }

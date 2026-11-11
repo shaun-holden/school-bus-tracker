@@ -84,6 +84,8 @@ If it still fails, rerun the tunnel with the filter below to see its error. Ctrl
 railway connect Postgres-cKuC --environment staging --tunnel-only --port 6544 2>&1 | grep -viE 'password|postgres(ql)?://'
 ```
 
+Tested with Railway CLI 5.71.x (check `railway --version`); the grep filter is best-effort, a blocklist that a newer CLI's output format could slip past.
+
 Wait a few seconds, then check the tunnel is up. It must print `tunnel-up`; run it again if it fails straight after step 2.
 
 ```sh
