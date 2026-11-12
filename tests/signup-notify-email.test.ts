@@ -54,6 +54,16 @@ describe('sendNewBusinessSignupNotification recipient (SIGNUP_NOTIFY_EMAIL)', ()
     expect(sendMock.mock.calls[0][0]).toMatchObject({ to: 'owner@example.test' });
   });
 
+  it('the recipient is read from SIGNUP_NOTIFY_EMAIL, not hardcoded (red if `to:` is a fixed address)', async () => {
+    vi.stubEnv('SIGNUP_NOTIFY_EMAIL', '  alerts@notify.test  ');
+    const result = await sendNewBusinessSignupNotification(
+      'Test Co', 'contact@company.test', 'Test Contact', 'pending_selection',
+    );
+    expect(result.success).toBe(true);
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][0]).toMatchObject({ to: 'alerts@notify.test' });
+  });
+
   it('`console.log(\'Sending new business signup notification\')`: no address in the log line', async () => {
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.stubEnv('SIGNUP_NOTIFY_EMAIL', 'owner@example.test');
