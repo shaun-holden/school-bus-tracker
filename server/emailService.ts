@@ -71,7 +71,11 @@ export async function sendNewBusinessSignupNotification(
   selectedPlan: string,
   phone?: string
 ) {
-  const ADMIN_EMAIL = 'deshaun@tntgym.org';
+  const notifyEmail = process.env.SIGNUP_NOTIFY_EMAIL?.trim();
+  if (!notifyEmail) {
+    console.warn('SIGNUP_NOTIFY_EMAIL not set; skipping new business signup notification');
+    return { success: false, error: 'SIGNUP_NOTIFY_EMAIL not set' };
+  }
 
   const planNames: Record<string, string> = {
     'starter': 'Starter ($49/month)',
@@ -81,12 +85,12 @@ export async function sendNewBusinessSignupNotification(
   };
 
   try {
-    console.log('Sending new business signup notification to:', ADMIN_EMAIL);
+    console.log('Sending new business signup notification');
     const { client, fromEmail } = getResendClient();
 
     const result = await client.emails.send({
       from: fromEmail,
-      to: ADMIN_EMAIL,
+      to: notifyEmail,
       subject: `New Business Signup: ${businessName} - ${planNames[selectedPlan] || selectedPlan}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
