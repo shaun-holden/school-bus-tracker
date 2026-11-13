@@ -1725,7 +1725,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existing) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isUnscopedMaster(user) && existing.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existing.companyId)) {
         return res.status(404).json({ message: "School not found" });
       }
       const updated = await storage.updateSchool(id, req.body);
@@ -1752,7 +1752,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!school) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isUnscopedMaster(user) && school.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, school.companyId)) {
         return res.status(404).json({ message: "School not found" });
       }
       await storage.deleteSchool(id);
