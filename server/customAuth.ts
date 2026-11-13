@@ -7,6 +7,7 @@ import connectPg from "connect-pg-simple";
 import crypto from "crypto";
 import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import { eq } from "drizzle-orm";
+import { z } from "zod";
 import { storage } from "./storage";
 import { db } from "./db";
 import { User, users, companies } from "@shared/schema";
@@ -345,16 +346,21 @@ export async function setupCustomAuth(app: Express) {
     })(req, res, next);
   });
 
+  const logoutBodySchema = z.object({ deviceToken: z.string().min(1).max(512).optional() });
+
   app.post("/api/auth/logout", async (req, res) => {
-    // Deactivate all of this user's push-notification device tokens before
-    // destroying the session. Relying on the client to call DELETE
-    // /api/device-tokens is brittle — force-quits and network failures leave
-    // orphan tokens that would deliver notifications to a future session/user
-    // on the same device.
+    // Before destroying the session, logout turns off this phone's push token
+    // (sent by the app as `deviceToken`) and the caller's web tokens. It never
+    // touches another user's rows and never turns off all of the caller's
+    // devices (other phones stay signed up). A bad body is ignored, never a 400.
     const userId = (req.user as Express.User | undefined)?.id;
     if (userId) {
       try {
-        await storage.deactivateDeviceTokensForUser(userId);
+        const parsed = logoutBodySchema.safeParse(req.body ?? {});
+        if (parsed.success && parsed.data.deviceToken) {
+          await storage.deactivateDeviceTokenForUser(userId, parsed.data.deviceToken);
+        }
+        await storage.deactivateWebDeviceTokensForUser(userId);
       } catch (err) {
         console.error("Failed to deactivate device tokens on logout:", err);
         // Proceed with logout anyway — session destruction is more important
