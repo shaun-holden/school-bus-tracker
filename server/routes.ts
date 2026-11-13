@@ -4066,13 +4066,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         codeCompanyId = codeStudent?.companyId ?? null;
       }
 
-      // Determine company from the link code or the parent's existing company
-      const companyId = user.companyId || codeCompanyId;
-      if (companyId) {
-        const company = await storage.getCompanyById(companyId);
-        if (!company?.parentPortalEnabled) {
-          return res.status(403).json({ message: "Parent portal is not available on this company's plan." });
-        }
+      // A code with no resolvable company, or from a different company than the
+      // parent's, answers exactly like an unknown code (no existence leak).
+      // Runs before the portal gate and before the code is consumed.
+      if (!codeCompanyId || (user.companyId && codeCompanyId !== user.companyId)) {
+        return res.status(400).json({ message: "Invalid code - not found" });
+      }
+
+      // Portal gate on the code's company
+      const company = await storage.getCompanyById(codeCompanyId);
+      if (!company?.parentPortalEnabled) {
+        return res.status(403).json({ message: "Parent portal is not available on this company's plan." });
       }
 
       const result = await storage.useLinkCode(code.toUpperCase().trim(), userId);
