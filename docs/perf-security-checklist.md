@@ -123,7 +123,6 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | S-13 | Bodies and responses in logs | SEC-36 (part), LEAK-11 | `POST /api/buses` logs the body and validated data; the `server/index.ts` response logger appends `JSON.stringify(capturedJsonResponse)`; `emailService.ts` logs `ADMIN_EMAIL` |
 | S-14 | Internal error text returned to clients | SEC-37 | `server/index.ts` error handler returns `err.message` on 500; `POST /api/buses` returns `error.message` / request data; route validation returns `details` |
 | S-16, S-17 | No audit log for privilege actions; free-text logs; names interpolated into HTML email | SEC-45, SEC-46 | role change, approve/suspend/reject, impersonation; `server/emailService.ts` templates |
-| S-22 | APNs request has no timeout | LEAK-18 | `server/pushService.ts` `https.request` |
 | — | No `helmet`, `x-powered-by` on | SEC-34 | `server/index.ts` |
 | P-2 | Async effects without stale-result guards | LEAK-15, LEAK-17 | `admin-dashboard.tsx` `TotalStopsDisplay`; driver location POST after duty-off |
 | P-4 | Global 15 s `refetchInterval`; 5 s driver polls | LEAK-2, LEAK-3, LEAK-12 | `client/src/lib/queryClient.ts`; `driver-dashboard.tsx` routes/buses queries |
@@ -140,6 +139,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 - **HF3 `05656a4` (4):** SEC-7, SEC-8, SEC-18, SEC-19.
 - **Q8 + Q17b (dev1 `09c94d1`..):** SEC-25 (arrival `schoolId`, departure `visitId`, stop-completed `routeStopId`/`routeId` are tenant-checked; its other sites went in HF1), LEAK-5 and LEAK-8 (one batched recipient query + one bulk insert). Also the parent/driver system-notification read leak (a row with a `recipientId` is shown only to that user) and targeted parent notices (`targetParentId`) reaching only their target.
 - **Q7 `8f4cddb`:** DUP-2 and the impersonation-scoping part of SEC-45 (T-10, T-4): `getCaller(req)` keeps the overlay on re-fetch, and `companyScope`/`isOutsideCallerTenant` use `isUnscopedMaster`, so an impersonating master is scoped to the impersonated company. SEC-45's session-regeneration and audit-log parts (S-7, S-16 rows) stay open.
+- **T1 push transport (`dev2/work`):** LEAK-18 (S-22): APNs goes over HTTP/2 to an allow-listed host (`APNS_ENVIRONMENT`), with a 10 s timeout per APNs request and per FCM batch.
 
 ## Sources
 
