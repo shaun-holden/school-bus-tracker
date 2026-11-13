@@ -1641,6 +1641,10 @@ export class DatabaseStorage implements IStorage {
     }
     const routeIds = Array.from(routeIdsSet);
 
+    // Visibility rule (all branches): a targeted row (targetParentId set) is
+    // visible only to that parent, whatever its isGlobal / routeId. Global and
+    // route rows match only when targetParentId IS NULL.
+
     // Parent with no company (SEC-20): never fall back to an unfiltered
     // "1=1". Global rows are limited to the companies of the parent's direct
     // and linked children; route rows are already bounded by the children's
@@ -1659,11 +1663,19 @@ export class DatabaseStorage implements IStorage {
       if (childCompanyIds.length > 0) {
         conditions.push(and(
           eq(parentNotifications.isGlobal, true),
+          isNull(parentNotifications.targetParentId),
+          inArray(parentNotifications.companyId, childCompanyIds)
+        ));
+        conditions.push(and(
+          eq(parentNotifications.targetParentId, parentId),
           inArray(parentNotifications.companyId, childCompanyIds)
         ));
       }
       if (routeIds.length > 0) {
-        conditions.push(inArray(parentNotifications.routeId, routeIds));
+        conditions.push(and(
+          inArray(parentNotifications.routeId, routeIds),
+          isNull(parentNotifications.targetParentId)
+        ));
       }
       if (conditions.length === 0) {
         return [];
@@ -1676,27 +1688,43 @@ export class DatabaseStorage implements IStorage {
     }
     
     if (routeIds.length === 0) {
-      // Only return global notifications for this company
+      // Untargeted global notifications for this company, plus rows targeted at this parent
       return await db
         .select()
         .from(parentNotifications)
         .where(
           and(
-            eq(parentNotifications.isGlobal, true),
-            eq(parentNotifications.companyId, parentCompanyId)
+            eq(parentNotifications.companyId, parentCompanyId),
+            or(
+              and(
+                eq(parentNotifications.isGlobal, true),
+                isNull(parentNotifications.targetParentId)
+              ),
+              eq(parentNotifications.targetParentId, parentId)
+            )
           )
         )
         .orderBy(desc(parentNotifications.createdAt));
     }
     
-    // Return global notifications OR notifications for the parent's children's routes (filtered by company)
+    // Untargeted global or children's-route notifications for this company,
+    // plus rows targeted at this parent
     return await db
       .select()
       .from(parentNotifications)
       .where(
         and(
-          sql`(${parentNotifications.isGlobal} = true OR ${parentNotifications.routeId} IN (${sql.join(routeIds.map(id => sql`${id}`), sql`, `)}))`,
-          eq(parentNotifications.companyId, parentCompanyId)
+          eq(parentNotifications.companyId, parentCompanyId),
+          or(
+            and(
+              or(
+                eq(parentNotifications.isGlobal, true),
+                inArray(parentNotifications.routeId, routeIds)
+              ),
+              isNull(parentNotifications.targetParentId)
+            ),
+            eq(parentNotifications.targetParentId, parentId)
+          )
         )
       )
       .orderBy(desc(parentNotifications.createdAt));
