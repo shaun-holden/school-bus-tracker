@@ -30,11 +30,28 @@ vi.mock('../../server/emailService', () => ({
   sendEmployeeInvitationEmail: vi.fn(async () => ({ success: true })),
 }));
 
-vi.mock('../../server/pushService', () => ({
-  pushService: {
+// Every export of server/pushService.ts is listed here, and
+// tests/push-service.test.ts ("integration mock is complete") fails if a
+// new export or public method is added without a mock entry here.
+vi.mock('../../server/pushService', () => {
+  const pushService = {
+    sendToDevices: vi.fn(async () => [] as boolean[]),
+    sendToDevice: vi.fn(async () => false),
     sendToUser: vi.fn(async () => undefined),
     sendToUsers: vi.fn(async () => undefined),
     notifyParentsOfAlert: vi.fn(async () => undefined),
+    notifyUsersOfAlert: vi.fn(async () => undefined),
     notifyNewMessage: vi.fn(async () => undefined),
-  },
-}));
+    close: vi.fn(),
+  };
+  return {
+    pushService,
+    PushService: vi.fn(() => pushService),
+    resolveApnsHost: vi.fn(() => null),
+    APNS_HOSTS: { sandbox: 'api.sandbox.push.apple.com', production: 'api.push.apple.com' },
+    APNS_TIMEOUT_MS: 10_000,
+    FCM_TIMEOUT_MS: 10_000,
+    APNS_MAX_STREAMS: 100,
+    FCM_BATCH_SIZE: 500,
+  };
+});
