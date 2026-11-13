@@ -38,7 +38,7 @@ Railway settings live in the dashboard only. There is no `railway.json` and no `
 | `MASTER_ADMIN_EMAIL`, `MASTER_ADMIN_PASSWORD` | production login | a staging-only login. Must not be one of the seed emails; the seed refuses if it is. |
 | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `VITE_STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET` | live keys | **test-mode** keys, plus a test-mode webhook endpoint at `https://school-bus-tracker-staging.up.railway.app/api/stripe/webhook` |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | set | **unset** (email off: sends fail softly and are logged) |
-| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY`, `APNS_BUNDLE_ID`, `FIREBASE_SERVICE_ACCOUNT`, `VITE_FIREBASE_*` | set | **unset** (push off) |
+| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY`, `APNS_BUNDLE_ID`, `APNS_ENVIRONMENT` (`sandbox` or `production`), `FIREBASE_SERVICE_ACCOUNT`, `VITE_FIREBASE_*` | set; `APNS_ENVIRONMENT` = `production` (added in push T5) | **unset** (push off); when push is turned on (T5), `APNS_ENVIRONMENT` = `sandbox` |
 | `PRODUCTION_SERVER_URL`, `REPL_ID` | unset | unset |
 
 **On staging, Stripe is in test mode, and email and push are off.** No real person gets mail or a push from staging.

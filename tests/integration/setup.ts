@@ -35,6 +35,7 @@ vi.mock('../../server/pushService', () => ({
     sendToUser: vi.fn(async () => undefined),
     sendToUsers: vi.fn(async () => undefined),
     notifyParentsOfAlert: vi.fn(async () => undefined),
+    notifyUsersOfAlert: vi.fn(async () => undefined),
     notifyNewMessage: vi.fn(async () => undefined),
   },
 }));
