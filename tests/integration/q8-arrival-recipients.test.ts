@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { systemNotifications, schoolVisits, routeSchools } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
-import { seedQ8Extras, Q8_EMAILS, SEED_PASSWORD, type Q8Ids } from './seed';
+import { seedQ8Extras, seedQ8Round2, Q8_EMAILS, Q8R2_EMAILS, SEED_PASSWORD, type Q8Ids, type Q8R2Ids } from './seed';
 
 const h = useIntegrationHarness();
 const TITLE = 'Bus Arrived at School';
@@ -17,6 +17,10 @@ let driverA: Agent;
 let driverX: Agent;
 let parentA: Agent;
 let parentA3: Agent;
+let parentB: Agent;
+let parentNull: Agent;
+let driverR: Agent;
+let r2: Q8R2Ids;
 
 async function login(email: string): Promise<Agent> {
   const agent = h.anon();
@@ -33,11 +37,15 @@ const visitsFor = (driverId: string, schoolId: string) =>
 
 beforeAll(async () => {
   q8 = await seedQ8Extras(h.ids);
-  // 4 logins (MAX_LOGINS_PER_FILE is 8).
+  r2 = await seedQ8Round2(h.ids);
+  // 7 logins (MAX_LOGINS_PER_FILE is 8).
   driverA = await h.loginAs('driverA');
   driverX = await login(Q8_EMAILS.driverX);
   parentA = await h.loginAs('parentA');
   parentA3 = await login(Q8_EMAILS.parentA3);
+  parentB = await h.loginAs('parentB');
+  parentNull = await h.loginAs('parentNull');
+  driverR = await login(Q8R2_EMAILS.driverR);
 });
 
 describe('Q8 A2 refusals (nothing written)', () => {
@@ -139,5 +147,52 @@ describe('Q8 A2 positive: routeSchools-only school', () => {
     expect(visits).toHaveLength(1);
     expect(visits[0].companyId).toBe(h.ids.companyA);
     expect(visits[0].routeId).toBe(h.ids.routeA);
+  });
+});
+
+// Round 2 (SHELL mutations 2c, 3b, 8b, 8c). Reads the rows written by the
+// arrival at schoolA in the describe above.
+describe('Q8 round 2: arrival recipients, parent company and role', () => {
+  const titled = (res: { body: Array<{ title: string; message: string }> }, name: string) =>
+    res.body.filter((n) => n.title === TITLE && n.message.includes(name));
+
+  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+    const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.parentB);
+    expect(rows).toHaveLength(0);
+    const res = await parentB.get('/api/system-notifications');
+    expect(res.status).toBe(200);
+    expect(titled(res, 'A-ShortB')).toHaveLength(0);
+    expect(r2.studentShortB).toBeTruthy();
+  });
+
+  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+    const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.parentNull && r.message.includes('A-ShortNull'));
+    expect(rows).toHaveLength(0);
+    const res = await parentNull.get('/api/system-notifications');
+    expect(res.status).toBe(200);
+    expect(titled(res, 'A-ShortNull')).toHaveLength(0);
+  });
+
+  it('adminA, linked to A-LinkAdmin through parentChildLinks, gets 0 rows (red if users.role = \'parent\' is dropped from the link-code query)', async () => {
+    const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.adminA);
+    expect(rows).toHaveLength(0);
+    // driverA is A-LinkAdmin's students.parentId: excluded by the shortcut role check.
+    expect((await arrivalRows()).filter((r) => r.recipientId === h.ids.driverA)).toHaveLength(0);
+  });
+});
+
+describe('Q8 round 2: arrival at a school reachable by one path only', () => {
+  it('a school that is only a routeA stop\'s schoolId gives 200 and a visit row (red if the stop schoolId match is removed from the school-on-route check)', async () => {
+    const res = await driverA.post('/api/driver-school-arrival').send({ schoolId: r2.schoolStopOnly });
+    expect(res.status).toBe(200);
+    expect(await visitsFor(h.ids.driverA, r2.schoolStopOnly)).toHaveLength(1);
+  });
+
+  it('a school that is only routes.schoolId of the driver\'s route (no stop, no routeSchools) gives 200 and a visit row (red if the route.schoolId === schoolId match is removed)', async () => {
+    const res = await driverR.post('/api/driver-school-arrival').send({ schoolId: r2.schoolRouteOnly });
+    expect(res.status).toBe(200);
+    const visits = await visitsFor(r2.driverR, r2.schoolRouteOnly);
+    expect(visits).toHaveLength(1);
+    expect(visits[0].routeId).toBe(r2.routeR);
   });
 });

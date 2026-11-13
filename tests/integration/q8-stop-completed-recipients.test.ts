@@ -7,7 +7,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { systemNotifications, routeStopCompletions } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
-import { seedQ8Extras, Q8_EMAILS, SEED_PASSWORD, type Q8Ids } from './seed';
+import { seedQ8Extras, seedQ8Round2, Q8_EMAILS, SEED_PASSWORD, type Q8Ids } from './seed';
 
 const h = useIntegrationHarness();
 const TITLE = 'Bus Arrived at Stop';
@@ -16,6 +16,8 @@ const URL = '/api/driver/mark-stop-completed';
 let q8: Q8Ids;
 let driverA: Agent;
 let driverX: Agent;
+let parentB: Agent;
+let parentNull: Agent;
 
 async function login(email: string): Promise<Agent> {
   const agent = h.anon();
@@ -29,9 +31,12 @@ const stopRows = () => h.db.select().from(systemNotifications).where(eq(systemNo
 
 beforeAll(async () => {
   q8 = await seedQ8Extras(h.ids);
-  // 2 logins (MAX_LOGINS_PER_FILE is 8).
+  await seedQ8Round2(h.ids);
+  // 4 logins (MAX_LOGINS_PER_FILE is 8).
   driverA = await h.loginAs('driverA');
   driverX = await login(Q8_EMAILS.driverX);
+  parentB = await h.loginAs('parentB');
+  parentNull = await h.loginAs('parentNull');
 });
 
 describe('Q8 A4 refusals (no completion row, no notices)', () => {
@@ -77,5 +82,39 @@ describe('Q8 A4 recipients', () => {
       ].sort(),
     );
     expect(rows.every((r) => r.companyId === h.ids.companyA)).toBe(true);
+  });
+});
+
+// Round 2 (SHELL mutations 2c, 3b): a fresh completion of stopA1 on routeA.
+describe('Q8 round 2: stop-completed recipients, parent company and role', () => {
+  const rowsNow = stopRows;
+  beforeAll(async () => {
+    await h.db.delete(systemNotifications).where(eq(systemNotifications.title, TITLE));
+    const res = await driverA.post(URL).send({ routeId: h.ids.routeA, routeStopId: h.ids.stopA1, stopSequence: 1 });
+    expect(res.status).toBe(200);
+  });
+
+  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+    expect((await rowsNow()).filter((r) => r.recipientId === h.ids.parentB)).toHaveLength(0);
+    const res = await parentB.get('/api/system-notifications');
+    expect(res.status).toBe(200);
+    expect(res.body.filter((n: { title: string; message: string }) => n.title === TITLE && n.message.includes('A-ShortB'))).toHaveLength(0);
+  });
+
+  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+    expect((await rowsNow()).filter((r) => r.recipientId === h.ids.parentNull && r.message.includes('A-ShortNull'))).toHaveLength(0);
+    const res = await parentNull.get('/api/system-notifications');
+    expect(res.status).toBe(200);
+    expect(res.body.filter((n: { title: string; message: string }) => n.title === TITLE && n.message.includes('A-ShortNull'))).toHaveLength(0);
+  });
+
+  it('adminA, linked to A-LinkAdmin through parentChildLinks, gets 0 rows (red if users.role = \'parent\' is dropped from the link-code query)', async () => {
+    expect((await rowsNow()).filter((r) => r.recipientId === h.ids.adminA)).toHaveLength(0);
+  });
+
+  it('only parentA and parentNull (for A-Student) are notified', async () => {
+    const rows = await rowsNow();
+    expect(rows.map((r) => r.recipientId).sort()).toEqual([h.ids.parentA, h.ids.parentNull].sort());
+    expect(rows.every((r) => r.message.includes('A-Student'))).toBe(true);
   });
 });

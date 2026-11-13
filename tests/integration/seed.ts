@@ -508,3 +508,63 @@ export async function seedQ8Extras(ids: SeedIds): Promise<Q8Ids> {
     schoolA2: schoolA2.id, schoolA3: schoolA3.id,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Q8 round 2 extras: opt-in like seedQ8Extras (call it after seedQ8Extras).
+// Every new student is a company-A student on routeA at schoolA / stopA1, so
+// it is reachable by an arrival at schoolA, a departure from it and a
+// completion of stopA1; none of them may produce a notice:
+//   A-ShortB     students.parentId = parentB (company B), no link row
+//   A-ShortNull  students.parentId = parentNull (no company), no link row
+//   A-LinkAdmin  students.parentId = driverA; adminA linked via parentChildLinks
+// Plus two schools that are on a driver's route by ONE path only:
+//   schoolStopOnly   only through a routeA stop's schoolId
+//   schoolRouteOnly  only as routes.schoolId of routeR (no stops, no
+//                    routeSchools), driven by driverR
+export const Q8R2_EMAILS = {
+  driverR: 'q8r2-driver-r@sbt.test',
+} as const;
+
+export interface Q8R2Ids {
+  studentShortB: string;
+  studentShortNull: string;
+  studentLinkAdmin: string;
+  schoolStopOnly: string;
+  schoolRouteOnly: string;
+  routeR: string;
+  driverR: string;
+}
+
+export async function seedQ8Round2(ids: SeedIds): Promise<Q8R2Ids> {
+  const A = ids.companyA;
+  const onRouteA = { companyId: A, lastName: 'Seed', schoolId: ids.schoolA, routeId: ids.routeA, stopId: ids.stopA1 };
+
+  const [shortB] = await db.insert(students).values({ ...onRouteA, firstName: 'A-ShortB', parentId: ids.parentB }).returning({ id: students.id });
+  const [shortNull] = await db.insert(students).values({ ...onRouteA, firstName: 'A-ShortNull', parentId: ids.parentNull }).returning({ id: students.id });
+  const [linkAdmin] = await db.insert(students).values({ ...onRouteA, firstName: 'A-LinkAdmin', parentId: ids.driverA }).returning({ id: students.id });
+  await db.insert(parentChildLinks).values({ parentId: ids.adminA, studentId: linkAdmin.id });
+
+  const [schoolStopOnly] = await db
+    .insert(schools)
+    .values({ companyId: A, name: 'A-SchoolStopOnly', address: 'A-4 School Rd' })
+    .returning({ id: schools.id });
+  await db.insert(routeStops).values({ routeId: ids.routeA, schoolId: schoolStopOnly.id, name: 'A-Stop-3', address: 'A-40 Stop St', order: 3 });
+
+  const [schoolRouteOnly] = await db
+    .insert(schools)
+    .values({ companyId: A, name: 'A-SchoolRouteOnly', address: 'A-5 School Rd' })
+    .returning({ id: schools.id });
+  const [routeR] = await db
+    .insert(routes)
+    .values({ companyId: A, name: 'A-RouteR', schoolId: schoolRouteOnly.id, busNumber: 'A-300' })
+    .returning({ id: routes.id });
+  const driverR = await insertUser(
+    { email: Q8R2_EMAILS.driverR, firstName: 'A-DriverR', lastName: 'Seed', role: 'driver', companyId: A, assignedRouteId: routeR.id },
+    { password: true },
+  );
+
+  return {
+    studentShortB: shortB.id, studentShortNull: shortNull.id, studentLinkAdmin: linkAdmin.id,
+    schoolStopOnly: schoolStopOnly.id, schoolRouteOnly: schoolRouteOnly.id, routeR: routeR.id, driverR,
+  };
+}
