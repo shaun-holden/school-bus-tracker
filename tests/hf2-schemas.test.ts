@@ -164,11 +164,11 @@ describe('HF2 - updateRouteSchema (PATCH /api/routes/:id)', () => {
     }
   });
 
-  it('accepts schoolId "" (the client\'s "remove school" signal)', () => {
+  it('turns schoolId "" (the client\'s "remove school" signal) into null (red if the preprocess(\'\' → null) on updateRouteSchema.schoolId is removed)', () => {
     const result = updateRouteSchema.safeParse({ schoolId: '' });
     expect(result.success).toBe(true);
     if (result.success) {
-      expect(result.data.schoolId).toBe('');
+      expect(result.data.schoolId).toBeNull();
     }
   });
 });

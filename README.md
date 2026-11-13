@@ -49,6 +49,7 @@ Path aliases: `@/*` → `client/src/*`, `@shared/*` → `shared/*`.
 | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `VITE_STRIPE_PUBLISHABLE_KEY` | Stripe billing (test-mode keys outside production) | Railway dashboard / local `.env` |
 | `STRIPE_WEBHOOK_SECRET` | Verifies Stripe webhook signatures | Railway dashboard / local `.env` |
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | Outgoing email; unset = email off (sends fail softly and are logged) | Railway dashboard / local `.env` |
+| `SIGNUP_NOTIFY_EMAIL` | Who receives the "new business signed up" email; unset = nothing is sent and a warning is logged | Railway dashboard / local `.env` |
 | `FIREBASE_SERVICE_ACCOUNT` | Push notifications for Android and web (Firebase Cloud Messaging) | Railway dashboard |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY`, `APNS_BUNDLE_ID` | Push notifications (iOS / APNs) | Railway dashboard |
 | `MASTER_ADMIN_EMAIL`, `MASTER_ADMIN_PASSWORD` | The master admin login created by `scripts/seed-master-admin.ts` | Railway dashboard / your shell |

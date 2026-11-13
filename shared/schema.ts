@@ -579,15 +579,19 @@ export type SchoolVisit = typeof schoolVisits.$inferSelect;
 export type InsertSchoolVisit = typeof schoolVisits.$inferInsert;
 
 // Driver profile schema for form validation
+// A blank form field ("") means "clear it": store null instead of failing
+// the .min() check. Filled-in values are still validated (Q17a).
+const blankToNull = (v: unknown) => (v === '' ? null : v);
+
 export const updateDriverProfileSchema = createInsertSchema(users, {
-  email: z.string().email("Invalid email address").optional(),
-  phone: z.string().min(10, "Phone number must be at least 10 digits").optional(),
-  licenseNumber: z.string().min(1, "License number is required").optional(),
-  licenseState: z.string().min(2, "License state is required").optional(),
+  email: z.preprocess(blankToNull, z.string().email("Invalid email address").nullable().optional()),
+  phone: z.preprocess(blankToNull, z.string().min(10, "Phone number must be at least 10 digits").nullable().optional()),
+  licenseNumber: z.preprocess(blankToNull, z.string().min(1, "License number is required").nullable().optional()),
+  licenseState: z.preprocess(blankToNull, z.string().min(2, "License state is required").nullable().optional()),
   licenseExpiryDate: z.string().optional(),
   dateOfBirth: z.string().optional(),
-  emergencyContactName: z.string().min(1, "Emergency contact name is required").optional(),
-  emergencyContactPhone: z.string().min(10, "Emergency contact phone must be at least 10 digits").optional(),
+  emergencyContactName: z.preprocess(blankToNull, z.string().min(1, "Emergency contact name is required").nullable().optional()),
+  emergencyContactPhone: z.preprocess(blankToNull, z.string().min(10, "Emergency contact phone must be at least 10 digits").nullable().optional()),
   hireDate: z.string().optional(),
 }).pick({
   // Explicit allow-list (SEC-1 / SEC-2). Anything not listed here is
@@ -711,7 +715,14 @@ export type InsertDriverShiftReport = typeof driverShiftReports.$inferInsert;
 export const insertSchoolSchema = createInsertSchema(schools).omit({ id: true, createdAt: true });
 export const insertRouteSchema = createInsertSchema(routes).omit({ id: true, createdAt: true, updatedAt: true });
 // PATCH /api/routes/:id: a route can never be moved to another company (SEC-14)
-export const updateRouteSchema = insertRouteSchema.omit({ companyId: true }).partial();
+export const updateRouteSchema = insertRouteSchema.omit({ companyId: true }).partial().extend({
+  // "" (the client's "remove school" / "no driver") becomes null, so the
+  // foreign-key column is cleared instead of failing with a 500 (Q17c).
+  // The handler still reads the raw req.body.schoolId === "" to delete
+  // the old school stops.
+  schoolId: z.preprocess(blankToNull, z.string().nullable().optional()),
+  driverId: z.preprocess(blankToNull, z.string().nullable().optional()),
+});
 export const insertRouteStopSchema = createInsertSchema(routeStops).omit({ id: true, createdAt: true });
 export const insertStudentSchema = createInsertSchema(students).omit({ id: true, createdAt: true, updatedAt: true });
 export const insertAttendanceSchema = createInsertSchema(attendance).omit({ id: true, createdAt: true });
