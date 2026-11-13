@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { insertCompanySchema } from '@shared/schema';
-import { isMasterAdminUser, companyScope } from '../server/tenant';
+import { isMasterAdminUser, companyScope, isOutsideCallerTenant, isUnscopedMaster } from '../server/tenant';
 
 describe('Multi-Tenant - Company Schema Validation', () => {
   it('should accept valid company data', () => {
@@ -212,7 +212,8 @@ describe('Multi-Tenant - Company Modules', () => {
 });
 
 // Policy-shape tests for the tenant-isolation helpers and enforcement
-// patterns documented in CLAUDE.md. isMasterAdminUser and companyScope are
+// patterns documented in CLAUDE.md. isMasterAdminUser, companyScope,
+// isOutsideCallerTenant and isUnscopedMaster are
 // the real helpers, imported from server/tenant.ts (routes.ts imports the
 // same module), so there is no inline copy to keep in sync. HTTP-level proof
 // that the handlers actually apply them lives in tests/integration/.
@@ -288,45 +289,38 @@ describe('Multi-Tenant - companyScope', () => {
   });
 });
 
-describe('Multi-Tenant - Record-by-id Guard', () => {
-  // Mirrors the standard "fetch record, 404 if missing, 404 if cross-tenant"
-  // shape from CLAUDE.md. Returns true if the request should proceed, false
-  // if it should 404 (whether due to missing or cross-tenant).
-  function canAccessRecord(
-    user: TestUser,
-    record: { companyId?: string | null } | null | undefined,
-  ): boolean {
-    if (!record) return false;
-    if (isMasterAdminUser(user)) return true;
-    return record.companyId === user.companyId;
-  }
+describe('Multi-Tenant - Record-by-id Guard (real isOutsideCallerTenant / isUnscopedMaster)', () => {
+  // The record-by-id 404 rule as routes.ts applies it: a record is outside the
+  // caller's tenant unless the caller is an UNscoped master. An impersonating
+  // master acts as the impersonated school and is scoped to it.
+  const master = { role: 'master_admin' };
+  const impersonatingInCo1 = { role: 'master_admin', companyId: 'co-1', _masterAdminImpersonating: true };
 
-  it('master admin can access any tenant record', () => {
-    expect(canAccessRecord({ role: 'master_admin' }, { companyId: 'co-1' })).toBe(true);
-    expect(canAccessRecord({ role: 'master_admin' }, { companyId: 'co-2' })).toBe(true);
+  it('a non-impersonating master is unscoped and reaches any tenant record', () => {
+    expect(isUnscopedMaster(master)).toBe(true);
+    expect(isOutsideCallerTenant(master, 'co-1')).toBe(false);
+    expect(isOutsideCallerTenant(master, 'co-2')).toBe(false);
   });
 
-  it('admin can access own tenant record', () => {
-    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, { companyId: 'co-1' })).toBe(true);
+  it('an impersonating master is outside another company\'s tenant (red if isUnscopedMaster ignores _masterAdminImpersonating)', () => {
+    expect(isUnscopedMaster(impersonatingInCo1)).toBe(false);
+    expect(isOutsideCallerTenant(impersonatingInCo1, 'co-2')).toBe(true);
+    expect(isOutsideCallerTenant(impersonatingInCo1, 'co-1')).toBe(false);
   });
 
-  it('admin cannot access another tenant record (must 404, not 403)', () => {
-    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, { companyId: 'co-2' })).toBe(false);
+  it('admin reaches its own tenant record and not another tenant\'s (must 404, not 403)', () => {
+    expect(isOutsideCallerTenant({ role: 'admin', companyId: 'co-1' }, 'co-1')).toBe(false);
+    expect(isOutsideCallerTenant({ role: 'admin', companyId: 'co-1' }, 'co-2')).toBe(true);
   });
 
-  it('driver cannot access another tenant record', () => {
-    expect(canAccessRecord({ role: 'driver', companyId: 'co-1' }, { companyId: 'co-2' })).toBe(false);
+  it('driver cannot reach another tenant record', () => {
+    expect(isOutsideCallerTenant({ role: 'driver', companyId: 'co-1' }, 'co-2')).toBe(true);
   });
 
-  it('missing record reports as not found regardless of role', () => {
-    expect(canAccessRecord({ role: 'master_admin' }, null)).toBe(false);
-    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, undefined)).toBe(false);
-  });
-
-  it('record with null companyId is not accessible to a tenant admin', () => {
-    // Defensive: a record with companyId=null shouldn't accidentally match
-    // an admin whose companyId is also null/undefined and leak across tenants.
-    expect(canAccessRecord({ role: 'admin', companyId: 'co-1' }, { companyId: null })).toBe(false);
+  it('a record with null companyId is outside a tenant admin, and a caller with no company reaches nothing', () => {
+    expect(isOutsideCallerTenant({ role: 'admin', companyId: 'co-1' }, null)).toBe(true);
+    expect(isOutsideCallerTenant({ role: 'admin', companyId: null }, null)).toBe(true);
+    expect(isOutsideCallerTenant({ role: 'admin' }, undefined)).toBe(true);
   });
 });
 
@@ -373,7 +367,7 @@ describe('Multi-Tenant - Day-boundary timezone resolution', () => {
   // studentCheckIns / Bluetooth-boarding methods) compute "today" as the
   // tenant's calendar day via Intl.DateTimeFormat('en-CA', { timeZone }) and
   // compare it against (col AT TIME ZONE tz)::date in Postgres. No DB harness
-  // exists here (tests are pure-unit, see auth-validation.test.ts), so we lock
+  // exists here (this file is pure-unit; DB tests live in tests/integration/), so we lock
   // in the JS half of that contract: the dateString derivation. This is the
   // exact logic whose absence caused non-UTC tenants on the UTC Railway host
   // to bucket check-ins into the wrong day.

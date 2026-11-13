@@ -1,24 +1,19 @@
 import { describe, it, expect } from 'vitest';
+import {
+  busStatusEnum,
+  notificationTypeEnum,
+  checkInStatusEnum,
+  journeyEventTypeEnum,
+} from '@shared/schema';
 
-// Bus status values from the schema
-const VALID_BUS_STATUSES = ['idle', 'on_route', 'maintenance', 'emergency', 'inactive'] as const;
-type BusStatus = typeof VALID_BUS_STATUSES[number];
-
-// Notification types from the schema
-const VALID_NOTIFICATION_TYPES = ['delay', 'emergency', 'info', 'route_change'] as const;
-type NotificationType = typeof VALID_NOTIFICATION_TYPES[number];
-
-// Check-in statuses from the schema
-const VALID_CHECKIN_STATUSES = ['waiting', 'boarded', 'dropped_off'] as const;
-type CheckInStatus = typeof VALID_CHECKIN_STATUSES[number];
-
-// Journey event types
-const VALID_JOURNEY_EVENTS = ['depart_homebase', 'arrive_school', 'depart_school', 'arrive_homebase'] as const;
-type JourneyEvent = typeof VALID_JOURNEY_EVENTS[number];
-
-// Vehicle issue priorities
-const VALID_PRIORITIES = ['normal', 'high', 'urgent'] as const;
-type Priority = typeof VALID_PRIORITIES[number];
+// The real Postgres enums from the schema (WT-5): these tests go red if the
+// schema's values change. There is no server rule for bus-status transitions
+// in v1 (DeShaun, 2026-11-13): a PATCH may set any valid status, so nothing
+// here tests transitions.
+const VALID_BUS_STATUSES = busStatusEnum.enumValues;
+const VALID_NOTIFICATION_TYPES = notificationTypeEnum.enumValues;
+const VALID_CHECKIN_STATUSES = checkInStatusEnum.enumValues;
+const VALID_JOURNEY_EVENTS = journeyEventTypeEnum.enumValues;
 
 describe('Bus Status Management', () => {
   it('should have exactly 5 valid bus statuses', () => {
@@ -46,48 +41,6 @@ describe('Bus Status Management', () => {
   });
 });
 
-describe('Bus Status Transitions', () => {
-  function isValidTransition(from: BusStatus, to: BusStatus): boolean {
-    // Business rules for valid status transitions
-    const transitions: Record<BusStatus, BusStatus[]> = {
-      idle: ['on_route', 'maintenance', 'emergency', 'inactive'],
-      on_route: ['idle', 'emergency', 'maintenance'],
-      maintenance: ['idle', 'inactive'],
-      emergency: ['idle', 'maintenance'],
-      inactive: ['idle', 'maintenance'],
-    };
-    return transitions[from].includes(to);
-  }
-
-  it('should allow idle bus to go on route', () => {
-    expect(isValidTransition('idle', 'on_route')).toBe(true);
-  });
-
-  it('should allow on-route bus to return to idle', () => {
-    expect(isValidTransition('on_route', 'idle')).toBe(true);
-  });
-
-  it('should allow emergency from on_route', () => {
-    expect(isValidTransition('on_route', 'emergency')).toBe(true);
-  });
-
-  it('should allow emergency bus to return to idle', () => {
-    expect(isValidTransition('emergency', 'idle')).toBe(true);
-  });
-
-  it('should not allow on_route bus to go directly to inactive', () => {
-    expect(isValidTransition('on_route', 'inactive')).toBe(false);
-  });
-
-  it('should allow idle bus to go to maintenance', () => {
-    expect(isValidTransition('idle', 'maintenance')).toBe(true);
-  });
-
-  it('should allow inactive bus to return to idle', () => {
-    expect(isValidTransition('inactive', 'idle')).toBe(true);
-  });
-});
-
 describe('Notification Types', () => {
   it('should have exactly 4 notification types', () => {
     expect(VALID_NOTIFICATION_TYPES).toHaveLength(4);
@@ -110,36 +63,15 @@ describe('Notification Types', () => {
   });
 });
 
-describe('Student Check-In Flow', () => {
+describe('Student Check-In Statuses', () => {
   it('should have exactly 3 check-in statuses', () => {
     expect(VALID_CHECKIN_STATUSES).toHaveLength(3);
   });
 
-  it('should follow correct check-in sequence', () => {
+  it('should list the statuses in check-in order', () => {
     expect(VALID_CHECKIN_STATUSES[0]).toBe('waiting');
     expect(VALID_CHECKIN_STATUSES[1]).toBe('boarded');
     expect(VALID_CHECKIN_STATUSES[2]).toBe('dropped_off');
-  });
-
-  function getNextStatus(current: CheckInStatus): CheckInStatus | null {
-    const flow: Record<CheckInStatus, CheckInStatus | null> = {
-      waiting: 'boarded',
-      boarded: 'dropped_off',
-      dropped_off: null,
-    };
-    return flow[current];
-  }
-
-  it('waiting students should transition to boarded', () => {
-    expect(getNextStatus('waiting')).toBe('boarded');
-  });
-
-  it('boarded students should transition to dropped_off', () => {
-    expect(getNextStatus('boarded')).toBe('dropped_off');
-  });
-
-  it('dropped_off should be final state', () => {
-    expect(getNextStatus('dropped_off')).toBeNull();
   });
 });
 
@@ -163,34 +95,5 @@ describe('Journey Event Tracking', () => {
       'depart_school',
       'arrive_homebase',
     ]);
-  });
-});
-
-describe('Vehicle Issue Priority', () => {
-  it('should have exactly 3 priority levels', () => {
-    expect(VALID_PRIORITIES).toHaveLength(3);
-  });
-
-  function getPriorityWeight(priority: Priority): number {
-    const weights: Record<Priority, number> = {
-      normal: 1,
-      high: 2,
-      urgent: 3,
-    };
-    return weights[priority];
-  }
-
-  it('urgent should have highest priority weight', () => {
-    expect(getPriorityWeight('urgent')).toBeGreaterThan(getPriorityWeight('high'));
-    expect(getPriorityWeight('urgent')).toBeGreaterThan(getPriorityWeight('normal'));
-  });
-
-  it('high should be between normal and urgent', () => {
-    expect(getPriorityWeight('high')).toBeGreaterThan(getPriorityWeight('normal'));
-    expect(getPriorityWeight('high')).toBeLessThan(getPriorityWeight('urgent'));
-  });
-
-  it('normal should have lowest priority weight', () => {
-    expect(getPriorityWeight('normal')).toBe(1);
   });
 });
