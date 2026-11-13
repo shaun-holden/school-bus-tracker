@@ -345,6 +345,8 @@ export interface IStorage {
   // Device token operations (push notifications)
   registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken>;
   removeDeviceToken(token: string): Promise<void>;
+  deactivateDeviceTokenForUser(userId: string, token: string): Promise<void>;
+  deactivateDeviceTokenById(id: string): Promise<void>;
   deactivateDeviceTokensForUser(userId: string): Promise<void>;
   getDeviceTokensForUser(userId: string): Promise<DeviceToken[]>;
   getDeviceTokensForUsers(userIds: string[]): Promise<DeviceToken[]>;
@@ -3053,16 +3055,75 @@ export class DatabaseStorage implements IStorage {
       );
   }
   // Device token operations (push notifications)
+  // One transaction, serialized per token by an advisory lock:
+  //  a. lock on hashtext(token);
+  //  b. deactivate this token/platform for every OTHER user (device changed hands);
+  //  c. reactivate the caller's existing row, or insert one;
+  //  d. cap the caller at 10 active rows (oldest updated_at first, NULLs oldest),
+  //     never deactivating the row from (c).
   async registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken> {
-    // Upsert: deactivate any existing token for this device, then insert
-    await db.update(deviceTokens)
-      .set({ isActive: false })
-      .where(eq(deviceTokens.token, token));
+    const MAX_ACTIVE_TOKENS_PER_USER = 10;
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${token}))`);
 
-    const [deviceToken] = await db.insert(deviceTokens)
-      .values({ userId, token, platform, isActive: true })
-      .returning();
-    return deviceToken;
+      await tx.update(deviceTokens)
+        .set({ isActive: false, updatedAt: sql`now()` })
+        .where(and(
+          eq(deviceTokens.token, token),
+          eq(deviceTokens.platform, platform),
+          sql`${deviceTokens.userId} <> ${userId}`,
+        ));
+
+      const reactivated = await tx.update(deviceTokens)
+        .set({ isActive: true, updatedAt: sql`now()` })
+        .where(and(
+          eq(deviceTokens.userId, userId),
+          eq(deviceTokens.token, token),
+          eq(deviceTokens.platform, platform),
+        ))
+        .returning();
+
+      let row: DeviceToken;
+      if (reactivated.length > 0) {
+        row = reactivated[0];
+      } else {
+        const [inserted] = await tx.insert(deviceTokens)
+          .values({ userId, token, platform, isActive: true })
+          .returning();
+        row = inserted;
+      }
+
+      const active = await tx.select({ id: deviceTokens.id })
+        .from(deviceTokens)
+        .where(and(eq(deviceTokens.userId, userId), eq(deviceTokens.isActive, true)))
+        .orderBy(sql`${deviceTokens.updatedAt} ASC NULLS FIRST`);
+      if (active.length > MAX_ACTIVE_TOKENS_PER_USER) {
+        const excess = active.length - MAX_ACTIVE_TOKENS_PER_USER;
+        const toDeactivate = active
+          .filter(r => r.id !== row.id)
+          .slice(0, excess)
+          .map(r => r.id);
+        if (toDeactivate.length > 0) {
+          await tx.update(deviceTokens)
+            .set({ isActive: false, updatedAt: sql`now()` })
+            .where(inArray(deviceTokens.id, toDeactivate));
+        }
+      }
+
+      return row;
+    });
+  }
+
+  async deactivateDeviceTokenForUser(userId: string, token: string): Promise<void> {
+    await db.update(deviceTokens)
+      .set({ isActive: false, updatedAt: sql`now()` })
+      .where(and(eq(deviceTokens.token, token), eq(deviceTokens.userId, userId)));
+  }
+
+  async deactivateDeviceTokenById(id: string): Promise<void> {
+    await db.update(deviceTokens)
+      .set({ isActive: false, updatedAt: sql`now()` })
+      .where(eq(deviceTokens.id, id));
   }
 
   async removeDeviceToken(token: string): Promise<void> {
