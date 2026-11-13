@@ -2277,7 +2277,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // otherwise overwrite dutyStartTime (on→on) or fire the off-transition
       // cleanup + shift-report creation twice (off→off races).
       if (user.isOnDuty === desired) {
-        return res.json(user);
+        // Trimmed response: never return the full user row.
+        return res.json({ id: user.id, isOnDuty: user.isOnDuty, dutyStartTime: user.dutyStartTime });
       }
 
       // If driver is going off duty, create shift report
@@ -2391,7 +2392,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       const updatedUser = await storage.updateDriverProfile(userId, updatedData);
-      res.json(updatedUser);
+      if (!updatedUser) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+      // Trimmed response: never return the full user row.
+      res.json({ id: updatedUser.id, isOnDuty: updatedUser.isOnDuty, dutyStartTime: updatedUser.dutyStartTime });
     } catch (error) {
       console.error("Error updating driver duty status:", error);
       res.status(500).json({ message: "Failed to update duty status" });
