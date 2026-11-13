@@ -108,7 +108,7 @@ describe('C2 confirm-boarded refusals (404, check-in still waiting)', () => {
     expect(res.body).toEqual(NOT_FOUND);
   });
 
-  it('a null-company driver with a null-company bus and check-in gives 404 (red if the bus or check-in company check skips when the caller has no company)', async () => {
+  it('a null-company driver with a null-company bus and check-in gives 404 (red only if both the bus and the check-in company checks skip a no-company caller; each alone is pinned in q18-round2-guards)', async () => {
     const id = await insertCheckIn({ companyId: null, routeId: routeNull, studentId: h.ids.studentA, parentId: h.ids.parentNull });
     const res = await driverNull.post('/api/check-in/confirm-boarded').send({ checkInId: id, busId: busNull, routeId: routeNull });
     expect(res.status).toBe(404);

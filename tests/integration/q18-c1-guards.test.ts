@@ -151,9 +151,10 @@ describe('C1 POST /api/routes/:routeId/schools/:schoolId', () => {
   const linkCount = async (routeId: string, schoolId: string) =>
     (await h.db.select().from(routeSchools).where(and(eq(routeSchools.routeId, routeId), eq(routeSchools.schoolId, schoolId)))).length;
 
-  it('a null-company admin linking a null-company school to a null-company route gets 404 and no link (red if the route check is reverted to a bare !==)', async () => {
+  it('a null-company admin linking a null-company school to a null-company route gets 404 "Route not found" and no link (red if the route check alone is reverted to a bare !==: the school check would then answer "School not found")', async () => {
     const res = await adminNull.post(`/api/routes/${routeNullId}/schools/${schoolNullId}`);
     expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Route not found' });
     expect(await linkCount(routeNullId, schoolNullId)).toBe(0);
   });
 
