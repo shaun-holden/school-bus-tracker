@@ -4908,33 +4908,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Check-in ID, bus ID, and route ID are required" });
       }
 
-      // Verify driver is assigned to this route
+      // Every refusal below is the same 404 so a foreign or mismatched id is
+      // indistinguishable from a missing one. All checks are required: a null
+      // routeId / companyId on the check-in fails, a null-company caller fails.
+
+      // Driver must be assigned to this route
       const driverRoutes = await storage.getRoutesByDriverId(userId);
       const isAssignedToRoute = driverRoutes.some(r => r.id === routeId);
       if (!isAssignedToRoute) {
-        return res.status(403).json({ message: "You are not assigned to this route" });
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
-      // Verify bus belongs to same company
+      // Bus must be in the caller's tenant
       const bus = await storage.getBusById(busId);
-      if (!bus || (user.companyId && bus.companyId !== user.companyId)) {
-        return res.status(403).json({ message: "Invalid bus for this operation" });
+      if (!bus || isOutsideCallerTenant(user, bus.companyId)) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
-      // Verify the check-in exists and belongs to driver's route/company
+      // Check-in must exist, be on this route and be in the caller's tenant
       const existingCheckIn = await storage.getCheckInById(checkInId);
       if (!existingCheckIn) {
         return res.status(404).json({ message: "Check-in not found" });
       }
-
-      // Verify check-in is for a student on driver's route
-      if (existingCheckIn.routeId && existingCheckIn.routeId !== routeId) {
-        return res.status(403).json({ message: "This student is not on your route" });
+      if (existingCheckIn.routeId !== routeId) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
-
-      // Verify check-in belongs to same company
-      if (existingCheckIn.companyId && user.companyId && existingCheckIn.companyId !== user.companyId) {
-        return res.status(403).json({ message: "Unauthorized access to this check-in" });
+      if (isOutsideCallerTenant(user, existingCheckIn.companyId)) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
       // Verify check-in is in waiting status
@@ -4991,8 +4991,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Check-in not found" });
       }
 
+      // Only the driver who confirmed boarding, within the caller's tenant.
+      // Same 404 as a missing check-in.
       if (existingCheckIn.driverId !== userId) {
-        return res.status(403).json({ message: "You did not confirm this student's boarding" });
+        return res.status(404).json({ message: "Check-in not found" });
+      }
+      if (isOutsideCallerTenant(user, existingCheckIn.companyId)) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
       const checkIn = await storage.confirmStudentDroppedOff(checkInId);
