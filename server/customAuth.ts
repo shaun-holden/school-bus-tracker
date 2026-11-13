@@ -13,6 +13,7 @@ import { db } from "./db";
 import { User, users, companies } from "@shared/schema";
 import { sessionDecision, isCompanyGateAllowed } from "./authGate";
 import { sendPasswordResetEmail } from "./emailService";
+import { pgError } from "./dbErrors";
 
 // Rate limiters for auth endpoints
 
@@ -317,7 +318,7 @@ export async function setupCustomAuth(app: Express) {
         });
       });
     } catch (error) {
-      console.error("Registration error:", error);
+      console.error("Registration failed", pgError(error)?.code);
       res.status(500).json({ message: "Registration failed" });
     }
   });
@@ -437,7 +438,7 @@ export async function setupCustomAuth(app: Express) {
 
       res.json({ message: "If an account exists with that email, a reset link has been sent" });
     } catch (error) {
-      console.error("Forgot password error:", error);
+      console.error("Forgot-password failed", pgError(error)?.code);
       res.status(500).json({ message: "Failed to process request" });
     }
   });
@@ -470,7 +471,7 @@ export async function setupCustomAuth(app: Express) {
 
       res.json({ message: "Password has been reset successfully" });
     } catch (error) {
-      console.error("Reset password error:", error);
+      console.error("Reset-password failed", pgError(error)?.code);
       res.status(500).json({ message: "Failed to reset password" });
     }
   });
