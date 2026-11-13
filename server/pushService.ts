@@ -317,8 +317,9 @@ export class PushService {
   }
 
   private deactivate(t: DeviceToken) {
-    // A dead token is dead for everyone, so the by-token update is right here.
-    storage.removeDeviceToken(t.token).catch(() => {
+    // Turn off exactly the row that failed (by id). Area 1's register already
+    // keeps one active owner per token, so other users' rows are not touched.
+    storage.deactivateDeviceTokenById(t.id).catch(() => {
       console.error("Push: could not deactivate token", { platform: t.platform, tokenId: t.id });
     });
   }
@@ -512,21 +513,11 @@ export class PushService {
     return { title, body: message, sound: "default", category, channelId: "bus_updates", data };
   }
 
-  // Admin alert to every parent in the company (recipient fix is T4).
-  async notifyParentsOfAlert(companyId: string, title: string, message: string, type: string): Promise<void> {
-    try {
-      const companyUsers = await storage.getUsersByCompanyId(companyId);
-      const parentIds = companyUsers.filter((u) => u.role === "parent").map((u) => u.id);
-      await this.sendToUsers(parentIds, this.alertPayload(title, message, type, { type, companyId }));
-    } catch {
-      console.error("Error sending push to parents", { companyId });
-    }
-  }
-
-  // Admin alert to exactly these users (the caller works out who).
+  // Admin alert to exactly these users (the caller works out who). The admin's
+  // type only picks the category; data is always exactly { type: 'alert' }.
   async notifyUsersOfAlert(userIds: string[], title: string, message: string, type: string): Promise<void> {
     try {
-      await this.sendToUsers(userIds, this.alertPayload(title, message, type, { type }));
+      await this.sendToUsers(userIds, this.alertPayload(title, message, type, { type: 'alert' }));
     } catch {
       console.error("Error sending alert push", { count: userIds.length });
     }

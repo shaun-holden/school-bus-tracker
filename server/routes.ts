@@ -13,7 +13,8 @@ import {
   insertVehicleIssueSchema,
   insertDriverTaskSchema,
   insertEmergencyContactSchema,
-  updateDriverProfileSchema
+  updateDriverProfileSchema,
+  registerDeviceTokenSchema
 } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
@@ -187,16 +188,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized" });
       }
 
-      const { token, platform } = req.body;
-      if (!token || !platform) {
-        return res.status(400).json({ message: "Token and platform are required" });
+      const user = await getCaller(req);
+      if (!user) {
+        return res.status(401).json({ message: "Unauthorized" });
+      }
+      // A master admin (impersonating or not) never registers a push device.
+      if (isMasterAdminUser(user)) {
+        return res.status(403).json({ message: "Master admins can't register push devices" });
       }
 
-      if (!['ios', 'android', 'web'].includes(platform)) {
-        return res.status(400).json({ message: "Platform must be ios, android, or web" });
+      const parsed = registerDeviceTokenSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid device token", errors: parsed.error.errors });
       }
+      const { token, platform } = parsed.data;
 
-      const deviceToken = await storage.registerDeviceToken(userId, token, platform);
+      const deviceToken = await storage.registerDeviceToken(user.id, token, platform);
       res.json({ success: true, id: deviceToken.id });
     } catch (error) {
       console.error("Error registering device token:", error);
@@ -207,12 +214,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // Remove a device token (on logout)
   app.delete('/api/device-tokens', isAuthenticated, async (req: any, res) => {
     try {
-      const { token } = req.body;
-      if (!token) {
-        return res.status(400).json({ message: "Token is required" });
+      const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized" });
       }
 
-      await storage.removeDeviceToken(token);
+      const parsed = registerDeviceTokenSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid device token", errors: parsed.error.errors });
+      }
+
+      // Only the caller's own row; 200 even if nothing matched (never reveal existence).
+      await storage.deactivateDeviceTokenForUser(userId, parsed.data.token);
       res.json({ success: true });
     } catch (error) {
       console.error("Error removing device token:", error);
@@ -4384,10 +4397,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Send push notification to recipient
-      const senderName = user.firstName && user.lastName
-        ? `${user.firstName} ${user.lastName}`
-        : user.email || "Someone";
-      pushService.notifyNewMessage(recipientId, senderName, content).catch((err) => {
+      // First name + last initial only; never the email.
+      const senderName = user.firstName
+        ? `${user.firstName}${user.lastName ? ` ${user.lastName.charAt(0)}.` : ''}`
+        : user.role === 'driver' ? 'Your driver'
+        : user.role === 'parent' ? 'A parent'
+        : 'School staff';
+      pushService.notifyNewMessage(recipientId, senderName, undefined, user.id).catch((err) => {
         console.error("Push notification error:", err);
       });
 
