@@ -2694,7 +2694,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!existingStudent) {
           return res.status(404).json({ message: "Student not found" });
         }
-        if (!isUnscopedMaster(user) && existingStudent.companyId !== user.companyId) {
+        if (isOutsideCallerTenant(user, existingStudent.companyId)) {
           return res.status(404).json({ message: "Student not found" });
         }
       }
@@ -2758,7 +2758,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!student) {
           return res.status(404).json({ message: "Student not found" });
         }
-        if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
+        if (isOutsideCallerTenant(user, student.companyId)) {
           return res.status(404).json({ message: "Student not found" });
         }
       }
@@ -2803,7 +2803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
-      } else if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
+      } else if (isOutsideCallerTenant(user, student.companyId)) {
         // Admin path (incl. driver_admin): record-by-id 404 masks existence
         return res.status(404).json({ message: "Student not found" });
       }
