@@ -27,7 +27,7 @@ beforeAll(async () => {
     .returning({ id: users.id });
   noEmailDriverId = row.id;
 
-  // 3 logins (MAX_LOGINS_PER_FILE is 8).
+  // 3 logins here + 1 in the no-email self-edit test (MAX_LOGINS_PER_FILE is 8).
   adminA = await h.loginAs('adminA');
   adminA2 = await h.loginAs('adminA2');
   driverA = await h.loginAs('driverA');
@@ -95,6 +95,25 @@ describe('Q42 driver PUT /api/driver/profile', () => {
     const row = await getUser(h.ids.driverA);
     expect(row.phone).toBe('5552223333');
     expect(row.email).toBe(before);
+  });
+});
+
+describe('Q42 driver PUT /api/driver/profile, driver without an email', () => {
+  it('a logged-in driver whose email is null sends email "" plus a phone change → 200, phone saved, email still null (red if the no-email self-edit path returns 400)', async () => {
+    // Log in first (login is by email), then clear the email in the DB: the
+    // session is keyed by user id, so it stays valid.
+    const agent = await h.loginAs('driverAdminA');
+    const before = await getUser(h.ids.driverAdminA);
+    await h.db.update(users).set({ email: null }).where(eq(users.id, h.ids.driverAdminA));
+    try {
+      const res = await agent.put('/api/driver/profile').send({ email: '', phone: '5554445555' });
+      expect(res.status).toBe(200);
+      const row = await getUser(h.ids.driverAdminA);
+      expect(row.phone).toBe('5554445555');
+      expect(row.email).toBeNull();
+    } finally {
+      await h.db.update(users).set({ email: before.email }).where(eq(users.id, h.ids.driverAdminA));
+    }
   });
 });
 
