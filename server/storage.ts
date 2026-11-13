@@ -99,7 +99,17 @@ import {
   type InsertRouteStopCompletion,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, inArray, isNull, exists, getTableColumns } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, inArray, isNull, exists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
+
+// Tenant calendar-day predicate. Day columns are `timestamp without time zone`
+// holding UTC wall time (drizzle writes toISOString()). The inner
+// AT TIME ZONE 'UTC' turns that wall time into an instant; the outer one turns
+// the instant into the tenant's wall time; ::date then needs no session zone.
+// So the result never depends on the Postgres session TimeZone. tz and
+// dateString stay bound parameters (S-19). Never write AT TIME ZONE inline.
+export function onLocalDay(column: SQLWrapper | AnyColumn, timezone: string, dateString: string): SQL {
+  return sql`((${column} AT TIME ZONE 'UTC') AT TIME ZONE ${timezone})::date = ${dateString}::date`;
+}
 
 // Trimmed parent row for admin-facing linked-parent lists (SEC-12).
 export type LinkedParentSummary = Pick<User, 'id' | 'firstName' | 'lastName' | 'email'>;
@@ -170,7 +180,6 @@ export interface IStorage {
   
   // Attendance operations
   getAttendanceByDate(dateString: string, companyId?: string, timezone?: string): Promise<Attendance[]>;
-  getAttendanceByStudentAndDate(studentId: string, dateString: string, timezone?: string): Promise<Attendance | undefined>;
   createAttendance(attendance: InsertAttendance): Promise<Attendance>;
   updateAttendance(id: string, updates: Partial<InsertAttendance>): Promise<Attendance | undefined>;
   
@@ -215,7 +224,7 @@ export interface IStorage {
 
   // Student attendance operations
   getTodaysStudentAttendance(driverId: string, routeId: string, timezone?: string): Promise<StudentAttendance[]>;
-  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string): Promise<StudentAttendance>;
+  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string, companyId?: string | null): Promise<StudentAttendance>;
   getAttendanceByRoute(routeId: string, dateString?: string, timezone?: string): Promise<StudentAttendance[]>;
   getAllAttendanceData(companyId?: string, timezone?: string): Promise<StudentAttendance[]>;
   getTodaysAttendanceForStudents(studentIds: string[], timezone?: string): Promise<StudentAttendance[]>;
@@ -302,11 +311,9 @@ export interface IStorage {
   enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone?: string): Promise<StudentCheckIn>;
   disableStudentCheckIn(studentId: string, timezone?: string): Promise<boolean>;
   getActiveCheckInsForRoute(routeId: string, timezone?: string): Promise<StudentCheckIn[]>;
-  getCheckInStatus(studentId: string, timezone?: string): Promise<StudentCheckIn | undefined>;
   getCheckInById(checkInId: string): Promise<StudentCheckIn | undefined>;
   confirmStudentBoarded(checkInId: string, driverId: string, busId: string, routeId: string): Promise<StudentCheckIn | undefined>;
   confirmStudentDroppedOff(checkInId: string): Promise<StudentCheckIn | undefined>;
-  getTodayCheckInsForParent(parentId: string, timezone?: string): Promise<StudentCheckIn[]>;
   getTodayCheckInsForStudents(studentIds: string[], timezone?: string): Promise<StudentCheckIn[]>;
 
   // Driver invitation operations
@@ -340,7 +347,6 @@ export interface IStorage {
   markStopCompleted(data: { routeStopId: string; routeId: string; driverId: string; busId: string; companyId: string; stopSequence: number }): Promise<RouteStopCompletion>;
   getTodayCompletedStops(routeId: string, timezone?: string): Promise<RouteStopCompletion[]>;
   getLastCompletedStop(routeId: string, timezone?: string): Promise<RouteStopCompletion | undefined>;
-  resetRouteStops(routeId: string, timezone?: string): Promise<void>;
 
   // Device token operations (push notifications)
   registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken>;
@@ -905,29 +911,18 @@ export class DatabaseStorage implements IStorage {
   // Attendance operations
   //
   // Note: compares attendance.date against the calendar day in the supplied
-  // IANA zone via Postgres `AT TIME ZONE`. The previous implementation used
+  // IANA zone via onLocalDay (UTC wall time -> tenant day). The previous implementation used
   // JavaScript setHours(0,0,0,0) which is always server-local — on a UTC
   // host that meant an EST school's "today" was shifted by 4-5 hours.
   // `dateString` is the canonical YYYY-MM-DD for that day in the caller's tz.
   async getAttendanceByDate(dateString: string, companyId?: string, timezone: string = 'UTC'): Promise<Attendance[]> {
     const conditions = [
-      sql`(${attendance.date} AT TIME ZONE ${timezone})::date = ${dateString}::date`,
+      onLocalDay(attendance.date, timezone, dateString),
     ];
     if (companyId) {
       conditions.push(eq(attendance.companyId, companyId));
     }
     return await db.select().from(attendance).where(and(...conditions));
-  }
-
-  async getAttendanceByStudentAndDate(studentId: string, dateString: string, timezone: string = 'UTC'): Promise<Attendance | undefined> {
-    const [record] = await db
-      .select()
-      .from(attendance)
-      .where(and(
-        eq(attendance.studentId, studentId),
-        sql`(${attendance.date} AT TIME ZONE ${timezone})::date = ${dateString}::date`,
-      ));
-    return record;
   }
 
   async createAttendance(attendanceRecord: InsertAttendance): Promise<Attendance> {
@@ -1343,8 +1338,9 @@ export class DatabaseStorage implements IStorage {
         eq(schoolVisits.driverId, driverId),
         eq(schoolVisits.schoolId, schoolId),
         eq(schoolVisits.routeId, routeId),
-        sql`(${schoolVisits.visitDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+        onLocalDay(schoolVisits.visitDate, timezone, dateString)
       ))
+      .orderBy(desc(schoolVisits.createdAt))
       .limit(1);
 
     if (existingVisit.length > 0) {
@@ -1384,7 +1380,7 @@ export class DatabaseStorage implements IStorage {
 
   async getTodaysSchoolVisits(driverId: string, timezone: string = 'UTC'): Promise<SchoolVisit[]> {
     // "Today" is the calendar day in the caller's tenant zone — see
-    // getAttendanceByDate for the same AT TIME ZONE pattern. Plain
+    // getAttendanceByDate for the same onLocalDay pattern. Plain
     // DATE(visit_date) compares in server-local (UTC on Railway), which
     // for non-UTC tenants shifts the day by hours.
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
@@ -1393,7 +1389,7 @@ export class DatabaseStorage implements IStorage {
       .from(schoolVisits)
       .where(and(
         eq(schoolVisits.driverId, driverId),
-        sql`(${schoolVisits.visitDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+        onLocalDay(schoolVisits.visitDate, timezone, dateString)
       ))
       .orderBy(asc(schoolVisits.visitDate));
     return visits;
@@ -1408,13 +1404,13 @@ export class DatabaseStorage implements IStorage {
       .where(and(
         eq(studentAttendance.driverId, driverId),
         eq(studentAttendance.routeId, routeId),
-        sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+        onLocalDay(studentAttendance.attendanceDate, timezone, dateString)
       ))
       .orderBy(asc(studentAttendance.createdAt));
     return attendance;
   }
 
-  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone: string = 'UTC'): Promise<StudentAttendance> {
+  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone: string = 'UTC', companyId?: string | null): Promise<StudentAttendance> {
     const today = new Date();
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(today);
 
@@ -1428,17 +1424,23 @@ export class DatabaseStorage implements IStorage {
         eq(studentAttendance.studentId, studentId),
         eq(studentAttendance.driverId, driverId),
         eq(studentAttendance.routeId, routeId),
-        sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+        onLocalDay(studentAttendance.attendanceDate, timezone, dateString)
       ))
+      .orderBy(desc(studentAttendance.createdAt))
       .limit(1);
 
     if (existingAttendance.length > 0) {
       // Update existing attendance
       const [updatedAttendance] = await db
         .update(studentAttendance)
-        .set({ 
-          status, 
-          updatedAt: today 
+        .set({
+          status,
+          updatedAt: today,
+          // Backfill a legacy NULL companyId so admins can see the row;
+          // never overwrite an existing value.
+          ...(companyId
+            ? { companyId: sql`coalesce(${studentAttendance.companyId}, ${companyId})` }
+            : {}),
         })
         .where(eq(studentAttendance.id, existingAttendance[0].id))
         .returning();
@@ -1453,6 +1455,7 @@ export class DatabaseStorage implements IStorage {
           routeId,
           status,
           attendanceDate: today,
+          companyId: companyId ?? null,
         })
         .returning();
       return newAttendance;
@@ -1470,7 +1473,7 @@ export class DatabaseStorage implements IStorage {
       .from(studentAttendance)
       .where(and(
         eq(studentAttendance.routeId, routeId),
-        sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${day}::date`
+        onLocalDay(studentAttendance.attendanceDate, timezone, day)
       ))
       .orderBy(asc(studentAttendance.createdAt));
     return attendance;
@@ -1478,7 +1481,7 @@ export class DatabaseStorage implements IStorage {
 
   async getAllAttendanceData(companyId?: string, timezone: string = 'UTC'): Promise<StudentAttendance[]> {
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-    const dayPredicate = sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`;
+    const dayPredicate = onLocalDay(studentAttendance.attendanceDate, timezone, dateString);
     const attendance = await db
       .select()
       .from(studentAttendance)
@@ -1503,7 +1506,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           inArray(studentAttendance.studentId, studentIds),
-          sql`(${studentAttendance.attendanceDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(studentAttendance.attendanceDate, timezone, dateString)
         )
       )
       .orderBy(desc(studentAttendance.createdAt));
@@ -2417,7 +2420,7 @@ export class DatabaseStorage implements IStorage {
     // Dedupe within the tenant's calendar day, not server-local. Plain
     // setHours(0,0,0,0) is server-local (UTC on Railway), so a non-UTC
     // tenant enabling after the UTC day-flip would either miss an existing
-    // row or match yesterday's. See getTodaysStudentAttendance.
+    // row or match yesterday's. onLocalDay buckets by tenant day.
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
     const existing = await db
       .select()
@@ -2425,9 +2428,10 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(studentCheckIns.studentId, studentId),
-          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(studentCheckIns.checkInDate, timezone, dateString)
         )
-      );
+      )
+      .orderBy(desc(studentCheckIns.createdAt));
     
     if (existing.length > 0 && existing[0].status !== 'dropped_off') {
       // Update existing check-in
@@ -2463,7 +2467,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(studentCheckIns.studentId, studentId),
-          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(studentCheckIns.checkInDate, timezone, dateString)
         )
       );
 
@@ -2480,27 +2484,9 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(studentCheckIns.routeId, routeId),
           eq(studentCheckIns.status, 'waiting'),
-          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(studentCheckIns.checkInDate, timezone, dateString)
         )
       );
-  }
-
-  async getCheckInStatus(studentId: string, timezone: string = 'UTC'): Promise<StudentCheckIn | undefined> {
-    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-
-    const [checkIn] = await db
-      .select()
-      .from(studentCheckIns)
-      .where(
-        and(
-          eq(studentCheckIns.studentId, studentId),
-          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
-        )
-      )
-      .orderBy(desc(studentCheckIns.createdAt))
-      .limit(1);
-    
-    return checkIn;
   }
 
   async getCheckInById(checkInId: string): Promise<StudentCheckIn | undefined> {
@@ -2538,21 +2524,6 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async getTodayCheckInsForParent(parentId: string, timezone: string = 'UTC'): Promise<StudentCheckIn[]> {
-    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-
-    return db
-      .select()
-      .from(studentCheckIns)
-      .where(
-        and(
-          eq(studentCheckIns.parentId, parentId),
-          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
-        )
-      )
-      .orderBy(desc(studentCheckIns.createdAt));
-  }
-
   async getTodayCheckInsForStudents(studentIds: string[], timezone: string = 'UTC'): Promise<StudentCheckIn[]> {
     if (studentIds.length === 0) {
       return [];
@@ -2566,7 +2537,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           inArray(studentCheckIns.studentId, studentIds),
-          sql`(${studentCheckIns.checkInDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(studentCheckIns.checkInDate, timezone, dateString)
         )
       )
       .orderBy(desc(studentCheckIns.createdAt));
@@ -2879,7 +2850,7 @@ export class DatabaseStorage implements IStorage {
   // Bus journey tracking operations
   async createBusJourney(busId: string, driverId: string, routeId: string, companyId: string, homebaseAddress?: string): Promise<BusJourney> {
     // Store the wall-clock timestamp so getTodayBusJourney can project it
-    // through AT TIME ZONE for the tenant's calendar day. The previous
+    // through onLocalDay for the tenant's calendar day. The previous
     // setHours(0,0,0,0) wrote UTC midnight, which only matched correctly
     // when the read also evaluated in UTC.
     const now = new Date();
@@ -2906,7 +2877,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(busJourneys.busId, busId),
-          sql`(${busJourneys.journeyDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(busJourneys.journeyDate, timezone, dateString)
         )
       )
       .orderBy(desc(busJourneys.createdAt))
@@ -2995,7 +2966,7 @@ export class DatabaseStorage implements IStorage {
     stopSequence: number
   }): Promise<RouteStopCompletion> {
     // Store wall-clock for both fields (instead of UTC-midnight + now);
-    // the read side projects through AT TIME ZONE to bucket by tenant day.
+    // the read side projects through onLocalDay to bucket by tenant day.
     const now = new Date();
     const [completion] = await db
       .insert(routeStopCompletions)
@@ -3021,7 +2992,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(routeStopCompletions.routeId, routeId),
-          sql`(${routeStopCompletions.completionDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(routeStopCompletions.completionDate, timezone, dateString)
         )
       )
       .orderBy(asc(routeStopCompletions.stopSequence));
@@ -3035,7 +3006,7 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(routeStopCompletions.routeId, routeId),
-          sql`(${routeStopCompletions.completionDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
+          onLocalDay(routeStopCompletions.completionDate, timezone, dateString)
         )
       )
       .orderBy(desc(routeStopCompletions.stopSequence))
@@ -3043,17 +3014,6 @@ export class DatabaseStorage implements IStorage {
     return lastStop;
   }
 
-  async resetRouteStops(routeId: string, timezone: string = 'UTC'): Promise<void> {
-    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-    await db
-      .delete(routeStopCompletions)
-      .where(
-        and(
-          eq(routeStopCompletions.routeId, routeId),
-          sql`(${routeStopCompletions.completionDate} AT TIME ZONE ${timezone})::date = ${dateString}::date`
-        )
-      );
-  }
   // Device token operations (push notifications)
   // One transaction, serialized per token by an advisory lock:
   //  a. lock on hashtext(token);

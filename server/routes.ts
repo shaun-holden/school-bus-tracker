@@ -2232,8 +2232,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { date, notes } = req.body;
 
       // Verify parent owns this student
-      const students = await storage.getStudentsByParentId(userId);
-      const student = students.find(s => s.id === studentId);
+      const [directStudents, linkedStudents] = await Promise.all([
+        storage.getStudentsByParentId(userId),
+        storage.getLinkedStudentsByParentId(userId),
+      ]);
+      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
       
       if (!student) {
         return res.status(403).json({ message: "Unauthorized - not your student" });
@@ -3342,10 +3345,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!student || student.routeId !== routeId) {
         return res.status(404).json({ message: "Student not found on your route" });
       }
+      const route = await storage.getRouteById(routeId);
 
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
-      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz);
+      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route?.companyId ?? null);
       res.json(attendance);
     } catch (error) {
       console.error("Error marking student attendance:", error);
