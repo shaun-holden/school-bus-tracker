@@ -110,12 +110,12 @@ const inviteEmployeeSchema = z.object({
 // Notification schema for parent alerts
 const notificationSchema = z.object({
   type: z.enum(["delay", "emergency", "info", "route_change"]),
-  title: z.string().min(1, "Title is required"),
-  message: z.string().min(1, "Message is required"),
+  title: z.string().min(1, "Title is required").max(100, "Title must be 100 characters or fewer"),
+  message: z.string().min(1, "Message is required").max(300, "Message must be 300 characters or fewer"),
   routeId: z.string().optional(),
   busId: z.string().optional(),
   isGlobal: z.boolean().default(false),
-  estimatedDelay: z.coerce.number().optional(),
+  estimatedDelay: z.coerce.number().int("Delay must be a whole number").min(0, "Delay can't be negative").optional(),
 });
 
 // Component to display route stop count based on schools
@@ -814,7 +814,7 @@ function NotificationsTab({ routes, buses }: { routes: any; buses: any }) {
                     <FormItem>
                       <FormLabel>Title *</FormLabel>
                       <FormControl>
-                        <Input {...field} placeholder="e.g. Bus 42 Delayed" data-testid="input-notification-title" />
+                        <Input {...field} maxLength={100} placeholder="e.g. Bus 42 Delayed" data-testid="input-notification-title" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
@@ -828,7 +828,7 @@ function NotificationsTab({ routes, buses }: { routes: any; buses: any }) {
                     <FormItem>
                       <FormLabel>Message *</FormLabel>
                       <FormControl>
-                        <Textarea {...field} placeholder="Describe the situation..." data-testid="input-notification-message" />
+                        <Textarea {...field} maxLength={300} placeholder="Describe the situation..." data-testid="input-notification-message" />
                       </FormControl>
                       <FormMessage />
                     </FormItem>
