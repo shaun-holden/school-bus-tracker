@@ -576,3 +576,97 @@ describe('startup logs', () => {
     expectNoTokenInLogs();
   });
 });
+
+// ---- round 2 ----------------------------------------------------------------
+describe('Firebase initializeApp failure (S-13 / S-15)', () => {
+  const MARKER = 'SVCACCTMARKER7731';
+  const ACCOUNT = JSON.stringify({ project_id: 'p', private_key: `-----BEGIN ${MARKER}-----` });
+
+  it('a throwing initializeApp logs only the fixed "init failed" line, never the error or account text (red if `err` is logged in the initializeApp catch)', async () => {
+    m.initializeApp.mockImplementationOnce(() => {
+      throw new Error(`Failed to parse private key: ${MARKER} Invalid PEM`);
+    });
+    const { pushService } = await load({ FIREBASE_SERVICE_ACCOUNT: ACCOUNT });
+    expect(m.initializeApp).toHaveBeenCalledTimes(1);
+    expect(logs.some((l) => l.includes('Firebase Admin SDK init failed'))).toBe(true);
+    const all = logs.join('\n');
+    expect(all).not.toContain(MARKER);
+    expect(all).not.toContain('Error');
+    expect(all).not.toContain('private key');
+    expect(await pushService.sendToDevice(row(FCM_TOKEN, 'android'), { title: 't', body: 'b' })).toBe(false);
+    expect(m.sendEach).not.toHaveBeenCalled();
+  });
+
+  it('a throwing credential.cert is handled the same way', async () => {
+    m.cert.mockImplementationOnce(() => {
+      throw new Error(`Service account object must contain ${MARKER}`);
+    });
+    const { pushService } = await load({ FIREBASE_SERVICE_ACCOUNT: ACCOUNT });
+    expect(logs.some((l) => l.includes('Firebase Admin SDK init failed'))).toBe(true);
+    expect(logs.join('\n')).not.toContain(MARKER);
+    expect(await pushService.sendToDevice(row(FCM_TOKEN, 'android'), { title: 't', body: 'b' })).toBe(false);
+  });
+});
+
+describe('APNs JWT reset on provider-token errors', () => {
+  const auth = (i: number) => String(m.requests[i].headers.authorization);
+
+  for (const reason of ['ExpiredProviderToken', 'InvalidProviderToken']) {
+    it(`403 ${reason} drops the cached JWT so the next send signs a new one, and keeps the device token (red if the APNS_JWT_REJECTED_REASONS clearing is removed)`, async () => {
+      const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox' });
+      m.reply = () => ({ status: 403, body: JSON.stringify({ reason }) });
+      expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(false);
+      m.reply = () => ({ status: 200 });
+      expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(true);
+      // ES256 signatures are randomised, so a fresh signature never equals the old one.
+      expect(auth(1)).not.toBe(auth(0));
+      expect(m.removeDeviceToken).not.toHaveBeenCalled();
+      expectNoTokenInLogs();
+    });
+  }
+
+  it('other answers keep the cached JWT (it is reused, not re-signed per send)', async () => {
+    const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox' });
+    m.reply = () => ({ status: 403, body: JSON.stringify({ reason: 'TopicDisallowed' }) });
+    await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' });
+    m.reply = () => ({ status: 200 });
+    await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' });
+    await pushService.sendToDevice(row(IOS_TOKEN_2), { title: 't', body: 'b' });
+    expect(auth(1)).toBe(auth(0));
+    expect(auth(2)).toBe(auth(0));
+  });
+});
+
+describe('tests/integration/setup.ts pushService mock is complete', () => {
+  // Private helpers on the class: not callable from routes, so not mocked.
+  const PRIVATE_METHODS = new Set([
+    'constructor',
+    'getAPNsJwt',
+    'deactivate',
+    'sendToAPNs',
+    'fcmMessage',
+    'sendToFCM',
+    'alertPayload',
+  ]);
+
+  it('mocks every module export and every public PushService method (red if a new export or method is added without a mock entry)', async () => {
+    const { readFileSync } = await import('fs');
+    const src = readFileSync(new URL('./integration/setup.ts', import.meta.url), 'utf8');
+    const start = src.indexOf("vi.mock('../../server/pushService'");
+    expect(start).toBeGreaterThan(-1);
+    const block = src.slice(start, src.indexOf('\n});', start));
+    const mocked = new Set(
+      [...block.matchAll(/^\s+([A-Za-z_]\w*)(?::|,)/gm)].map((x) => x[1]),
+    );
+
+    const real = await load({});
+    for (const name of Object.keys(real)) {
+      expect(mocked, `export "${name}" is missing from the setup.ts pushService mock`).toContain(name);
+    }
+    const methods = Object.getOwnPropertyNames(real.PushService.prototype).filter((n) => !PRIVATE_METHODS.has(n));
+    expect(methods.length).toBeGreaterThan(5);
+    for (const name of methods) {
+      expect(mocked, `pushService.${name} is missing from the setup.ts mock`).toContain(name);
+    }
+  });
+});

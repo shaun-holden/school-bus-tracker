@@ -34,6 +34,9 @@ const IOS_TOKEN_RE = /^[0-9a-f]{64,200}$/i;
 // Only these responses mean the token itself is dead. Anything else (other
 // 400s, 403) is a setup mistake on our side, so the token is kept.
 const APNS_DEAD_TOKEN_REASONS = new Set(["BadDeviceToken", "DeviceTokenNotForTopic"]);
+// 403s that mean our signing JWT is stale or rejected (setup or clock):
+// drop the cached JWT so the next send signs a fresh one; keep the token.
+const APNS_JWT_REJECTED_REASONS = new Set(["ExpiredProviderToken", "InvalidProviderToken"]);
 const FCM_DEAD_TOKEN_CODES = new Set([
   "messaging/registration-token-not-registered",
   "messaging/invalid-registration-token",
@@ -386,6 +389,10 @@ export class PushService {
       console.warn("APNs token rejected; deactivating", info);
       this.deactivate(t);
     } else if (result.status === 400 || result.status === 403) {
+      if (result.status === 403 && APNS_JWT_REJECTED_REASONS.has(reason)) {
+        this.apnsJwt = null;
+        this.apnsJwtExpiry = 0;
+      }
       console.error("APNs config error", info);
     } else {
       console.error("APNs send failed", info);
