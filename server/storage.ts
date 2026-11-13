@@ -180,7 +180,6 @@ export interface IStorage {
   
   // Attendance operations
   getAttendanceByDate(dateString: string, companyId?: string, timezone?: string): Promise<Attendance[]>;
-  getAttendanceByStudentAndDate(studentId: string, dateString: string, timezone?: string): Promise<Attendance | undefined>;
   createAttendance(attendance: InsertAttendance): Promise<Attendance>;
   updateAttendance(id: string, updates: Partial<InsertAttendance>): Promise<Attendance | undefined>;
   
@@ -312,11 +311,9 @@ export interface IStorage {
   enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone?: string): Promise<StudentCheckIn>;
   disableStudentCheckIn(studentId: string, timezone?: string): Promise<boolean>;
   getActiveCheckInsForRoute(routeId: string, timezone?: string): Promise<StudentCheckIn[]>;
-  getCheckInStatus(studentId: string, timezone?: string): Promise<StudentCheckIn | undefined>;
   getCheckInById(checkInId: string): Promise<StudentCheckIn | undefined>;
   confirmStudentBoarded(checkInId: string, driverId: string, busId: string, routeId: string): Promise<StudentCheckIn | undefined>;
   confirmStudentDroppedOff(checkInId: string): Promise<StudentCheckIn | undefined>;
-  getTodayCheckInsForParent(parentId: string, timezone?: string): Promise<StudentCheckIn[]>;
   getTodayCheckInsForStudents(studentIds: string[], timezone?: string): Promise<StudentCheckIn[]>;
 
   // Driver invitation operations
@@ -350,7 +347,6 @@ export interface IStorage {
   markStopCompleted(data: { routeStopId: string; routeId: string; driverId: string; busId: string; companyId: string; stopSequence: number }): Promise<RouteStopCompletion>;
   getTodayCompletedStops(routeId: string, timezone?: string): Promise<RouteStopCompletion[]>;
   getLastCompletedStop(routeId: string, timezone?: string): Promise<RouteStopCompletion | undefined>;
-  resetRouteStops(routeId: string, timezone?: string): Promise<void>;
 
   // Device token operations (push notifications)
   registerDeviceToken(userId: string, token: string, platform: string): Promise<DeviceToken>;
@@ -927,17 +923,6 @@ export class DatabaseStorage implements IStorage {
       conditions.push(eq(attendance.companyId, companyId));
     }
     return await db.select().from(attendance).where(and(...conditions));
-  }
-
-  async getAttendanceByStudentAndDate(studentId: string, dateString: string, timezone: string = 'UTC'): Promise<Attendance | undefined> {
-    const [record] = await db
-      .select()
-      .from(attendance)
-      .where(and(
-        eq(attendance.studentId, studentId),
-        onLocalDay(attendance.date, timezone, dateString),
-      ));
-    return record;
   }
 
   async createAttendance(attendanceRecord: InsertAttendance): Promise<Attendance> {
@@ -2498,24 +2483,6 @@ export class DatabaseStorage implements IStorage {
       );
   }
 
-  async getCheckInStatus(studentId: string, timezone: string = 'UTC'): Promise<StudentCheckIn | undefined> {
-    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-
-    const [checkIn] = await db
-      .select()
-      .from(studentCheckIns)
-      .where(
-        and(
-          eq(studentCheckIns.studentId, studentId),
-          onLocalDay(studentCheckIns.checkInDate, timezone, dateString)
-        )
-      )
-      .orderBy(desc(studentCheckIns.createdAt))
-      .limit(1);
-    
-    return checkIn;
-  }
-
   async getCheckInById(checkInId: string): Promise<StudentCheckIn | undefined> {
     const [checkIn] = await db
       .select()
@@ -2549,21 +2516,6 @@ export class DatabaseStorage implements IStorage {
       .where(eq(studentCheckIns.id, checkInId))
       .returning();
     return updated;
-  }
-
-  async getTodayCheckInsForParent(parentId: string, timezone: string = 'UTC'): Promise<StudentCheckIn[]> {
-    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-
-    return db
-      .select()
-      .from(studentCheckIns)
-      .where(
-        and(
-          eq(studentCheckIns.parentId, parentId),
-          onLocalDay(studentCheckIns.checkInDate, timezone, dateString)
-        )
-      )
-      .orderBy(desc(studentCheckIns.createdAt));
   }
 
   async getTodayCheckInsForStudents(studentIds: string[], timezone: string = 'UTC'): Promise<StudentCheckIn[]> {
@@ -3056,17 +3008,6 @@ export class DatabaseStorage implements IStorage {
     return lastStop;
   }
 
-  async resetRouteStops(routeId: string, timezone: string = 'UTC'): Promise<void> {
-    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
-    await db
-      .delete(routeStopCompletions)
-      .where(
-        and(
-          eq(routeStopCompletions.routeId, routeId),
-          onLocalDay(routeStopCompletions.completionDate, timezone, dateString)
-        )
-      );
-  }
   // Device token operations (push notifications)
   // One transaction, serialized per token by an advisory lock:
   //  a. lock on hashtext(token);
