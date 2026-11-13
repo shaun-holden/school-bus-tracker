@@ -10,6 +10,7 @@ import { LinkCodeEntry } from "@/components/parent/LinkCodeEntry";
 import { MessagingPortal } from "@/components/shared/MessagingPortal";
 import { BluetoothCheckIn } from "@/components/parent/BluetoothCheckIn";
 import { NotificationCenter } from "@/components/parent/NotificationCenter";
+import { PushPermissionCard } from "@/components/shared/PushPermissionCard";
 import { useQuery } from "@tanstack/react-query";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -119,6 +120,9 @@ export default function ParentDashboard() {
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        {/* Phone app only: soft ask for push (renders nothing on web or once handled) */}
+        <PushPermissionCard role="parent" />
+
         {/* Prominent Notification Alert Banner */}
         {(unreadCount?.unreadCount || 0) > 0 && (
           <Link href="/parent/notifications">

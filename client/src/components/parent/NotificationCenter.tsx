@@ -176,7 +176,7 @@ export function NotificationCenter() {
                               {!notification.isRead && (
                                 <Badge className="bg-blue-500 text-white text-xs">New</Badge>
                               )}
-                              {notification.estimatedDelay && (
+                              {notification.estimatedDelay != null && notification.estimatedDelay > 0 && (
                                 <Badge variant="secondary" className="text-xs">
                                   ~{notification.estimatedDelay} min delay
                                 </Badge>
