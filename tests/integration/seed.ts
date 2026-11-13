@@ -568,3 +568,20 @@ export async function seedQ8Round2(ids: SeedIds): Promise<Q8R2Ids> {
     schoolStopOnly: schoolStopOnly.id, schoolRouteOnly: schoolRouteOnly.id, routeR: routeR.id, driverR,
   };
 }
+
+// ---------------------------------------------------------------------------
+// TD-1/TD-2 (Q47) extras: opt-in, like seedQ8Extras. A company-A parent who is
+// linked to studentA ONLY through parentChildLinks (studentA.parentId stays
+// parentA), so the link-code lookup path is the only way in.
+export const TD1_EMAILS = {
+  parentLinkA: 'td1-parent-link-a@sbt.test',
+} as const;
+
+export async function seedTd1Extras(ids: SeedIds): Promise<{ parentLinkA: string }> {
+  const parentLinkA = await insertUser(
+    { email: TD1_EMAILS.parentLinkA, firstName: 'A-ParentLink', lastName: 'Seed', role: 'parent', companyId: ids.companyA },
+    { password: true },
+  );
+  await db.insert(parentChildLinks).values({ parentId: parentLinkA, studentId: ids.studentA });
+  return { parentLinkA };
+}
