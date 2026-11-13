@@ -208,7 +208,8 @@ export interface IStorage {
   
   // School visit operations for driver arrivals/departures
   getSchoolVisitsByDriverRoute(driverId: string, routeId: string): Promise<SchoolVisit[]>;
-  recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone?: string): Promise<SchoolVisit>;
+  recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone?: string, companyId?: string | null): Promise<SchoolVisit>;
+  getSchoolVisitById(id: string): Promise<SchoolVisit | undefined>;
   recordSchoolDeparture(visitId: string): Promise<SchoolVisit | undefined>;
   getTodaysSchoolVisits(driverId: string, timezone?: string): Promise<SchoolVisit[]>;
 
@@ -316,6 +317,8 @@ export interface IStorage {
 
   // System notification operations
   createSystemNotification(notification: InsertSystemNotification): Promise<SystemNotification>;
+  createSystemNotifications(rows: InsertSystemNotification[]): Promise<SystemNotification[]>;
+  getParentRecipientsForRouteEvent(companyId: string, routeId: string, opts: { schoolId?: string; stopId?: string }): Promise<Array<{ parentId: string; studentId: string; firstName: string }>>;
   getSystemNotificationsForAdmin(companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForDriver(driverId: string, companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForParent(parentId: string, companyId: string): Promise<SystemNotification[]>;
@@ -1317,7 +1320,12 @@ export class DatabaseStorage implements IStorage {
     return visits;
   }
 
-  async recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone: string = 'UTC'): Promise<SchoolVisit> {
+  async getSchoolVisitById(id: string): Promise<SchoolVisit | undefined> {
+    const [visit] = await db.select().from(schoolVisits).where(eq(schoolVisits.id, id));
+    return visit;
+  }
+
+  async recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone: string = 'UTC', companyId?: string | null): Promise<SchoolVisit> {
     const now = new Date();
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
 
@@ -1349,6 +1357,8 @@ export class DatabaseStorage implements IStorage {
       const [newVisit] = await db
         .insert(schoolVisits)
         .values({
+          // companyId is set on new rows only; legacy rows stay NULL.
+          companyId: companyId ?? null,
           driverId,
           schoolId,
           routeId,
@@ -2558,6 +2568,71 @@ export class DatabaseStorage implements IStorage {
       .values(notification)
       .returning();
     return created;
+  }
+
+  async createSystemNotifications(rows: InsertSystemNotification[]): Promise<SystemNotification[]> {
+    if (rows.length === 0) return [];
+    return await db.insert(systemNotifications).values(rows).returning();
+  }
+
+  // Parent recipients for a driver route event (school arrival/departure, stop
+  // completed). Students must be in `companyId` and on `routeId` (optionally
+  // narrowed by schoolId / stopId). Parents come from two sources:
+  //  1. parentChildLinks (link-code flow): users.role = 'parent' AND
+  //     (users.companyId = companyId OR users.companyId IS NULL). A null-company
+  //     parent is reachable only via a link to a student of this company; a
+  //     parent of another company is dropped.
+  //  2. students.parentId shortcut: users.role = 'parent' AND users.companyId =
+  //     companyId (strict; parentId may point at a non-parent such as an admin).
+  // Results are merged and deduped by parentId:studentId. Two queries, no
+  // per-student loop. Native push (plans/native-push.md T4) reuses this helper
+  // and adds its own device-token isActive fence.
+  async getParentRecipientsForRouteEvent(
+    companyId: string,
+    routeId: string,
+    opts: { schoolId?: string; stopId?: string },
+  ): Promise<Array<{ parentId: string; studentId: string; firstName: string }>> {
+    if (!companyId || !routeId) return [];
+
+    const studentFilter = and(
+      eq(students.companyId, companyId),
+      eq(students.routeId, routeId),
+      opts.schoolId ? eq(students.schoolId, opts.schoolId) : undefined,
+      opts.stopId ? eq(students.stopId, opts.stopId) : undefined,
+    );
+    const cols = { parentId: users.id, studentId: students.id, firstName: students.firstName };
+
+    const [linked, direct] = await Promise.all([
+      db
+        .select(cols)
+        .from(parentChildLinks)
+        .innerJoin(students, eq(students.id, parentChildLinks.studentId))
+        .innerJoin(users, eq(users.id, parentChildLinks.parentId))
+        .where(and(
+          studentFilter,
+          eq(users.role, 'parent'),
+          or(eq(users.companyId, companyId), isNull(users.companyId)),
+        )),
+      db
+        .select(cols)
+        .from(students)
+        .innerJoin(users, eq(users.id, students.parentId))
+        .where(and(
+          studentFilter,
+          eq(users.role, 'parent'),
+          eq(users.companyId, companyId),
+        )),
+    ]);
+
+    const seen = new Set<string>();
+    const out: Array<{ parentId: string; studentId: string; firstName: string }> = [];
+    for (const r of [...linked, ...direct]) {
+      const key = `${r.parentId}:${r.studentId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(r);
+    }
+    return out;
   }
 
   async getSystemNotificationsForAdmin(companyId: string): Promise<SystemNotification[]> {

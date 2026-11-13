@@ -20,6 +20,7 @@ import {
   driverShiftReports,
   linkCodes,
   parentNotifications,
+  routeSchools,
 } from '@shared/schema';
 
 export const SEED_PASSWORD = 'integration-Pass-123';
@@ -413,4 +414,97 @@ export async function assertSeed(ids: SeedIds): Promise<void> {
   if (noticeCompany.get(ids.noticeA) !== ids.companyA || noticeCompany.get(ids.noticeB) !== ids.companyB) {
     fail('global notices are not in their companies');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Q8 extras: NOT part of the default seed. Only the q8-* / q17b-* files call
+// seedQ8Extras(ids) after the harness has seeded, so every other file keeps
+// the plain two-tenant data.
+//
+// Recipients a company-A route event on routeA at schoolA / stopA1 must reach:
+//   (parentA, studentA)    via both students.parentId and a link: ONE row
+//   (parentNull, studentA) null-company parent linked to an A student
+// and must NOT reach:
+//   parentA3     child on routeA2 (same school, other route)
+//   parentNull   for studentBx (company-B student on routeA/schoolA, bad data)
+//   parentB      for studentBx (company B) and for studentA4 (linked by mistake)
+//   adminA       students.parentId of studentA4 (shortcut pointing at an admin)
+export const Q8_EMAILS = {
+  parentA3: 'q8-parent-a3@sbt.test',
+  driverX: 'q8-driver-x@sbt.test',
+} as const;
+
+export interface Q8Ids {
+  parentA3: string;
+  driverX: string;
+  routeA2: string;
+  stopA2x: string;
+  studentA3: string;
+  studentA4: string;
+  studentBx: string;
+  schoolA2: string;
+  schoolA3: string;
+}
+
+export async function seedQ8Extras(ids: SeedIds): Promise<Q8Ids> {
+  const A = ids.companyA;
+  const parentA3 = await insertUser(
+    { email: Q8_EMAILS.parentA3, firstName: 'A-Parent3', lastName: 'Seed', role: 'parent', companyId: A },
+    { password: true },
+  );
+  // Company-A driver whose assignedRouteId is company B's route (bad data):
+  // reaches the route tenant check on its own.
+  const driverX = await insertUser(
+    { email: Q8_EMAILS.driverX, firstName: 'A-DriverX', lastName: 'Seed', role: 'driver', companyId: A, assignedRouteId: ids.routeB },
+    { password: true },
+  );
+
+  const [routeA2] = await db
+    .insert(routes)
+    .values({ companyId: A, name: 'A-Route2', schoolId: ids.schoolA, busNumber: 'A-200' })
+    .returning({ id: routes.id });
+  const [stopA2x] = await db
+    .insert(routeStops)
+    .values({ routeId: routeA2.id, schoolId: ids.schoolA, name: 'A-Route2-Stop', address: 'A-30 Stop St', order: 1 })
+    .returning({ id: routeStops.id });
+
+  const [schoolA2] = await db
+    .insert(schools)
+    .values({ companyId: A, name: 'A-School2', address: 'A-2 School Rd' })
+    .returning({ id: schools.id });
+  await db.insert(routeSchools).values({ routeId: ids.routeA, schoolId: schoolA2.id, order: 0 });
+  const [schoolA3] = await db
+    .insert(schools)
+    .values({ companyId: A, name: 'A-School3', address: 'A-3 School Rd' })
+    .returning({ id: schools.id });
+
+  const [studentA3] = await db
+    .insert(students)
+    .values({ companyId: A, firstName: 'A-Student3', lastName: 'Seed', parentId: parentA3, schoolId: ids.schoolA, routeId: routeA2.id, stopId: stopA2x.id })
+    .returning({ id: students.id });
+  await db.insert(parentChildLinks).values({ parentId: parentA3, studentId: studentA3.id });
+
+  const [studentA4] = await db
+    .insert(students)
+    .values({ companyId: A, firstName: 'A-Student4', lastName: 'Seed', parentId: ids.adminA, schoolId: ids.schoolA, routeId: ids.routeA, stopId: ids.stopA1 })
+    .returning({ id: students.id });
+  await db.insert(parentChildLinks).values({ parentId: ids.parentB, studentId: studentA4.id });
+
+  const [studentBx] = await db
+    .insert(students)
+    .values({ companyId: ids.companyB, firstName: 'B-StudentX', lastName: 'Seed', parentId: ids.parentB, schoolId: ids.schoolA, routeId: ids.routeA, stopId: ids.stopA1 })
+    .returning({ id: students.id });
+  await db.insert(parentChildLinks).values([
+    { parentId: ids.parentB, studentId: studentBx.id },
+    { parentId: ids.parentNull, studentId: studentBx.id },
+  ]);
+
+  await db.insert(parentChildLinks).values({ parentId: ids.parentNull, studentId: ids.studentA });
+
+  return {
+    parentA3, driverX,
+    routeA2: routeA2.id, stopA2x: stopA2x.id,
+    studentA3: studentA3.id, studentA4: studentA4.id, studentBx: studentBx.id,
+    schoolA2: schoolA2.id, schoolA3: schoolA3.id,
+  };
 }

@@ -2993,6 +2993,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const schoolArrivalBodySchema = z.object({ schoolId: z.string().min(1) });
+
   app.post('/api/driver-school-arrival', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -3005,20 +3007,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
-      const { schoolId } = req.body;
       const routeId = user.assignedRouteId;
 
       if (!routeId) {
         return res.status(400).json({ message: "No route assigned to driver" });
       }
 
-      if (!schoolId) {
+      const parsedBody = schoolArrivalBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
         return res.status(400).json({ message: "School ID is required" });
       }
+      const { schoolId } = parsedBody.data;
 
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      // The route must be in the caller's tenant, and the school must be on
+      // that route (route.schoolId, routeSchools, or a stop's schoolId) and in
+      // the route's company. Any failure is a 404 with nothing written.
+      const route = await storage.getRouteById(routeId);
+      if (!route || isOutsideCallerTenant(user, route.companyId) || !route.companyId) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      const routeCompanyId = route.companyId;
+
+      let schoolOnRoute = route.schoolId === schoolId;
+      if (!schoolOnRoute) {
+        const routeSchoolList = await storage.getSchoolsByRouteId(routeId);
+        schoolOnRoute = routeSchoolList.some(s => s.id === schoolId);
+      }
+      if (!schoolOnRoute) {
+        const stops = await storage.getStopsByRouteId(routeId);
+        schoolOnRoute = stops.some(s => s.schoolId === schoolId);
+      }
+      if (!schoolOnRoute || !(await isSchoolInCompany(schoolId, routeCompanyId))) {
+        return res.status(404).json({ message: "School not found" });
+      }
+
+      const company = await storage.getCompanyById(routeCompanyId);
       const tz = company?.timezone || 'UTC';
-      const visit = await storage.recordSchoolArrival(userId, schoolId, routeId, tz);
+      const visit = await storage.recordSchoolArrival(userId, schoolId, routeId, tz, routeCompanyId);
 
       // Update bus journey with arrive_school event
       try {
@@ -3033,24 +3058,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Error updating journey on school arrival:", journeyError);
       }
 
-      // Notify parents of students at this school
+      // Notify parents of this route's students at this school (one bulk insert)
       try {
         const school = await storage.getSchoolById(schoolId);
-        const studentsAtSchool = await storage.getStudentsBySchoolId(schoolId);
-        for (const student of studentsAtSchool) {
-          const parents = await storage.getLinkedParentsByStudentId(student.id);
-          for (const parent of parents) {
-            await storage.createSystemNotification({
-              companyId: user.companyId,
-              senderId: userId,
-              senderRole: 'driver',
-              recipientRole: 'parent',
-              recipientId: parent.id,
-              title: 'Bus Arrived at School',
-              message: `The bus has arrived at ${school?.name || 'school'} for ${student.firstName}`,
-              type: 'info',
-            });
-          }
+        const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, routeId, { schoolId });
+        if (recipients.length > 0) {
+          await storage.createSystemNotifications(recipients.map(r => ({
+            companyId: routeCompanyId,
+            senderId: userId,
+            senderRole: 'driver' as const,
+            recipientRole: 'parent' as const,
+            recipientId: r.parentId,
+            title: 'Bus Arrived at School',
+            message: `The bus has arrived at ${school?.name || 'school'} for ${r.firstName}`,
+            type: 'info' as const,
+          })));
         }
       } catch (notifyError) {
         console.error("Error sending arrival notifications:", notifyError);
