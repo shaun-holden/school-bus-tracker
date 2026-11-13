@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest, getQueryFn } from "@/lib/queryClient";
 import { Capacitor } from "@capacitor/core";
 import { PushNotifications } from "@capacitor/push-notifications";
-import { clearPushToken, getPushToken, logoutBody, setLoggingOut, setPushToken } from "@/lib/pushToken";
+import { clearPushToken, getPushToken, logoutBody, runWhileLoggingOut, setPushToken } from "@/lib/pushToken";
 import type { User } from "@shared/schema";
 
 // /api/auth/user returns req.user, which the server extends with the user's
@@ -124,22 +124,21 @@ export function useAuth() {
   });
 
   const logoutMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: () =>
       // Send this phone's push token so the server turns off push on this phone only (T4a).
       // The hook's registration listener ignores tokens while this runs.
-      setLoggingOut(true);
-      let token: string | null = null;
-      let loggedOut = false;
-      try {
-        token = await nativeLogoutToken();
-        const res = await apiRequest("/api/auth/logout", "POST", logoutBody(token));
-        loggedOut = true;
-        return res;
-      } finally {
-        await clearNativePushAfterLogout(token, loggedOut);
-        setLoggingOut(false);
-      }
-    },
+      runWhileLoggingOut(async () => {
+        let token: string | null = null;
+        let loggedOut = false;
+        try {
+          token = await nativeLogoutToken();
+          const res = await apiRequest("/api/auth/logout", "POST", logoutBody(token));
+          loggedOut = true;
+          return res;
+        } finally {
+          await clearNativePushAfterLogout(token, loggedOut);
+        }
+      }),
     onSuccess: () => {
       // Wipe all cached data so the next user on this device doesn't see
       // the previous user's buses, students, messages, etc.

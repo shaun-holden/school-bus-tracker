@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 export default function Navigation() {
-  const { user, logoutAsync } = useAuth();
+  const { user, logoutAsync, isLoggingOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
   const { data: unreadCount } = useQuery<{ unreadCount: number }>({
@@ -34,7 +34,7 @@ export default function Navigation() {
     });
 
   const handleLogout = async () => {
-    logout();
+    return logout();
   };
 
   // Q31: the page wrapper (.safe-area-page-below-nav) insets left/right; the negative margins let the bar span the full width while its padding keeps content clear of the notch.
@@ -125,6 +125,7 @@ export default function Navigation() {
                 variant="ghost"
                 className="text-white hover:bg-blue-700"
                 onClick={handleLogout}
+                disabled={isLoggingOut}
                 data-testid="button-logout"
               >
                 Sign Out
@@ -181,6 +182,7 @@ export default function Navigation() {
                   <DropdownMenuItem
                     className="min-h-11"
                     onClick={handleLogout}
+                    disabled={isLoggingOut}
                     data-testid="button-logout-mobile"
                   >
                     Sign Out

@@ -53,7 +53,7 @@ describe('Navigation top bar on mobile (Q28)', () => {
 
   it('one logout implementation: logout() is called only inside handleLogout', () => {
     expect(SRC.match(/\blogout\(\)/g)).toHaveLength(1);
-    expect(SRC).toMatch(/const handleLogout = async \(\) => \{\s*logout\(\);/);
+    expect(SRC).toMatch(/const handleLogout = async \(\) => \{\s*return logout\(\);/);
   });
 
   it('no data-testid appears twice (only one copy of each control is in the DOM)', () => {
