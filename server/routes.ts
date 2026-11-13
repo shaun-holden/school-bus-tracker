@@ -2232,8 +2232,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { date, notes } = req.body;
 
       // Verify parent owns this student
-      const students = await storage.getStudentsByParentId(userId);
-      const student = students.find(s => s.id === studentId);
+      const [directStudents, linkedStudents] = await Promise.all([
+        storage.getStudentsByParentId(userId),
+        storage.getLinkedStudentsByParentId(userId),
+      ]);
+      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
       
       if (!student) {
         return res.status(403).json({ message: "Unauthorized - not your student" });
