@@ -99,7 +99,7 @@ import {
   type InsertRouteStopCompletion,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, inArray, isNull, getTableColumns } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, inArray, isNull, exists, getTableColumns } from "drizzle-orm";
 
 // Trimmed parent row for admin-facing linked-parent lists (SEC-12).
 export type LinkedParentSummary = Pick<User, 'id' | 'firstName' | 'lastName' | 'email'>;
@@ -295,7 +295,8 @@ export interface IStorage {
   markConversationAsRead(userId: string, otherUserId: string, companyId?: string): Promise<void>;
   getUnreadMessageCount(userId: string, companyId?: string): Promise<number>;
   getDriversForParent(parentId: string, companyId?: string): Promise<User[]>;
-  getParentsForDriver(driverId: string, companyId?: string): Promise<User[]>;
+  getParentsForDriver(driverId: string, companyId: string): Promise<User[]>;
+  getAlertRecipients(companyId: string, routeId: string | null): Promise<string[]>;
 
   // Student check-in operations (Bluetooth boarding)
   enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone?: string): Promise<StudentCheckIn>;
@@ -2313,14 +2314,68 @@ export class DatabaseStorage implements IStorage {
     return companyId ? drivers.filter(d => d.companyId === companyId) : drivers;
   }
 
-  async getParentsForDriver(driverId: string, companyId?: string): Promise<User[]> {
+  // Push recipients for an admin alert (parentNotifications row). Mirrors who
+  // getNotificationsForParent shows the row to:
+  //  - common: role 'parent' AND coalesce(isActive, true).
+  //  - global (routeId null): parent of this company, OR a null-company parent
+  //    with a child (students.parentId or a parentChildLinks row) in this company.
+  //  - route (routeId set): parent of this company or with no company, AND a
+  //    child of this company on that route (students.parentId or a link row).
+  // One query, distinct user ids.
+  async getAlertRecipients(companyId: string, routeId: string | null): Promise<string[]> {
+    if (!companyId) return [];
+
+    const childOfCaller = or(
+      eq(students.parentId, users.id),
+      exists(
+        db
+          .select({ one: sql`1` })
+          .from(parentChildLinks)
+          .where(and(
+            eq(parentChildLinks.parentId, users.id),
+            eq(parentChildLinks.studentId, students.id),
+          )),
+      ),
+    );
+    const hasChildInScope = exists(
+      db
+        .select({ one: sql`1` })
+        .from(students)
+        .where(and(
+          eq(students.companyId, companyId),
+          routeId ? eq(students.routeId, routeId) : undefined,
+          childOfCaller,
+        )),
+    );
+
+    const audience = routeId
+      ? and(
+          or(eq(users.companyId, companyId), isNull(users.companyId)),
+          hasChildInScope,
+        )
+      : or(
+          eq(users.companyId, companyId),
+          and(isNull(users.companyId), hasChildInScope),
+        );
+
+    const rows = await db
+      .selectDistinct({ id: users.id })
+      .from(users)
+      .where(and(
+        eq(users.role, 'parent'),
+        sql`coalesce(${users.isActive}, true) = true`,
+        audience,
+      ));
+    return rows.map(r => r.id);
+  }
+
+  async getParentsForDriver(driverId: string, companyId: string): Promise<User[]> {
+    // companyId is required and always applied (no fail-open branch).
+    if (!companyId) return [];
     const driverRoutes = await this.getRoutesByDriverId(driverId);
     if (driverRoutes.length === 0) return [];
 
-    // Filter routes by company if specified
-    const filteredRoutes = companyId 
-      ? driverRoutes.filter(r => r.companyId === companyId)
-      : driverRoutes;
+    const filteredRoutes = driverRoutes.filter(r => r.companyId === companyId);
     if (filteredRoutes.length === 0) return [];
 
     const routeIds = filteredRoutes.map(r => r.id);
@@ -2330,10 +2385,7 @@ export class DatabaseStorage implements IStorage {
       .from(students)
       .where(sql`${students.routeId} IN (${sql.join(routeIds.map(id => sql`${id}`), sql`, `)})`);
 
-    // Filter students by company if specified
-    const filteredStudents = companyId 
-      ? studentsOnRoutes.filter(s => s.companyId === companyId)
-      : studentsOnRoutes;
+    const filteredStudents = studentsOnRoutes.filter(s => s.companyId === companyId);
     if (filteredStudents.length === 0) return [];
 
     const studentIds = filteredStudents.map(s => s.id);
@@ -2352,8 +2404,7 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(sql`${users.id} IN (${sql.join(parentIds.map(id => sql`${id}`), sql`, `)})`);
 
-    // Filter parents by company if specified
-    return companyId ? parents.filter(p => p.companyId === companyId) : parents;
+    return parents.filter(p => p.companyId === companyId);
   }
 
   // Student check-in operations (Bluetooth boarding)

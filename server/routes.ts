@@ -717,7 +717,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!targetDriver) {
         return res.status(404).json({ message: "Driver not found" });
       }
-      if (!isUnscopedMaster(user) && targetDriver.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, targetDriver.companyId)) {
         return res.status(404).json({ message: "Driver not found" });
       }
       // Only driver profiles are editable here (not admins or parents)
@@ -775,13 +775,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Driver not found" });
       }
 
+      // Driver must be in the caller's tenant (an unscoped master may invite any
+      // company's driver). 404 (not 403) masks existence. A null-company driver
+      // can't be invited: the invitation is bound to the driver's company.
+      if (!driver.companyId || isOutsideCallerTenant(user, driver.companyId)) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+      const driverCompanyId = driver.companyId;
+
       if (!driver.email) {
         return res.status(400).json({ message: "Driver does not have an email address" });
-      }
-
-      // Check if driver belongs to same company. 404 (not 403) masks existence.
-      if (driver.companyId !== user.companyId) {
-        return res.status(404).json({ message: "Driver not found" });
       }
 
       // Check if driver already has password set up
@@ -791,7 +794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get company name for the invitation email
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const company = await storage.getCompanyById(driverCompanyId);
       const companyName = company?.name || "School Bus Service";
 
       // Generate secure token
@@ -800,7 +803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
       // Create invitation record
-      await storage.createDriverInvitation(id, driver.email, user.companyId!, tokenHash, expiresAt);
+      await storage.createDriverInvitation(id, driver.email, driverCompanyId, tokenHash, expiresAt);
 
       // Send invitation email
       await sendDriverInvitationEmail(
@@ -2274,7 +2277,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // otherwise overwrite dutyStartTime (on→on) or fire the off-transition
       // cleanup + shift-report creation twice (off→off races).
       if (user.isOnDuty === desired) {
-        return res.json(user);
+        // Trimmed response: never return the full user row.
+        return res.json({ id: user.id, isOnDuty: user.isOnDuty, dutyStartTime: user.dutyStartTime });
       }
 
       // If driver is going off duty, create shift report
@@ -2388,7 +2392,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       };
 
       const updatedUser = await storage.updateDriverProfile(userId, updatedData);
-      res.json(updatedUser);
+      if (!updatedUser) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+      // Trimmed response: never return the full user row.
+      res.json({ id: updatedUser.id, isOnDuty: updatedUser.isOnDuty, dutyStartTime: updatedUser.dutyStartTime });
     } catch (error) {
       console.error("Error updating driver duty status:", error);
       res.status(500).json({ message: "Failed to update duty status" });
@@ -2508,12 +2516,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Start bus journey tracking for admin reports
       try {
-        if (user.companyId) {
-          const company = await storage.getCompanyById(user.companyId);
+        // Journey belongs to the route's company (tz and homebase from it too).
+        if (checkInRoute.companyId) {
+          const company = await storage.getCompanyById(checkInRoute.companyId);
           const tz = company?.timezone || 'UTC';
           const existingJourney = await storage.getTodayBusJourney(busId, tz);
           if (!existingJourney) {
-            await storage.createBusJourney(busId, driverId, routeId, user.companyId, company?.homebaseAddress || undefined);
+            await storage.createBusJourney(busId, driverId, routeId, checkInRoute.companyId, company?.homebaseAddress || undefined);
             console.log(`Started journey for bus ${busId} on route ${routeId} from homebase: ${company?.homebaseAddress || 'not set'}`);
           }
         }
@@ -2579,7 +2588,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Filter by admin's company for multi-tenant isolation
-      const onDutyDrivers = await storage.getOnDutyDrivers(user.companyId || undefined);
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+      const onDutyDrivers = await storage.getOnDutyDrivers(scope);
       res.json(onDutyDrivers);
     } catch (error) {
       console.error("Error fetching on-duty drivers:", error);
@@ -2882,13 +2893,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!parentSchool) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isUnscopedMaster(user)) {
-        if (parentRoute.companyId !== user.companyId) {
-          return res.status(404).json({ message: "Route not found" });
-        }
-        if (parentSchool.companyId !== user.companyId) {
-          return res.status(404).json({ message: "School not found" });
-        }
+      if (isOutsideCallerTenant(user, parentRoute.companyId)) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (isOutsideCallerTenant(user, parentSchool.companyId)) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      // Applies to every caller, master included: never cross-link companies.
+      if (parentSchool.companyId !== parentRoute.companyId) {
+        return res.status(404).json({ message: "School not found" });
       }
 
       // Add school to route
@@ -3498,6 +3511,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const adminAlertBodySchema = z.object({
+    type: z.enum(['delay', 'emergency', 'info', 'route_change']),
+    title: z.string().trim().min(1).max(100),
+    message: z.string().trim().min(1).max(300),
+    routeId: z.string().nullable().optional(),
+    busId: z.string().nullable().optional(),
+    isGlobal: z.boolean().optional(),
+    // 0 is stored as null (a cleared form box coerces to 0; screens would render a stray "0").
+    estimatedDelay: z.preprocess((v) => (v === 0 ? null : v), z.number().int().min(0).nullable().optional()),
+    // Must parse as a date, else 400 (new Date('bad') would 500 at the DB).
+    expiresAt: z.string().refine((s) => !Number.isNaN(Date.parse(s)), { message: 'Invalid date' }).nullable().optional(),
+  });
+
   // Create notification (admin only)
   app.post('/api/notifications', isAuthenticated, async (req: any, res) => {
     try {
@@ -3511,14 +3537,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
-      const { type, title, message, routeId, busId, isGlobal, estimatedDelay, expiresAt } = req.body;
-      
-      if (!title || !message || !type) {
-        return res.status(400).json({ message: "Title, message, and type are required" });
+      const parsedBody = adminAlertBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        return res.status(400).json({ message: "Invalid alert data" });
+      }
+      const { type, title, message, routeId, busId, isGlobal, estimatedDelay, expiresAt } = parsedBody.data;
+
+      // Alerts are always written for the caller's own company.
+      const companyId = user.companyId;
+      if (!companyId) {
+        return res.status(400).json({ message: "No company assigned" });
       }
 
       // If no specific route is selected (routeId is null, empty, or "all"), mark as global
       const effectiveRouteId = routeId && routeId !== "all" ? routeId : null;
+
+      // Tenant checks on body FKs, before any write (T-5)
+      if (effectiveRouteId && !(await isRouteInCompany(effectiveRouteId, companyId))) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (busId) {
+        const bus = await storage.getBusById(busId);
+        if (!bus || bus.companyId !== companyId) {
+          return res.status(404).json({ message: "Bus not found" });
+        }
+      }
+
       const shouldBeGlobal = isGlobal || !effectiveRouteId;
 
       const notification = await storage.createParentNotification({
@@ -3528,15 +3572,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         routeId: effectiveRouteId,
         busId: busId || null,
         createdById: userId,
-        companyId: user.companyId,
+        companyId,
         isGlobal: shouldBeGlobal,
-        estimatedDelay: estimatedDelay || null,
+        estimatedDelay: estimatedDelay ?? null,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
       });
 
-      // Send push notification to parents
-      if (user.companyId) {
-        pushService.notifyParentsOfAlert(user.companyId, title, message, type).catch((err) => {
+      // Push to exactly the parents who will see this row (a global row reaches
+      // the whole company even if it carries a routeId).
+      const recipientIds = await storage.getAlertRecipients(companyId, shouldBeGlobal ? null : effectiveRouteId);
+      if (recipientIds.length > 0) {
+        pushService.notifyUsersOfAlert(recipientIds, title, message, type).catch((err) => {
           console.error("Push notification error:", err);
         });
       }
@@ -4058,13 +4104,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         codeCompanyId = codeStudent?.companyId ?? null;
       }
 
-      // Determine company from the link code or the parent's existing company
-      const companyId = user.companyId || codeCompanyId;
-      if (companyId) {
-        const company = await storage.getCompanyById(companyId);
-        if (!company?.parentPortalEnabled) {
-          return res.status(403).json({ message: "Parent portal is not available on this company's plan." });
-        }
+      // A code with no resolvable company, or from a different company than the
+      // parent's, answers exactly like an unknown code (no existence leak).
+      // Runs before the portal gate and before the code is consumed.
+      if (!codeCompanyId || (user.companyId && codeCompanyId !== user.companyId)) {
+        return res.status(400).json({ message: "Invalid code - not found" });
+      }
+
+      // Portal gate on the code's company
+      const company = await storage.getCompanyById(codeCompanyId);
+      if (!company?.parentPortalEnabled) {
+        return res.status(403).json({ message: "Parent portal is not available on this company's plan." });
       }
 
       const result = await storage.useLinkCode(code.toUpperCase().trim(), userId);
@@ -4159,7 +4209,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           role: 'driver'
         }));
       } else if (user.role === 'driver') {
-        const parents = await storage.getParentsForDriver(userId, user.companyId || undefined);
+        const parents = user.companyId ? await storage.getParentsForDriver(userId, user.companyId) : [];
         contacts = parents.map(p => ({
           id: p.id,
           name: `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.email || 'Parent',
@@ -4296,8 +4346,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      if (recipientEffectiveCompanyId !== effectiveCompanyId) {
-        return res.status(403).json({ message: "Cannot message users outside your organization" });
+      // Same response as a missing recipient: never leak that the user exists
+      // in another tenant. A null effective company matches nothing.
+      if (!effectiveCompanyId || recipientEffectiveCompanyId !== effectiveCompanyId) {
+        return res.status(404).json({ message: "Recipient not found" });
       }
 
       const message = await storage.sendDirectMessage({
@@ -4898,33 +4950,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Check-in ID, bus ID, and route ID are required" });
       }
 
-      // Verify driver is assigned to this route
+      // Every refusal below is the same 404 so a foreign or mismatched id is
+      // indistinguishable from a missing one. All checks are required: a null
+      // routeId / companyId on the check-in fails, a null-company caller fails.
+
+      // Driver must be assigned to this route
       const driverRoutes = await storage.getRoutesByDriverId(userId);
       const isAssignedToRoute = driverRoutes.some(r => r.id === routeId);
       if (!isAssignedToRoute) {
-        return res.status(403).json({ message: "You are not assigned to this route" });
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
-      // Verify bus belongs to same company
+      // Bus must be in the caller's tenant
       const bus = await storage.getBusById(busId);
-      if (!bus || (user.companyId && bus.companyId !== user.companyId)) {
-        return res.status(403).json({ message: "Invalid bus for this operation" });
+      if (!bus || isOutsideCallerTenant(user, bus.companyId)) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
-      // Verify the check-in exists and belongs to driver's route/company
+      // Check-in must exist, be on this route and be in the caller's tenant
       const existingCheckIn = await storage.getCheckInById(checkInId);
       if (!existingCheckIn) {
         return res.status(404).json({ message: "Check-in not found" });
       }
-
-      // Verify check-in is for a student on driver's route
-      if (existingCheckIn.routeId && existingCheckIn.routeId !== routeId) {
-        return res.status(403).json({ message: "This student is not on your route" });
+      if (existingCheckIn.routeId !== routeId) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
-
-      // Verify check-in belongs to same company
-      if (existingCheckIn.companyId && user.companyId && existingCheckIn.companyId !== user.companyId) {
-        return res.status(403).json({ message: "Unauthorized access to this check-in" });
+      if (isOutsideCallerTenant(user, existingCheckIn.companyId)) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
       // Verify check-in is in waiting status
@@ -4981,8 +5033,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Check-in not found" });
       }
 
+      // Only the driver who confirmed boarding, within the caller's tenant.
+      // Same 404 as a missing check-in.
       if (existingCheckIn.driverId !== userId) {
-        return res.status(403).json({ message: "You did not confirm this student's boarding" });
+        return res.status(404).json({ message: "Check-in not found" });
+      }
+      if (isOutsideCallerTenant(user, existingCheckIn.companyId)) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
       const checkIn = await storage.confirmStudentDroppedOff(checkInId);
