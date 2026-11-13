@@ -3518,8 +3518,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     routeId: z.string().nullable().optional(),
     busId: z.string().nullable().optional(),
     isGlobal: z.boolean().optional(),
-    estimatedDelay: z.number().int().min(0).nullable().optional(),
-    expiresAt: z.string().nullable().optional(),
+    // 0 is stored as null (a cleared form box coerces to 0; screens would render a stray "0").
+    estimatedDelay: z.preprocess((v) => (v === 0 ? null : v), z.number().int().min(0).nullable().optional()),
+    // Must parse as a date, else 400 (new Date('bad') would 500 at the DB).
+    expiresAt: z.string().refine((s) => !Number.isNaN(Date.parse(s)), { message: 'Invalid date' }).nullable().optional(),
   });
 
   // Create notification (admin only)
