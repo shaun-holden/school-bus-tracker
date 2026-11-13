@@ -72,5 +72,15 @@ try {
         apply plugin: 'com.google.gms.google-services'
     }
 } catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+    logger.warn("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
+
+// Push (T2/T3): a release build without Firebase config crashes after login, so refuse to build it.
+def googleServicesJson = file('google-services.json')
+tasks.matching { it.name == 'preReleaseBuild' }.configureEach {
+    doFirst {
+        if (!googleServicesJson.exists() || googleServicesJson.length() == 0) {
+            throw new GradleException("android/app/google-services.json is missing. Download it from the Firebase console (Android app com.TopNotchTrainingCenter.SchoolBusTracker) into android/app/. It is gitignored and must never be committed.")
+        }
+    }
 }
