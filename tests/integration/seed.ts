@@ -111,7 +111,7 @@ async function insertCompany(values: typeof companies.$inferInsert): Promise<str
   return row.id;
 }
 
-async function insertUser(
+export async function insertUser(
   values: typeof users.$inferInsert,
   opts: { password: boolean },
 ): Promise<string> {

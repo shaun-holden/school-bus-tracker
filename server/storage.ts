@@ -99,7 +99,7 @@ import {
   type InsertRouteStopCompletion,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, and, desc, asc, sql, or, inArray, getTableColumns } from "drizzle-orm";
+import { eq, and, desc, asc, sql, or, inArray, isNull, getTableColumns } from "drizzle-orm";
 
 // Trimmed parent row for admin-facing linked-parent lists (SEC-12).
 export type LinkedParentSummary = Pick<User, 'id' | 'firstName' | 'lastName' | 'email'>;
@@ -2569,6 +2569,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSystemNotificationsForDriver(driverId: string, companyId: string): Promise<SystemNotification[]> {
+    // Visibility rule: a row addressed to a specific recipient (recipientId set)
+    // is visible only to that recipient. Broadcast rows (recipientId IS NULL)
+    // match by role ('driver'/'all_drivers').
     return await db
       .select()
       .from(systemNotifications)
@@ -2576,9 +2579,11 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(systemNotifications.companyId, companyId),
           or(
-            eq(systemNotifications.recipientRole, 'driver'),
-            eq(systemNotifications.recipientRole, 'all_drivers'),
-            eq(systemNotifications.recipientId, driverId)
+            eq(systemNotifications.recipientId, driverId),
+            and(
+              isNull(systemNotifications.recipientId),
+              inArray(systemNotifications.recipientRole, ['driver', 'all_drivers'])
+            )
           )
         )
       )
@@ -2598,6 +2603,10 @@ export class DatabaseStorage implements IStorage {
       }
     }
 
+    // Visibility rule: a row addressed to a specific recipient (recipientId set)
+    // is visible only to that recipient. Broadcast rows (recipientId IS NULL)
+    // match by role ('parent'/'all_parents') or by route ('route_parents' on one
+    // of the parent's linked children's routes).
     return await db
       .select()
       .from(systemNotifications)
@@ -2605,15 +2614,19 @@ export class DatabaseStorage implements IStorage {
         and(
           eq(systemNotifications.companyId, companyId),
           or(
-            eq(systemNotifications.recipientRole, 'parent'),
-            eq(systemNotifications.recipientRole, 'all_parents'),
             eq(systemNotifications.recipientId, parentId),
-            routeIds.length > 0 
-              ? and(
-                  eq(systemNotifications.recipientRole, 'route_parents'),
-                  inArray(systemNotifications.routeId, routeIds)
-                )
-              : sql`false`
+            and(
+              isNull(systemNotifications.recipientId),
+              or(
+                inArray(systemNotifications.recipientRole, ['parent', 'all_parents']),
+                routeIds.length > 0
+                  ? and(
+                      eq(systemNotifications.recipientRole, 'route_parents'),
+                      inArray(systemNotifications.routeId, routeIds)
+                    )
+                  : sql`false`
+              )
+            )
           )
         )
       )
@@ -2648,6 +2661,9 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getUnreadNotificationCountForDriver(driverId: string, companyId: string): Promise<number> {
+    // Visibility rule: a row addressed to a specific recipient (recipientId set)
+    // is visible only to that recipient. Broadcast rows (recipientId IS NULL)
+    // match by role ('driver'/'all_drivers').
     const result = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(systemNotifications)
@@ -2656,9 +2672,11 @@ export class DatabaseStorage implements IStorage {
           eq(systemNotifications.companyId, companyId),
           eq(systemNotifications.isRead, false),
           or(
-            eq(systemNotifications.recipientRole, 'driver'),
-            eq(systemNotifications.recipientRole, 'all_drivers'),
-            eq(systemNotifications.recipientId, driverId)
+            eq(systemNotifications.recipientId, driverId),
+            and(
+              isNull(systemNotifications.recipientId),
+              inArray(systemNotifications.recipientRole, ['driver', 'all_drivers'])
+            )
           )
         )
       );
@@ -2671,6 +2689,10 @@ export class DatabaseStorage implements IStorage {
       .filter(s => s.routeId)
       .map(s => s.routeId as string);
 
+    // Visibility rule: a row addressed to a specific recipient (recipientId set)
+    // is visible only to that recipient. Broadcast rows (recipientId IS NULL)
+    // match by role ('parent'/'all_parents') or by route ('route_parents' on one
+    // of the parent's linked children's routes).
     const result = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(systemNotifications)
@@ -2679,15 +2701,19 @@ export class DatabaseStorage implements IStorage {
           eq(systemNotifications.companyId, companyId),
           eq(systemNotifications.isRead, false),
           or(
-            eq(systemNotifications.recipientRole, 'parent'),
-            eq(systemNotifications.recipientRole, 'all_parents'),
             eq(systemNotifications.recipientId, parentId),
-            routeIds.length > 0 
-              ? and(
-                  eq(systemNotifications.recipientRole, 'route_parents'),
-                  inArray(systemNotifications.routeId, routeIds)
-                )
-              : sql`false`
+            and(
+              isNull(systemNotifications.recipientId),
+              or(
+                inArray(systemNotifications.recipientRole, ['parent', 'all_parents']),
+                routeIds.length > 0
+                  ? and(
+                      eq(systemNotifications.recipientRole, 'route_parents'),
+                      inArray(systemNotifications.routeId, routeIds)
+                    )
+                  : sql`false`
+              )
+            )
           )
         )
       );
