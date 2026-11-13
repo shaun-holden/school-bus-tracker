@@ -59,7 +59,7 @@ Master admin can impersonate a tenant via `POST /api/master-admin/impersonate/:c
 
 **Roles.** `parent`, `driver`, `admin`, `driver_admin`, `master_admin`. Helpers in `server/tenant.ts`: `isAdminRole`, `isDriverRole`, `isParentRole`, `canAccessMessaging`, plus `isMasterAdminUser`.
 
-**Name collision to avoid.** `registerRoutes` declares a middleware `const isMasterAdmin = (req, res, next) => ...` around line 5012 (for master-admin-only routes). That `const` shadows any module-level function of the same name for the entire `registerRoutes` scope. That's why the boolean helper is `isMasterAdminUser`, not `isMasterAdmin`. Do not reintroduce the collision by renaming it back.
+**Name collision to avoid.** `registerRoutes` declares a middleware `const isMasterAdmin = (req, res, next) => ...` near the end of `registerRoutes` (search `const isMasterAdmin =`; for master-admin-only routes). That `const` shadows any module-level function of the same name for the entire `registerRoutes` scope. That's why the boolean helper is `isMasterAdminUser`, not `isMasterAdmin`. Do not reintroduce the collision by renaming it back.
 
 **Client.** Wouter for routing. Role-based dashboards (`/admin`, `/driver`, `/parent`, `/` for master admin). `client/src/pages/` is flat, `components/` is split by role (`admin/`, `driver/`, `parent/`, `shared/`, `ui/`). Server state via TanStack Query (`client/src/lib/queryClient.ts`). Auth state via `useAuth()` in `client/src/hooks/use-auth.ts` — `logout` calls `queryClient.clear()` to wipe per-user caches. Forms use React Hook Form + Zod schemas imported from `shared/schema.ts`.
 
@@ -82,7 +82,7 @@ A passive `<OfflineBanner />` component at `client/src/components/shared/Offline
 ## Pitfalls learnt the hard way
 
 - **N+1 enrichment.** Student-enrichment endpoints batch-load related records via `getSchoolsByIds` / `getRoutesByIds` / `getRouteStopsByIds` / `getBusesByRouteIds`. Sites 2/3/4 share an `enrichStudentsWithSchoolAndRoute` helper. Don't reintroduce `Promise.all(students.map(async s => await storage.getX(...)))` loops — they turn into dozens of serial queries.
-- **Day-boundary queries.** `storage.getAttendanceByDate(dateString, companyId?, timezone?)` uses Postgres `AT TIME ZONE` with the caller's `company.timezone`. Don't use `setHours(0,0,0,0)` for date windows — it evaluates in server-local time, which is UTC on Railway, so any non-UTC tenant gets the wrong day. The full day-boundary family is now migrated to this pattern: the `getTodays*` attendance methods, `markStudentAttendance`, the bus-journey methods, and the `studentCheckIns` (Bluetooth boarding) methods (`enableStudentCheckIn`, `disableStudentCheckIn`, `getActiveCheckInsForRoute`, `getCheckInStatus`, `getTodayCheckInsForParent`, `getTodayCheckInsForStudents`) all take a `timezone` param and compare `(col AT TIME ZONE ${tz})::date = ${dateString}::date`. Callers derive `tz` from `company?.timezone || 'UTC'`. Any new day-scoped query must follow the same shape — never reintroduce `setHours`/`DATE()` on plain timestamps.
+- **Day-boundary queries.** Day columns (`attendance.date`, `visitDate`, `attendanceDate`, `checkInDate`, `journeyDate`, `completionDate`) are `timestamp without time zone` holding **UTC wall time** (drizzle writes `toISOString()`). Bucket them by the company's local day only through `onLocalDay(col, tz, dateString)` in `server/storage.ts`, which is `((col AT TIME ZONE 'UTC') AT TIME ZONE tz)::date = dateString::date`: the inner `AT TIME ZONE 'UTC'` turns the wall time into an instant, the outer one gives the tenant's wall time, and the result never depends on the Postgres session TimeZone. The old `(col AT TIME ZONE tz)::date` form put events after ~2 pm Eastern on tomorrow (fixed in Q47). **Never write `AT TIME ZONE` inline.** Don't use `setHours(0,0,0,0)` or `DATE()` on plain timestamps either. The whole family uses the helper: `getAttendanceByDate`, the `getTodays*` attendance methods, `markStudentAttendance`, `getAttendanceByRoute`, `getAllAttendanceData`, school visits, the bus-journey and stop-completion methods, and the `studentCheckIns` (Bluetooth boarding) methods (`enableStudentCheckIn`, `disableStudentCheckIn`, `getActiveCheckInsForRoute`, `getTodayCheckInsForStudents`). Each takes a `timezone` param; callers derive `tz` from `company?.timezone || 'UTC'`. Any new day-scoped query calls `onLocalDay` (T4b's push dedupe included).
 - **Duty toggle idempotency.** `PATCH /api/driver/duty-status` no-ops when the requested `isOnDuty` matches the current state. This protects against a rapid double-tap overwriting `dutyStartTime` or firing the off-transition cleanup twice. Preserve the guard.
 - **Geolocation on the driver dashboard.** Uses `@capacitor/geolocation` (CoreLocation on iOS, FusedLocationProvider on Android, `navigator.geolocation` on web). A `permissionDeniedRef` short-circuits the 30s polling loop once the driver denies permission — OS/browsers cache the denial and won't re-prompt, so retrying wastes battery. The driver must toggle duty off/on (or change device settings) to re-arm. Errors surface as a toast plus inline red-bordered message; don't swallow them silently. Match both W3C `.code` (1/2/3) and the native `Error.message` strings ("denied", "unavailable", "timeout") when categorizing failures — Capacitor exposes both shapes depending on platform.
 - **Cross-tenant IDs in request bodies.** When a handler takes a foreign-key id from the request (studentId, routeId, driverId, etc.), fetch the referenced record and check its `companyId` before acting. Storage methods take raw ids and do not tenant-scope internally.
@@ -97,7 +97,7 @@ Vitest, configured in `vitest.config.ts`. Tests live in `tests/` (not colocated)
 
 ## Tooling
 
-**Project-scoped Claude Code subagents.** Four agents live in `.claude/agents/`:
+**Project-scoped Claude Code subagents.** Five agents live in `.claude/agents/`:
 - `planner` — produces file-level plans in `plans/*.md` before any builder runs. Never writes code.
 - `react-builder` — implements approved plans for client/ files.
 - `express-api` — implements approved plans for server/ files.
@@ -140,5 +140,7 @@ Rules (non-negotiable):
 - `plans/offline-readiness-fix.md` (comprehensive, north star)
 - `plans/offline-readiness-fix-phase-a.md` (server + client plumbing, shipped 2026-05-17)
 - `plans/offline-foundation.md` (early draft, superseded by phase-a)
+- `plans/offline-readiness-fix-phase-b.md` (bundled build + CapacitorHttp, shipped 2026-07-11)
+- `td1-day-boundary-fix.md` (Q47 day-boundary fix; untracked, in the main folder's `plans/`)
 
-**Phase B (JWT auth migration) is the next major task.** Gate criteria for starting Phase B are documented in `plans/offline-readiness-fix-phase-a.md` (24 hours deployed, no rollback, ≥1 real user session in logs, zero CORS errors). Do not start Phase B before the gate clears.
+**Phase B shipped 2026-07-11** as the bundled iOS build (`capacitor://localhost`) plus `CapacitorHttp` (`capacitor.config.ts`); a JWT auth migration turned out not to be needed. `PRODUCTION_SERVER_URL` stays as the code-free rollback. See `plans/offline-readiness-fix-phase-b.md`.

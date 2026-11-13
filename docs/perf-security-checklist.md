@@ -71,7 +71,7 @@ Terms: `isMasterAdminUser` (power checks only), `isUnscopedMaster` (the tenant b
 | P-5 | No N+1: no `Promise.all(list.map(... storage.getX ...))`; use `getSchoolsByIds` / `getRoutesByIds` / `getRouteStopsByIds` / `getBusesByRouteIds` / `enrichStudentsWithSchoolAndRoute`. | medium | [S2 API4] [P] |
 | P-6 | List endpoints, especially polled ones, are bounded by a LIMIT, pagination or a date window, never a whole table. | medium | [S2 API4] [S8 CWE-770] |
 | P-7 | A new filtered or joined column (and `companyId` on a new tenant table) has an index. | medium | [P] |
-| P-8 | Day-boundary queries compare `(col AT TIME ZONE ${tz})::date` with the company timezone; no `setHours(0,0,0,0)` or `DATE()` on plain timestamps. | high | [P] |
+| P-8 | Day-boundary queries use `onLocalDay(col, tz, dateString)` (= `((col AT TIME ZONE 'UTC') AT TIME ZONE tz)::date`) with the company timezone; no inline `AT TIME ZONE`, `setHours(0,0,0,0)` or `DATE()` on plain timestamps. | high | [P] |
 | P-9 | The shared `pool` / `db` from `server/db.ts` is reused (no new Pool per request), and any module-level Map, array or cache has a size cap or TTL. | medium | [S14] [S8 CWE-770] |
 | P-10 | Derived state is computed in render or `useMemo`, not copied into state by an effect. | low | [S13] |
 
