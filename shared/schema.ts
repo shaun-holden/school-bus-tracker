@@ -985,6 +985,16 @@ export const deviceTokens = pgTable("device_tokens", {
 export type DeviceToken = typeof deviceTokens.$inferSelect;
 export type InsertDeviceToken = typeof deviceTokens.$inferInsert;
 
+// Body for POST/DELETE /api/device-tokens. iOS (APNs) tokens are hex.
+export const registerDeviceTokenSchema = z.object({
+  token: z.string().min(1).max(512),
+  platform: z.enum(['ios', 'android', 'web']),
+}).strict().superRefine((v, ctx) => {
+  if (v.platform === 'ios' && !/^[0-9a-f]{64,200}$/i.test(v.token)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['token'], message: 'Invalid iOS device token' });
+  }
+});
+
 // ============================================
 // BUS JOURNEY TRACKING (Admin Reports)
 // ============================================

@@ -31,6 +31,6 @@ describe('integration harness smoke', () => {
 
   it('the setup-file factory mocks reach the server graph (no real email/push)', () => {
     expect(vi.isMockFunction(sendDriverInvitationEmail)).toBe(true);
-    expect(vi.isMockFunction(pushService.notifyParentsOfAlert)).toBe(true);
+    expect(vi.isMockFunction(pushService.notifyUsersOfAlert)).toBe(true);
   });
 });
