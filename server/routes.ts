@@ -728,6 +728,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Allow-listed fields only (see updateDriverProfileSchema .pick())
       const validatedData = updateDriverProfileSchema.partial().parse(req.body);
 
+      // The schema turns email "" into null. Never clear an existing email (it
+      // would lock the driver out); a null for a driver without one is a no-op.
+      if ('email' in validatedData && validatedData.email === null) {
+        if (targetDriver.email) {
+          return res.status(400).json({ message: "A driver's email can't be removed" });
+        }
+        delete (validatedData as { email?: unknown }).email;
+      }
+
       // Convert date strings to Date objects for database storage
       const processedData = {
         ...validatedData,
@@ -2242,6 +2251,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validatedData = updateDriverProfileSchema.parse(req.body);
+
+      // The schema turns email "" into null. Never clear an existing email (it
+      // would lock the driver out); a null for a driver without one is a no-op.
+      // Read the caller's own DB row, not the getCaller overlay.
+      if ('email' in validatedData && validatedData.email === null) {
+        const current = await storage.getUser(userId);
+        if (current?.email) {
+          return res.status(400).json({ message: "A driver's email can't be removed" });
+        }
+        delete (validatedData as { email?: unknown }).email;
+      }
       
       // Convert date strings to Date objects if they exist
       const processedData = {
