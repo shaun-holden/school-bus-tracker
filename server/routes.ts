@@ -728,6 +728,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Allow-listed fields only (see updateDriverProfileSchema .pick())
       const validatedData = updateDriverProfileSchema.partial().parse(req.body);
 
+      // The schema turns email "" into null. Never clear an existing email (it
+      // would lock the driver out); a null for a driver without one is a no-op.
+      if ('email' in validatedData && validatedData.email === null) {
+        if (targetDriver.email) {
+          return res.status(400).json({ message: "A driver's email can't be removed" });
+        }
+        delete (validatedData as { email?: unknown }).email;
+      }
+
       // Convert date strings to Date objects for database storage
       const processedData = {
         ...validatedData,
@@ -1061,7 +1070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!targetDriver) {
           return res.status(404).json({ message: "Driver not found" });
         }
-        if (!isUnscopedMaster(user) && targetDriver.companyId !== user.companyId) {
+        if (isOutsideCallerTenant(user, targetDriver.companyId)) {
           return res.status(404).json({ message: "Driver not found" });
         }
       }
@@ -1107,7 +1116,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingBus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isUnscopedMaster(user) && existingBus.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existingBus.companyId)) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -1189,7 +1198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!bus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isUnscopedMaster(user) && bus.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, bus.companyId)) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -1546,7 +1555,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingRoute) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && existingRoute.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existingRoute.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -1649,11 +1658,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
       const validatedData = insertRouteStopSchema.parse({ ...req.body, routeId });
+      if (hasId(validatedData.schoolId) && !(await isSchoolInCompany(validatedData.schoolId, route.companyId))) {
+        return res.status(404).json({ message: "School not found" });
+      }
       const stop = await storage.createRouteStop(validatedData);
       res.json(stop);
     } catch (error) {
@@ -1713,7 +1725,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existing) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isUnscopedMaster(user) && existing.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existing.companyId)) {
         return res.status(404).json({ message: "School not found" });
       }
       const updated = await storage.updateSchool(id, req.body);
@@ -1740,7 +1752,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!school) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isUnscopedMaster(user) && school.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, school.companyId)) {
         return res.status(404).json({ message: "School not found" });
       }
       await storage.deleteSchool(id);
@@ -2082,7 +2094,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingBus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isUnscopedMaster(user) && existingBus.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existingBus.companyId)) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -2242,6 +2254,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validatedData = updateDriverProfileSchema.parse(req.body);
+
+      // The schema turns email "" into null. Never clear an existing email (it
+      // would lock the driver out); a null for a driver without one is a no-op.
+      // Read the caller's own DB row, not the getCaller overlay.
+      if ('email' in validatedData && validatedData.email === null) {
+        const current = await storage.getUser(userId);
+        if (current?.email) {
+          return res.status(400).json({ message: "A driver's email can't be removed" });
+        }
+        delete (validatedData as { email?: unknown }).email;
+      }
       
       // Convert date strings to Date objects if they exist
       const processedData = {
@@ -2671,7 +2694,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!existingStudent) {
           return res.status(404).json({ message: "Student not found" });
         }
-        if (!isUnscopedMaster(user) && existingStudent.companyId !== user.companyId) {
+        if (isOutsideCallerTenant(user, existingStudent.companyId)) {
           return res.status(404).json({ message: "Student not found" });
         }
       }
@@ -2735,7 +2758,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!student) {
           return res.status(404).json({ message: "Student not found" });
         }
-        if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
+        if (isOutsideCallerTenant(user, student.companyId)) {
           return res.status(404).json({ message: "Student not found" });
         }
       }
@@ -2780,7 +2803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
-      } else if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
+      } else if (isOutsideCallerTenant(user, student.companyId)) {
         // Admin path (incl. driver_admin): record-by-id 404 masks existence
         return res.status(404).json({ message: "Student not found" });
       }
@@ -2811,7 +2834,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -2957,7 +2980,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -3340,7 +3363,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -3890,7 +3913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify the student belongs to this admin's company before issuing a
       // link code — otherwise an admin in Company A could hand out a code that
       // grants a parent live tracking of Company B's student.
-      if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, student.companyId)) {
         return res.status(404).json({ message: "Student not found" });
       }
 
@@ -4628,7 +4651,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -5090,7 +5113,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
