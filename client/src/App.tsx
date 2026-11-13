@@ -1,11 +1,16 @@
-import { useEffect, useRef } from "react";
-import { Switch, Route } from "wouter";
+import { useEffect, useRef, useState } from "react";
+import { Switch, Route, useLocation } from "wouter";
+import { Capacitor } from "@capacitor/core";
+import { App as CapacitorApp } from "@capacitor/app";
+import { PushNotifications } from "@capacitor/push-notifications";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useAuth } from "@/hooks/use-auth";
 import { useWebPush } from "@/hooks/use-web-push";
+import { useNativePush } from "@/hooks/use-native-push";
+import { pushRoutes, backButtonAction } from "@/lib/pushRoutes";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import { SplashProvider, useSplash } from "@/lib/splash-context";
@@ -48,9 +53,49 @@ function Router() {
   const isCompanyActive = user?.companyStatus === 'approved' && user?.companyIsActive !== false;
   const { hide: hideSplash } = useSplash();
   const pendingRolePatchSentRef = useRef(false);
+  const [, navigate] = useLocation();
 
-  // Register for web push notifications once authenticated
+  // A tapped push, kept until auth has loaded. Registered first, whatever the
+  // auth state, so a tap that cold-starts the app isn't lost. Only the push
+  // `type` is kept; the route comes from the pushRoutes allow-list (S-21).
+  const pendingPushTypeRef = useRef<{ type: unknown } | null>(null);
+  const [pushTapCount, setPushTapCount] = useState(0);
+  useEffect(() => {
+    if (!Capacitor.isNativePlatform()) return;
+    const handle = PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
+      pendingPushTypeRef.current = { type: action?.notification?.data?.type };
+      setPushTapCount((n) => n + 1);
+    });
+    return () => {
+      void handle.then((h) => h.remove()).catch(() => {});
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isLoading || !pendingPushTypeRef.current) return;
+    const { type } = pendingPushTypeRef.current;
+    pendingPushTypeRef.current = null;
+    // Not logged in, or a role with no route for this type: just open the app.
+    const path = user ? pushRoutes(type, user.role) : null;
+    if (path) navigate(path);
+  }, [pushTapCount, isLoading, user, navigate]);
+
+  // Q46: Android back button / back swipe goes back in the app, else minimises.
+  useEffect(() => {
+    if (Capacitor.getPlatform() !== "android") return;
+    const handle = CapacitorApp.addListener("backButton", ({ canGoBack }) => {
+      if (backButtonAction(canGoBack) === "back") window.history.back();
+      else void CapacitorApp.minimizeApp();
+    });
+    return () => {
+      void handle.then((h) => h.remove()).catch(() => {});
+    };
+  }, []);
+
+  // Register for web push notifications once authenticated (web only; the
+  // phone app uses native push below).
   useWebPush(!!isAuthenticated && !!user?.id);
+  useNativePush(user);
 
   useEffect(() => {
     if (isAuthenticated && user?.id) {

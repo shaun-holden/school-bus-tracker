@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { Capacitor } from "@capacitor/core";
 import { apiRequest } from "@/lib/queryClient";
 import { requestNotificationPermission, onForegroundMessage } from "@/lib/firebase";
 import { useToast } from "@/hooks/use-toast";
@@ -11,6 +12,8 @@ export function useWebPush(enabled: boolean) {
   const { toast } = useToast();
 
   useEffect(() => {
+    // The phone app uses native push (use-native-push.ts); web and native never both run.
+    if (Capacitor.isNativePlatform()) return;
     if (!enabled) return;
     let cancelled = false;
 

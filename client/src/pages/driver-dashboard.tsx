@@ -14,6 +14,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Progress } from "@/components/ui/progress";
 import AppNavigation from "@/components/shared/Navigation";
 import { MessagingPortal } from "@/components/shared/MessagingPortal";
+import { PushPermissionCard } from "@/components/shared/PushPermissionCard";
+import { parseInitialTab } from "@/lib/pushRoutes";
+import { useSearch } from "wouter";
 import { Geolocation } from "@capacitor/geolocation";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -299,7 +302,13 @@ export default function DriverDashboard() {
   const { toast } = useToast();
   const { isAuthenticated, isLoading, user } = useAuth();
   const [currentLocation, setCurrentLocation] = useState({ lat: 40.7128, lng: -74.0060 });
-  const [activeTab, setActiveTab] = useState("overview");
+  // A push tap opens "/?tab=messages": only an existing tab value is accepted.
+  const search = useSearch();
+  const [activeTab, setActiveTab] = useState<string>(() => parseInitialTab(search) ?? "overview");
+  useEffect(() => {
+    const tab = parseInitialTab(search);
+    if (tab) setActiveTab(tab);
+  }, [search]);
   const [isOnDuty, setIsOnDuty] = useState((user as any)?.isOnDuty || false);
   const [showDutyDialog, setShowDutyDialog] = useState(false);
   const [showCheckInDialog, setShowCheckInDialog] = useState(false);
@@ -1797,6 +1806,7 @@ export default function DriverDashboard() {
           {/* Messages Tab */}
           <TabsContent value="messages">
             <div className="space-y-6">
+              <PushPermissionCard role="driver" />
               <DriverAdminAlerts />
               <DriverRouteBroadcast 
                 assignedRouteId={(user as any)?.assignedRouteId} 
