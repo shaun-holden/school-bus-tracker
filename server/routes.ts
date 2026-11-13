@@ -717,7 +717,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!targetDriver) {
         return res.status(404).json({ message: "Driver not found" });
       }
-      if (!isUnscopedMaster(user) && targetDriver.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, targetDriver.companyId)) {
         return res.status(404).json({ message: "Driver not found" });
       }
       // Only driver profiles are editable here (not admins or parents)
@@ -775,13 +775,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Driver not found" });
       }
 
+      // Driver must be in the caller's tenant (an unscoped master may invite any
+      // company's driver). 404 (not 403) masks existence. A null-company driver
+      // can't be invited: the invitation is bound to the driver's company.
+      if (!driver.companyId || isOutsideCallerTenant(user, driver.companyId)) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
+      const driverCompanyId = driver.companyId;
+
       if (!driver.email) {
         return res.status(400).json({ message: "Driver does not have an email address" });
-      }
-
-      // Check if driver belongs to same company. 404 (not 403) masks existence.
-      if (driver.companyId !== user.companyId) {
-        return res.status(404).json({ message: "Driver not found" });
       }
 
       // Check if driver already has password set up
@@ -791,7 +794,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Get company name for the invitation email
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      const company = await storage.getCompanyById(driverCompanyId);
       const companyName = company?.name || "School Bus Service";
 
       // Generate secure token
@@ -800,7 +803,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
       // Create invitation record
-      await storage.createDriverInvitation(id, driver.email, user.companyId!, tokenHash, expiresAt);
+      await storage.createDriverInvitation(id, driver.email, driverCompanyId, tokenHash, expiresAt);
 
       // Send invitation email
       await sendDriverInvitationEmail(
@@ -2508,12 +2511,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Start bus journey tracking for admin reports
       try {
-        if (user.companyId) {
-          const company = await storage.getCompanyById(user.companyId);
+        // Journey belongs to the route's company (tz and homebase from it too).
+        if (checkInRoute.companyId) {
+          const company = await storage.getCompanyById(checkInRoute.companyId);
           const tz = company?.timezone || 'UTC';
           const existingJourney = await storage.getTodayBusJourney(busId, tz);
           if (!existingJourney) {
-            await storage.createBusJourney(busId, driverId, routeId, user.companyId, company?.homebaseAddress || undefined);
+            await storage.createBusJourney(busId, driverId, routeId, checkInRoute.companyId, company?.homebaseAddress || undefined);
             console.log(`Started journey for bus ${busId} on route ${routeId} from homebase: ${company?.homebaseAddress || 'not set'}`);
           }
         }
@@ -2579,7 +2583,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       // Filter by admin's company for multi-tenant isolation
-      const onDutyDrivers = await storage.getOnDutyDrivers(user.companyId || undefined);
+      const scope = companyScope(user);
+      if (scope === null) return res.json([]);
+      const onDutyDrivers = await storage.getOnDutyDrivers(scope);
       res.json(onDutyDrivers);
     } catch (error) {
       console.error("Error fetching on-duty drivers:", error);
@@ -2882,13 +2888,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!parentSchool) {
         return res.status(404).json({ message: "School not found" });
       }
-      if (!isUnscopedMaster(user)) {
-        if (parentRoute.companyId !== user.companyId) {
-          return res.status(404).json({ message: "Route not found" });
-        }
-        if (parentSchool.companyId !== user.companyId) {
-          return res.status(404).json({ message: "School not found" });
-        }
+      if (isOutsideCallerTenant(user, parentRoute.companyId)) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (isOutsideCallerTenant(user, parentSchool.companyId)) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      // Applies to every caller, master included: never cross-link companies.
+      if (parentSchool.companyId !== parentRoute.companyId) {
+        return res.status(404).json({ message: "School not found" });
       }
 
       // Add school to route
@@ -4159,7 +4167,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           role: 'driver'
         }));
       } else if (user.role === 'driver') {
-        const parents = await storage.getParentsForDriver(userId, user.companyId || undefined);
+        const parents = user.companyId ? await storage.getParentsForDriver(userId, user.companyId) : [];
         contacts = parents.map(p => ({
           id: p.id,
           name: `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.email || 'Parent',
@@ -4296,8 +4304,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
       
-      if (recipientEffectiveCompanyId !== effectiveCompanyId) {
-        return res.status(403).json({ message: "Cannot message users outside your organization" });
+      // Same response as a missing recipient: never leak that the user exists
+      // in another tenant. A null effective company matches nothing.
+      if (!effectiveCompanyId || recipientEffectiveCompanyId !== effectiveCompanyId) {
+        return res.status(404).json({ message: "Recipient not found" });
       }
 
       const message = await storage.sendDirectMessage({

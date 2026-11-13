@@ -295,7 +295,7 @@ export interface IStorage {
   markConversationAsRead(userId: string, otherUserId: string, companyId?: string): Promise<void>;
   getUnreadMessageCount(userId: string, companyId?: string): Promise<number>;
   getDriversForParent(parentId: string, companyId?: string): Promise<User[]>;
-  getParentsForDriver(driverId: string, companyId?: string): Promise<User[]>;
+  getParentsForDriver(driverId: string, companyId: string): Promise<User[]>;
 
   // Student check-in operations (Bluetooth boarding)
   enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone?: string): Promise<StudentCheckIn>;
@@ -2313,14 +2313,13 @@ export class DatabaseStorage implements IStorage {
     return companyId ? drivers.filter(d => d.companyId === companyId) : drivers;
   }
 
-  async getParentsForDriver(driverId: string, companyId?: string): Promise<User[]> {
+  async getParentsForDriver(driverId: string, companyId: string): Promise<User[]> {
+    // companyId is required and always applied (no fail-open branch).
+    if (!companyId) return [];
     const driverRoutes = await this.getRoutesByDriverId(driverId);
     if (driverRoutes.length === 0) return [];
 
-    // Filter routes by company if specified
-    const filteredRoutes = companyId 
-      ? driverRoutes.filter(r => r.companyId === companyId)
-      : driverRoutes;
+    const filteredRoutes = driverRoutes.filter(r => r.companyId === companyId);
     if (filteredRoutes.length === 0) return [];
 
     const routeIds = filteredRoutes.map(r => r.id);
@@ -2330,10 +2329,7 @@ export class DatabaseStorage implements IStorage {
       .from(students)
       .where(sql`${students.routeId} IN (${sql.join(routeIds.map(id => sql`${id}`), sql`, `)})`);
 
-    // Filter students by company if specified
-    const filteredStudents = companyId 
-      ? studentsOnRoutes.filter(s => s.companyId === companyId)
-      : studentsOnRoutes;
+    const filteredStudents = studentsOnRoutes.filter(s => s.companyId === companyId);
     if (filteredStudents.length === 0) return [];
 
     const studentIds = filteredStudents.map(s => s.id);
@@ -2352,8 +2348,7 @@ export class DatabaseStorage implements IStorage {
       .from(users)
       .where(sql`${users.id} IN (${sql.join(parentIds.map(id => sql`${id}`), sql`, `)})`);
 
-    // Filter parents by company if specified
-    return companyId ? parents.filter(p => p.companyId === companyId) : parents;
+    return parents.filter(p => p.companyId === companyId);
   }
 
   // Student check-in operations (Bluetooth boarding)
