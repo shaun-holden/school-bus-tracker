@@ -1555,7 +1555,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingRoute) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && existingRoute.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existingRoute.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -1658,11 +1658,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
       const validatedData = insertRouteStopSchema.parse({ ...req.body, routeId });
+      if (hasId(validatedData.schoolId) && !(await isSchoolInCompany(validatedData.schoolId, route.companyId))) {
+        return res.status(404).json({ message: "School not found" });
+      }
       const stop = await storage.createRouteStop(validatedData);
       res.json(stop);
     } catch (error) {
@@ -2831,7 +2834,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -2977,7 +2980,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -3360,7 +3363,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -4648,7 +4651,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
@@ -5110,7 +5113,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route) {
         return res.status(404).json({ message: "Route not found" });
       }
-      if (!isUnscopedMaster(user) && route.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
 
