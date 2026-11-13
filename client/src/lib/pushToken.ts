@@ -12,6 +12,9 @@ export function setPushToken(token: string): void {
 
 export function clearPushToken(): void {
   currentToken = null;
+  // Logout ends here: the server turned this phone's token off, so the next
+  // login (even without a reload, same user and token) must send it again.
+  lastSentKey = null;
 }
 
 /** Body for POST /api/auth/logout: this phone's token, so the server turns off only this phone (T4a). */
@@ -31,6 +34,16 @@ export function setLoggingOut(value: boolean): void {
 
 export function isLoggingOut(): boolean {
   return loggingOut;
+}
+
+/** Runs logout with the "logging out" flag on; the flag is off again afterwards, resolved or rejected. */
+export async function runWhileLoggingOut<T>(logout: () => Promise<T>): Promise<T> {
+  setLoggingOut(true);
+  try {
+    return await logout();
+  } finally {
+    setLoggingOut(false);
+  }
 }
 
 // The last (userId, token) sent to the server this session, so a repeat isn't re-sent.
