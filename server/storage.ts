@@ -224,7 +224,7 @@ export interface IStorage {
 
   // Student attendance operations
   getTodaysStudentAttendance(driverId: string, routeId: string, timezone?: string): Promise<StudentAttendance[]>;
-  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string): Promise<StudentAttendance>;
+  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string, companyId?: string | null): Promise<StudentAttendance>;
   getAttendanceByRoute(routeId: string, dateString?: string, timezone?: string): Promise<StudentAttendance[]>;
   getAllAttendanceData(companyId?: string, timezone?: string): Promise<StudentAttendance[]>;
   getTodaysAttendanceForStudents(studentIds: string[], timezone?: string): Promise<StudentAttendance[]>;
@@ -1410,7 +1410,7 @@ export class DatabaseStorage implements IStorage {
     return attendance;
   }
 
-  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone: string = 'UTC'): Promise<StudentAttendance> {
+  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone: string = 'UTC', companyId?: string | null): Promise<StudentAttendance> {
     const today = new Date();
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(today);
 
@@ -1433,9 +1433,14 @@ export class DatabaseStorage implements IStorage {
       // Update existing attendance
       const [updatedAttendance] = await db
         .update(studentAttendance)
-        .set({ 
-          status, 
-          updatedAt: today 
+        .set({
+          status,
+          updatedAt: today,
+          // Backfill a legacy NULL companyId so admins can see the row;
+          // never overwrite an existing value.
+          ...(companyId
+            ? { companyId: sql`coalesce(${studentAttendance.companyId}, ${companyId})` }
+            : {}),
         })
         .where(eq(studentAttendance.id, existingAttendance[0].id))
         .returning();
@@ -1450,6 +1455,7 @@ export class DatabaseStorage implements IStorage {
           routeId,
           status,
           attendanceDate: today,
+          companyId: companyId ?? null,
         })
         .returning();
       return newAttendance;

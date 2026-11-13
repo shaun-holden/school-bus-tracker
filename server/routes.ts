@@ -3342,10 +3342,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!student || student.routeId !== routeId) {
         return res.status(404).json({ message: "Student not found on your route" });
       }
+      const route = await storage.getRouteById(routeId);
 
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
-      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz);
+      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route?.companyId ?? null);
       res.json(attendance);
     } catch (error) {
       console.error("Error marking student attendance:", error);
