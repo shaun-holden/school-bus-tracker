@@ -1116,7 +1116,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingBus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isUnscopedMaster(user) && existingBus.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existingBus.companyId)) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -1198,7 +1198,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!bus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isUnscopedMaster(user) && bus.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, bus.companyId)) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
@@ -2091,7 +2091,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!existingBus) {
         return res.status(404).json({ message: "Bus not found" });
       }
-      if (!isUnscopedMaster(user) && existingBus.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, existingBus.companyId)) {
         return res.status(404).json({ message: "Bus not found" });
       }
 
