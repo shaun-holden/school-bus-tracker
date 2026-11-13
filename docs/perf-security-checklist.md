@@ -111,7 +111,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | T-1 | Record-by-id handlers without a tenant check | SEC-21, SEC-22, SEC-28, SEC-40 | `PATCH /api/admin-requests/:id/acknowledge` + `/complete`; `DELETE /api/notifications/:id`; `DELETE` / `PATCH …/read` `/api/system-notifications/:id`; `GET /api/drivers/:id/invitation-status`; `GET /api/routes/:routeId/schools`; `PUT /api/routes/:routeId/schools/reorder` |
 | T-2 | Cross-tenant or ownership 403s that reveal a record exists | (R1 route table) | `POST /api/messages` ("outside your organization"); parent paths of GET/PUT/DELETE `/api/students/:id` |
 | T-4, T-6 | Fail-open or null-matches-null tenant checks | SEC-47, SEC-49, SEC-50 | `GET /api/on-duty-drivers` (`user.companyId \|\| undefined`); `POST /api/messages` (null === null); `confirm-boarded` skips checks on a null company; `send-invitation` and `PATCH /api/drivers/:id` bare `!==` |
-| T-5 | Foreign-key ids from the body not tenant-checked | SEC-25, SEC-33 | `driver-school-arrival` (`schoolId`), `driver-school-departure` (`visitId`), `mark-stop-completed` (`routeStopId`/`routeId`), `POST /api/routes/:routeId/stops` (`schoolId`), `POST /api/buses` (`driverId`/`currentRouteId`) |
+| T-5 | Foreign-key ids from the body not tenant-checked | SEC-33 | `POST /api/routes/:routeId/stops` (`schoolId`), `POST /api/buses` (`driverId`/`currentRouteId`) |
 | T-7 | Raw `req.body` into an update | SEC-26 | `PATCH /api/schools/:id` → `storage.updateSchool(id, req.body)` |
 | T-9, S-2 | Parents (any non-driver) get every company bus/route; staff routes without a role check | SEC-29, SEC-21 | `GET /api/buses` and `GET /api/routes` else-branches; `GET /api/attendance`, `GET /api/admin-requests`, admin-requests ack/complete |
 | S-5 | `http://localhost` is allowed with credentials in production (also used by the HF3 Origin guard) | SEC-44 | `ALLOWED_ORIGINS` in `server/index.ts` |
@@ -126,8 +126,9 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | — | No `helmet`, `x-powered-by` on | SEC-34 | `server/index.ts` |
 | P-2 | Async effects without stale-result guards | LEAK-15, LEAK-17 | `admin-dashboard.tsx` `TotalStopsDisplay`; driver location POST after duty-off |
 | P-4 | Global 15 s `refetchInterval`; 5 s driver polls | LEAK-2, LEAK-3, LEAK-12 | `client/src/lib/queryClient.ts`; `driver-dashboard.tsx` routes/buses queries |
-| P-5 | N+1 loops | LEAK-5, LEAK-6, LEAK-8, LEAK-9, LEAK-20, LEAK-21 | `driver-school-arrival`/`departure`, `mark-stop-completed`, `GET /api/reports/journeys`, `GET /api/check-in/waiting/:routeId`, `getConversationsForUser`, `markAllNotificationsRead`, `reorderRouteSchool` |
+| P-5 | N+1 loops | LEAK-6, LEAK-9, LEAK-20, LEAK-21 | `GET /api/reports/journeys`, `GET /api/check-in/waiting/:routeId`, `getConversationsForUser`, `markAllNotificationsRead`, `reorderRouteSchool` |
 | P-6 | Unbounded lists on polled endpoints | LEAK-1 (LIMIT only), LEAK-6, LEAK-7, LEAK-9, LEAK-14 | `getDriverShiftReports`, `getNotificationsForParent`, `getSystemNotificationsFor*`, `getConversation`; `GET /api/available-buses` reads every on-duty driver (all tenants, ids only) |
+| P-7 | Q8/Q17b filters with no index (indexes are a schema change; later schema task) | Q8 | needs an index on `parent_notifications(target_parent_id)`, `students(route_id, school_id)` and `students(route_id, stop_id)` (`getNotificationsForParent`, `getParentRecipientsForRouteEvent`) |
 | P-9 | Session store opens a second pool | LEAK-16 | `new PgStore({ conString })` in `server/customAuth.ts` |
 | X-1 | Older tenant unit tests check helper policy, not handlers | (gaps A5) | `tests/multi-tenant.test.ts` (older tests). The copied helpers are gone: tests import the real ones from `server/tenant.ts` (`92d4d8b`; the last copy, in `tests/parent-features.test.ts`, went in Q7 `8f4cddb`). The Q4 harness is on `main` (`fa85158`), so new paths use `tests/integration/` |
 | S-24 | Existing `npm audit` baseline (32 advisories) | Q2 | dependency plan |
@@ -136,6 +137,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 - **HF1 `ffee2c8` (10):** SEC-6, SEC-9, SEC-10, SEC-13, SEC-16, SEC-23, DUP-1, DUP-3, DUP-7, DUP-8. It also closed parts of LEAK-1 (tenant scope), SEC-25, SEC-28 and SEC-36 (by deleting dead routes) and SEC-46 (invite argument order).
 - **HF2 `594f8b6` (12):** SEC-1, SEC-2, SEC-3, SEC-4, SEC-5, SEC-11, SEC-12, SEC-14, SEC-15, SEC-17, SEC-20, SEC-27. It also closed part of SEC-36 (route log dumps, masked emails).
 - **HF3 `05656a4` (4):** SEC-7, SEC-8, SEC-18, SEC-19.
+- **Q8 + Q17b (dev1 `09c94d1`..):** SEC-25 (arrival `schoolId`, departure `visitId`, stop-completed `routeStopId`/`routeId` are tenant-checked; its other sites went in HF1), LEAK-5 and LEAK-8 (one batched recipient query + one bulk insert). Also the parent/driver system-notification read leak (a row with a `recipientId` is shown only to that user) and targeted parent notices (`targetParentId`) reaching only their target.
 - **Q7 `8f4cddb`:** DUP-2 and the impersonation-scoping part of SEC-45 (T-10, T-4): `getCaller(req)` keeps the overlay on re-fetch, and `companyScope`/`isOutsideCallerTenant` use `isUnscopedMaster`, so an impersonating master is scoped to the impersonated company. SEC-45's session-regeneration and audit-log parts (S-7, S-16 rows) stay open.
 - **T1 push transport (`dev2/work`):** LEAK-18 (S-22): APNs goes over HTTP/2 to an allow-listed host (`APNS_ENVIRONMENT`), with a 10 s timeout per APNs request and per FCM batch.
 

@@ -2993,6 +2993,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const schoolArrivalBodySchema = z.object({ schoolId: z.string().min(1) });
+
   app.post('/api/driver-school-arrival', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -3005,20 +3007,43 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
-      const { schoolId } = req.body;
       const routeId = user.assignedRouteId;
 
       if (!routeId) {
         return res.status(400).json({ message: "No route assigned to driver" });
       }
 
-      if (!schoolId) {
+      const parsedBody = schoolArrivalBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
         return res.status(400).json({ message: "School ID is required" });
       }
+      const { schoolId } = parsedBody.data;
 
-      const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+      // The route must be in the caller's tenant, and the school must be on
+      // that route (route.schoolId, routeSchools, or a stop's schoolId) and in
+      // the route's company. Any failure is a 404 with nothing written.
+      const route = await storage.getRouteById(routeId);
+      if (!route || isOutsideCallerTenant(user, route.companyId) || !route.companyId) {
+        return res.status(404).json({ message: "School not found" });
+      }
+      const routeCompanyId = route.companyId;
+
+      let schoolOnRoute = route.schoolId === schoolId;
+      if (!schoolOnRoute) {
+        const routeSchoolList = await storage.getSchoolsByRouteId(routeId);
+        schoolOnRoute = routeSchoolList.some(s => s.id === schoolId);
+      }
+      if (!schoolOnRoute) {
+        const stops = await storage.getStopsByRouteId(routeId);
+        schoolOnRoute = stops.some(s => s.schoolId === schoolId);
+      }
+      if (!schoolOnRoute || !(await isSchoolInCompany(schoolId, routeCompanyId))) {
+        return res.status(404).json({ message: "School not found" });
+      }
+
+      const company = await storage.getCompanyById(routeCompanyId);
       const tz = company?.timezone || 'UTC';
-      const visit = await storage.recordSchoolArrival(userId, schoolId, routeId, tz);
+      const visit = await storage.recordSchoolArrival(userId, schoolId, routeId, tz, routeCompanyId);
 
       // Update bus journey with arrive_school event
       try {
@@ -3033,24 +3058,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Error updating journey on school arrival:", journeyError);
       }
 
-      // Notify parents of students at this school
+      // Notify parents of this route's students at this school (one bulk insert)
       try {
         const school = await storage.getSchoolById(schoolId);
-        const studentsAtSchool = await storage.getStudentsBySchoolId(schoolId);
-        for (const student of studentsAtSchool) {
-          const parents = await storage.getLinkedParentsByStudentId(student.id);
-          for (const parent of parents) {
-            await storage.createSystemNotification({
-              companyId: user.companyId,
-              senderId: userId,
-              senderRole: 'driver',
-              recipientRole: 'parent',
-              recipientId: parent.id,
-              title: 'Bus Arrived at School',
-              message: `The bus has arrived at ${school?.name || 'school'} for ${student.firstName}`,
-              type: 'info',
-            });
-          }
+        const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, routeId, { schoolId });
+        if (recipients.length > 0) {
+          await storage.createSystemNotifications(recipients.map(r => ({
+            companyId: routeCompanyId,
+            senderId: userId,
+            senderRole: 'driver' as const,
+            recipientRole: 'parent' as const,
+            recipientId: r.parentId,
+            title: 'Bus Arrived at School',
+            message: `The bus has arrived at ${school?.name || 'school'} for ${r.firstName}`,
+            type: 'info' as const,
+          })));
         }
       } catch (notifyError) {
         console.error("Error sending arrival notifications:", notifyError);
@@ -3062,6 +3084,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(500).json({ message: "Failed to record school arrival" });
     }
   });
+
+  const schoolDepartureBodySchema = z.object({ visitId: z.string().min(1) });
 
   app.post('/api/driver-school-departure', isAuthenticated, async (req: any, res) => {
     try {
@@ -3075,13 +3099,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
-      const { visitId } = req.body;
-
-      if (!visitId) {
+      const parsedBody = schoolDepartureBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
         return res.status(400).json({ message: "Visit ID is required" });
       }
+      const { visitId } = parsedBody.data;
 
-      const visit = await storage.recordSchoolDeparture(visitId);
+      // The visit must belong to the calling driver.
+      const existing = await storage.getSchoolVisitById(visitId);
+      if (!existing || existing.driverId !== user.id) {
+        return res.status(404).json({ message: "Visit not found" });
+      }
+
+      // Tenant check goes through the visit's route. Never use visit.companyId
+      // for this check: legacy rows have NULL there.
+      const route = await storage.getRouteById(existing.routeId);
+      if (!route || !route.companyId || isOutsideCallerTenant(user, route.companyId)) {
+        return res.status(404).json({ message: "Visit not found" });
+      }
+      const routeCompanyId = route.companyId;
+
+      const visit = await storage.recordSchoolDeparture(existing.id);
       if (!visit) {
         return res.status(404).json({ message: "Visit not found" });
       }
@@ -3090,7 +3128,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const assignedBus = await storage.getBusByDriverId(userId);
         if (assignedBus) {
-          const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
+          const company = await storage.getCompanyById(routeCompanyId);
           const tz = company?.timezone || 'UTC';
           const todayJourney = await storage.getTodayBusJourney(assignedBus.id, tz);
           if (todayJourney && !todayJourney.departSchoolAt) {
@@ -3101,26 +3139,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         console.error("Error updating journey on school departure:", journeyError);
       }
 
-      // Notify parents of students at this school about departure
+      // Notify parents of the visit's route students at the visit's school
+      // (from the visit, not the driver's current assignedRouteId). One bulk insert.
       try {
-        const school = visit.schoolId ? await storage.getSchoolById(visit.schoolId) : null;
-        if (visit.schoolId) {
-          const studentsAtSchool = await storage.getStudentsBySchoolId(visit.schoolId);
-          for (const student of studentsAtSchool) {
-            const parents = await storage.getLinkedParentsByStudentId(student.id);
-            for (const parent of parents) {
-              await storage.createSystemNotification({
-                companyId: user.companyId,
-                senderId: userId,
-                senderRole: 'driver',
-                recipientRole: 'parent',
-                recipientId: parent.id,
-                title: 'Bus Departed from School',
-                message: `The bus has departed from ${school?.name || 'school'}. ${student.firstName} is on the way.`,
-                type: 'info',
-              });
-            }
-          }
+        const school = await storage.getSchoolById(visit.schoolId);
+        const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, visit.routeId, { schoolId: visit.schoolId });
+        if (recipients.length > 0) {
+          await storage.createSystemNotifications(recipients.map(r => ({
+            companyId: routeCompanyId,
+            senderId: userId,
+            senderRole: 'driver' as const,
+            recipientRole: 'parent' as const,
+            recipientId: r.parentId,
+            title: 'Bus Departed from School',
+            message: `The bus has departed from ${school?.name || 'school'}. ${r.firstName} is on the way.`,
+            type: 'info' as const,
+          })));
         }
       } catch (notifyError) {
         console.error("Error sending departure notifications:", notifyError);
@@ -4427,6 +4461,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ ROUTE STOP COMPLETION ROUTES ============
 
+  const markStopCompletedBodySchema = z.object({
+    routeStopId: z.string().min(1),
+    routeId: z.string().min(1),
+    stopSequence: z.unknown().optional(),
+  });
+
   // Driver marks a stop as completed (arrived)
   app.post('/api/driver/mark-stop-completed', isAuthenticated, async (req: any, res) => {
     try {
@@ -4440,9 +4480,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only drivers can mark stops" });
       }
 
-      const { routeStopId, routeId, stopSequence } = req.body;
-      if (!routeStopId || !routeId) {
+      const parsedBody = markStopCompletedBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
         return res.status(400).json({ message: "Route stop ID and route ID are required" });
+      }
+      const { routeStopId, routeId } = parsedBody.data;
+      const stopSequence = (parsedBody.data.stopSequence as number) || 0;
+
+      // Before anything else: the route must be the driver's assigned route and
+      // in the caller's tenant, and the stop must belong to that route. Any
+      // failure is a 404 with nothing written.
+      if (routeId !== user.assignedRouteId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      const route = await storage.getRouteById(routeId);
+      if (!route || !route.companyId || isOutsideCallerTenant(user, route.companyId)) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      const routeCompanyId = route.companyId;
+      const routeStop = await storage.getRouteStopById(routeStopId);
+      if (!routeStop || routeStop.routeId !== routeId) {
+        return res.status(404).json({ message: "Stop not found" });
       }
 
       // Find the bus assigned to this driver (scoped to their company).
@@ -4457,8 +4515,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No bus assigned. Please check in first." });
       }
 
-      const companyId = user.companyId;
-      if (!companyId) {
+      if (!user.companyId) {
         return res.status(400).json({ message: "No company assigned" });
       }
 
@@ -4468,33 +4525,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         routeId,
         driverId: userId,
         busId: driverBus.id,
-        companyId,
-        stopSequence: stopSequence || 0
+        companyId: routeCompanyId,
+        stopSequence,
       });
 
-      // Get the stop details to find students at this stop
-      const routeStop = await storage.getRouteStopById(routeStopId);
-      
-      // Find students at this stop and notify their parents
-      if (routeStop) {
-        const students = await storage.getStudentsByStopId(routeStopId);
-        for (const student of students) {
-          // Get linked parents
-          const parents = await storage.getLinkedParentsByStudentId(student.id);
-          for (const parent of parents) {
-            // Create notification for parent
-            await storage.createSystemNotification({
-              companyId,
-              senderId: userId,
-              senderRole: 'driver',
-              recipientRole: 'parent',
-              recipientId: parent.id,
-              title: 'Bus Arrived at Stop',
-              message: `The bus has arrived at ${routeStop.address || 'the stop'} for ${student.firstName}`,
-              type: 'info',
-            });
-          }
+      // Notify parents of this route's students at this stop (one bulk insert).
+      // A notify failure must not 500 after the completion was written.
+      try {
+        const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, routeId, { stopId: routeStopId });
+        if (recipients.length > 0) {
+          await storage.createSystemNotifications(recipients.map(r => ({
+            companyId: routeCompanyId,
+            senderId: userId,
+            senderRole: 'driver' as const,
+            recipientRole: 'parent' as const,
+            recipientId: r.parentId,
+            title: 'Bus Arrived at Stop',
+            message: `The bus has arrived at ${routeStop.address || 'the stop'} for ${r.firstName}`,
+            type: 'info' as const,
+          })));
         }
+      } catch (notifyError) {
+        console.error("Error sending stop notifications:", notifyError);
       }
 
       res.json({ success: true, completion });
