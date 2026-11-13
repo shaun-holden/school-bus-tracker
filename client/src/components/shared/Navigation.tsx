@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/use-auth";
 import { useTheme } from "@/hooks/use-theme";
 import { formatRole } from "@/lib/roleLabel";
+import { logoutThenRedirect } from "@/lib/pushToken";
 import { useQuery } from "@tanstack/react-query";
 import { UserCog, Bell, Eye, Sun, Moon, Menu } from "lucide-react";
 import { Link } from "wouter";
@@ -15,7 +16,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 
 export default function Navigation() {
-  const { user, logout } = useAuth();
+  const { user, logoutAsync } = useAuth();
   const { theme, toggleTheme } = useTheme();
 
   const { data: unreadCount } = useQuery<{ unreadCount: number }>({
@@ -24,9 +25,16 @@ export default function Navigation() {
     // Reader only: NotificationCenter owns the polling interval for this key.
   });
 
+  // Leave the page only after the logout request has finished (or failed):
+  // on the phone app it first waits for the push token, and a reload before
+  // the request would keep the session alive.
+  const logout = () =>
+    logoutThenRedirect(logoutAsync, () => {
+      window.location.href = '/';
+    });
+
   const handleLogout = async () => {
     logout();
-    window.location.href = '/';
   };
 
   // Q31: the page wrapper (.safe-area-page-below-nav) insets left/right; the negative margins let the bar span the full width while its padding keeps content clear of the notch.

@@ -947,7 +947,7 @@ function NotificationsTab({ routes, buses }: { routes: any; buses: any }) {
                             <Badge variant="outline" className="text-xs">
                               {notification.type.replace("_", " ")}
                             </Badge>
-                            {notification.estimatedDelay && (
+                            {notification.estimatedDelay != null && notification.estimatedDelay > 0 && (
                               <Badge variant="secondary" className="text-xs">
                                 ~{notification.estimatedDelay} min delay
                               </Badge>

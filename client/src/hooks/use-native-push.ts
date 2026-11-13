@@ -4,7 +4,7 @@ import { PushNotifications } from "@capacitor/push-notifications";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { toast } from "@/hooks/use-toast";
 import { shouldOfferPush } from "@/lib/pushRoutes";
-import { setPushToken } from "@/lib/pushToken";
+import { sendTokenOnce, setPushToken } from "@/lib/pushToken";
 
 /**
  * Native (iOS/Android) push for a logged-in parent or driver (T2).
@@ -76,9 +76,6 @@ export async function turnOnPush(): Promise<void> {
   }
 }
 
-// The last (userId, token) sent to the server this session, so a repeat isn't re-sent.
-let lastSentKey: string | null = null;
-
 const FOREGROUND_QUERY_KEYS = [
   "/api/system-notifications",
   "/api/system-notifications/unread-count",
@@ -104,14 +101,11 @@ export function useNativePush(user: NativePushUser) {
       PushNotifications.addListener("registration", async ({ value }) => {
         if (!value) return;
         setPushToken(value);
-        const key = `${userId}:${value}`;
-        if (lastSentKey === key) return;
-        try {
-          await apiRequest("/api/device-tokens", "POST", { token: value, platform: Capacitor.getPlatform() });
-          lastSentKey = key;
-        } catch {
-          console.warn("Push token could not be saved");
-        }
+        // Skips a repeat, and skips entirely while logout is running.
+        const result = await sendTokenOnce(userId, value, (token) =>
+          apiRequest("/api/device-tokens", "POST", { token, platform: Capacitor.getPlatform() }),
+        );
+        if (result === "failed") console.warn("Push token could not be saved");
       }),
     );
 

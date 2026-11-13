@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Push notification small icon (T3): a white school bus on transparent.
+     Android tints it; colour and gradients would show as a white square. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Body with two windows and two headlights cut out -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M6,3h12a2,2 0,0 1,2 2v12a1,1 0,0 1,-1 1H5a1,1 0,0 1,-1 -1V5a2,2 0,0 1,2 -2z M6,6h5.5v5H6z M12.5,6H18v5h-5.5z M6.5,13.5h2v2h-2z M15.5,13.5h2v2h-2z" />
+    <!-- Mirrors -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M2.5,6.5h1.5v3h-1.5z M20,6.5h1.5v3H20z" />
+    <!-- Two wheels -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M6,18h3v2.5a0.5,0.5 0,0 1,-0.5 0.5h-2a0.5,0.5 0,0 1,-0.5 -0.5z M15,18h3v2.5a0.5,0.5 0,0 1,-0.5 0.5h-2a0.5,0.5 0,0 1,-0.5 -0.5z" />
+</vector>

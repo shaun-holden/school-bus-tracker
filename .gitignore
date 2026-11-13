@@ -18,6 +18,9 @@ build/
 android/keystore.properties
 *.jks
 *.keystore
+# Firebase client config (push T3): local only, never commit
+android/app/google-services.json
+ios/App/App/GoogleService-Info.plist
 # Google Play service account key
 fastlane/play-store-*.json
 *.aab

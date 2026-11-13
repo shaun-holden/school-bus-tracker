@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Push notification accent (T3): the splash / brand blue. -->
+    <color name="notification_color">#1e40af</color>
+</resources>
