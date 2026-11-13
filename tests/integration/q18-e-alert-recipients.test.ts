@@ -87,7 +87,6 @@ beforeAll(async () => {
 
 beforeEach(() => {
   pushMock().mockClear();
-  vi.mocked(pushService.notifyParentsOfAlert).mockClear();
 });
 
 describe('E route alert', () => {
@@ -95,7 +94,6 @@ describe('E route alert', () => {
     const res = await adminA.post(URL).send({ type: 'delay', title: 'Route A late', message: 'About 10 minutes', routeId: h.ids.routeA, isGlobal: false });
     expect(res.status).toBe(200);
     expect(pushedIds()).toEqual([h.ids.parentA, h.ids.parentNull].sort());
-    expect(pushService.notifyParentsOfAlert).not.toHaveBeenCalled();
   });
 
   it('the pushed set matches who sees the route alert in the app (parentA yes, parentA3 no, parentB no)', async () => {

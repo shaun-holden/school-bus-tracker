@@ -4397,10 +4397,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
 
       // Send push notification to recipient
-      const senderName = user.firstName && user.lastName
-        ? `${user.firstName} ${user.lastName}`
-        : user.email || "Someone";
-      pushService.notifyNewMessage(recipientId, senderName, content).catch((err) => {
+      // First name + last initial only; never the email.
+      const senderName = user.firstName
+        ? `${user.firstName}${user.lastName ? ` ${user.lastName.charAt(0)}.` : ''}`
+        : user.role === 'driver' ? 'Your driver'
+        : user.role === 'parent' ? 'A parent'
+        : 'School staff';
+      pushService.notifyNewMessage(recipientId, senderName, undefined, user.id).catch((err) => {
         console.error("Push notification error:", err);
       });
 

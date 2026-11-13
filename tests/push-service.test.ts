@@ -19,7 +19,7 @@ const m = vi.hoisted(() => ({
   sendEach: vi.fn(),
   initializeApp: vi.fn(),
   cert: vi.fn((x: unknown) => x),
-  removeDeviceToken: vi.fn(async () => undefined),
+  deactivateDeviceTokenById: vi.fn(async () => undefined),
   getDeviceTokensForUser: vi.fn(async () => [] as any[]),
   getDeviceTokensForUsers: vi.fn(async () => [] as any[]),
   getUsersByCompanyId: vi.fn(async () => [] as any[]),
@@ -86,7 +86,7 @@ vi.mock('firebase-admin', () => {
 
 vi.mock('../server/storage', () => ({
   storage: {
-    removeDeviceToken: m.removeDeviceToken,
+    deactivateDeviceTokenById: m.deactivateDeviceTokenById,
     getDeviceTokensForUser: m.getDeviceTokensForUser,
     getDeviceTokensForUsers: m.getDeviceTokensForUsers,
     getUsersByCompanyId: m.getUsersByCompanyId,
@@ -147,7 +147,7 @@ beforeEach(() => {
   m.connect.mockClear();
   m.sendEach.mockReset();
   m.initializeApp.mockClear();
-  m.removeDeviceToken.mockClear();
+  m.deactivateDeviceTokenById.mockClear();
   m.getDeviceTokensForUser.mockReset().mockResolvedValue([]);
   m.getDeviceTokensForUsers.mockReset().mockResolvedValue([]);
   m.getUsersByCompanyId.mockReset().mockResolvedValue([]);
@@ -232,7 +232,7 @@ describe('timeouts (S-22)', () => {
     await vi.advanceTimersByTimeAsync(2);
     expect(result).toBe(false);
     expect(m.requests[0].stream.close).toHaveBeenCalled();
-    expect(m.removeDeviceToken).not.toHaveBeenCalled();
+    expect(m.deactivateDeviceTokenById).not.toHaveBeenCalled();
     expect(logs.some((l) => l.includes('APNs timeout'))).toBe(true);
     expectNoTokenInLogs();
   });
@@ -247,7 +247,7 @@ describe('timeouts (S-22)', () => {
     expect(result).toBeUndefined();
     await vi.advanceTimersByTimeAsync(2);
     expect(result).toBe(false);
-    expect(m.removeDeviceToken).not.toHaveBeenCalled();
+    expect(m.deactivateDeviceTokenById).not.toHaveBeenCalled();
     expectNoTokenInLogs();
   });
 });
@@ -267,11 +267,14 @@ describe('APNs token cleanup: only dead-token answers deactivate', () => {
     it(title, async () => {
       const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox' });
       m.reply = () => ({ status, body: reason ? JSON.stringify({ reason }) : '' });
-      expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(false);
+      const t = row(IOS_TOKEN);
+      expect(await pushService.sendToDevice(t, { title: 't', body: 'b' })).toBe(false);
       if (dead) {
-        expect(m.removeDeviceToken).toHaveBeenCalledWith(IOS_TOKEN);
+        // By row id, never by the token string (red if deactivate goes back to the token string).
+        expect(m.deactivateDeviceTokenById).toHaveBeenCalledWith(t.id);
+        expect(m.deactivateDeviceTokenById).not.toHaveBeenCalledWith(IOS_TOKEN);
       } else {
-        expect(m.removeDeviceToken).not.toHaveBeenCalled();
+        expect(m.deactivateDeviceTokenById).not.toHaveBeenCalled();
       }
       if (!dead && (status === 400 || status === 403)) {
         expect(logs.some((l) => l.includes('APNs config error') && (!reason || l.includes(reason)))).toBe(true);
@@ -304,9 +307,10 @@ describe('FCM token cleanup', () => {
         failureCount: 1,
         responses: [{ success: false, error: { code, message: `bad token ${FCM_TOKEN}` } }],
       });
-      expect(await pushService.sendToDevice(row(FCM_TOKEN, 'android'), { title: 't', body: 'b' })).toBe(false);
-      if (dead) expect(m.removeDeviceToken).toHaveBeenCalledWith(FCM_TOKEN);
-      else expect(m.removeDeviceToken).not.toHaveBeenCalled();
+      const t = row(FCM_TOKEN, 'android');
+      expect(await pushService.sendToDevice(t, { title: 't', body: 'b' })).toBe(false);
+      if (dead) expect(m.deactivateDeviceTokenById).toHaveBeenCalledWith(t.id);
+      else expect(m.deactivateDeviceTokenById).not.toHaveBeenCalled();
       expect(logs.some((l) => l.includes(code))).toBe(true);
       expectNoTokenInLogs();
     });
@@ -316,7 +320,7 @@ describe('FCM token cleanup', () => {
     const { pushService } = await load({ FIREBASE_SERVICE_ACCOUNT: '{"project_id":"p"}' });
     m.sendEach.mockRejectedValue(Object.assign(new Error(`boom ${FCM_TOKEN}`), { code: 'app/network-error' }));
     expect(await pushService.sendToDevice(row(FCM_TOKEN, 'android'), { title: 't', body: 'b' })).toBe(false);
-    expect(m.removeDeviceToken).not.toHaveBeenCalled();
+    expect(m.deactivateDeviceTokenById).not.toHaveBeenCalled();
     expectNoTokenInLogs();
   });
 });
@@ -326,9 +330,10 @@ describe('send-time checks', () => {
   it('a non-hex iOS token is skipped, deactivated and never put in a request path (red if the IOS_TOKEN_RE check is removed)', async () => {
     const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox' });
     const bad = '../../3/device/zz' + 'q'.repeat(60);
-    expect(await pushService.sendToDevice(row(bad), { title: 't', body: 'b' })).toBe(false);
+    const t = row(bad);
+    expect(await pushService.sendToDevice(t, { title: 't', body: 'b' })).toBe(false);
     expect(m.requests).toHaveLength(0);
-    expect(m.removeDeviceToken).toHaveBeenCalledWith(bad);
+    expect(m.deactivateDeviceTokenById).toHaveBeenCalledWith(t.id);
     expectNoTokenInLogs([bad]);
   });
 
@@ -484,19 +489,25 @@ describe('payload', () => {
     expect(msg2.android.notification.sound).toBe('default');
   });
 
-  it('notifyParentsOfAlert: an emergency uses the default sound (no "critical" branch) and still reaches the company parents', async () => {
+  it('notifyUsersOfAlert: an emergency uses the default sound (no "critical" branch) and the EMERGENCY category', async () => {
     const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox' });
-    m.getUsersByCompanyId.mockResolvedValue([
-      { id: 'p1', role: 'parent' },
-      { id: 'd1', role: 'driver' },
-    ]);
     m.getDeviceTokensForUsers.mockResolvedValue([row(IOS_TOKEN, 'ios', 'p1')]);
-    await pushService.notifyParentsOfAlert('company-a', 'Alert', 'Bus delayed', 'emergency');
-    expect(m.getDeviceTokensForUsers).toHaveBeenCalledWith(['p1']);
+    await pushService.notifyUsersOfAlert(['p1'], 'Alert', 'Bus delayed', 'emergency');
     const body = JSON.parse(m.requests[0].body);
     expect(body.aps.sound).toBe('default');
     expect(body.aps.category).toBe('EMERGENCY');
   });
+
+  for (const adminType of ['emergency', 'delay', 'info', 'route_change']) {
+    it(`notifyUsersOfAlert (${adminType}): data is exactly { type: 'alert' }, no companyId (red if the admin type goes back into data.type, B1)`, async () => {
+      const { pushService } = await load({ FIREBASE_SERVICE_ACCOUNT: '{"project_id":"p"}' });
+      m.sendEach.mockResolvedValue({ successCount: 1, failureCount: 0, responses: [{ success: true }] });
+      m.getDeviceTokensForUsers.mockResolvedValue([row('fcm-alert', 'android', 'p1')]);
+      await pushService.notifyUsersOfAlert(['p1'], 'Alert', 'Bus delayed', adminType);
+      const msg = m.sendEach.mock.calls[0][0][0];
+      expect(msg.data).toEqual({ type: 'alert' });
+    });
+  }
 
   it('notifyUsersOfAlert sends to exactly the given ids', async () => {
     const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox' });
@@ -620,7 +631,7 @@ describe('APNs JWT reset on provider-token errors', () => {
       expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(true);
       // ES256 signatures are randomised, so a fresh signature never equals the old one.
       expect(auth(1)).not.toBe(auth(0));
-      expect(m.removeDeviceToken).not.toHaveBeenCalled();
+      expect(m.deactivateDeviceTokenById).not.toHaveBeenCalled();
       expectNoTokenInLogs();
     });
   }
