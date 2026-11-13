@@ -4461,6 +4461,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ ROUTE STOP COMPLETION ROUTES ============
 
+  const markStopCompletedBodySchema = z.object({
+    routeStopId: z.string().min(1),
+    routeId: z.string().min(1),
+    stopSequence: z.unknown().optional(),
+  });
+
   // Driver marks a stop as completed (arrived)
   app.post('/api/driver/mark-stop-completed', isAuthenticated, async (req: any, res) => {
     try {
@@ -4474,9 +4480,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only drivers can mark stops" });
       }
 
-      const { routeStopId, routeId, stopSequence } = req.body;
-      if (!routeStopId || !routeId) {
+      const parsedBody = markStopCompletedBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
         return res.status(400).json({ message: "Route stop ID and route ID are required" });
+      }
+      const { routeStopId, routeId } = parsedBody.data;
+      const stopSequence = (parsedBody.data.stopSequence as number) || 0;
+
+      // Before anything else: the route must be the driver's assigned route and
+      // in the caller's tenant, and the stop must belong to that route. Any
+      // failure is a 404 with nothing written.
+      if (routeId !== user.assignedRouteId) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      const route = await storage.getRouteById(routeId);
+      if (!route || !route.companyId || isOutsideCallerTenant(user, route.companyId)) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      const routeCompanyId = route.companyId;
+      const routeStop = await storage.getRouteStopById(routeStopId);
+      if (!routeStop || routeStop.routeId !== routeId) {
+        return res.status(404).json({ message: "Stop not found" });
       }
 
       // Find the bus assigned to this driver (scoped to their company).
@@ -4491,8 +4515,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No bus assigned. Please check in first." });
       }
 
-      const companyId = user.companyId;
-      if (!companyId) {
+      if (!user.companyId) {
         return res.status(400).json({ message: "No company assigned" });
       }
 
@@ -4502,33 +4525,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
         routeId,
         driverId: userId,
         busId: driverBus.id,
-        companyId,
-        stopSequence: stopSequence || 0
+        companyId: routeCompanyId,
+        stopSequence,
       });
 
-      // Get the stop details to find students at this stop
-      const routeStop = await storage.getRouteStopById(routeStopId);
-      
-      // Find students at this stop and notify their parents
-      if (routeStop) {
-        const students = await storage.getStudentsByStopId(routeStopId);
-        for (const student of students) {
-          // Get linked parents
-          const parents = await storage.getLinkedParentsByStudentId(student.id);
-          for (const parent of parents) {
-            // Create notification for parent
-            await storage.createSystemNotification({
-              companyId,
-              senderId: userId,
-              senderRole: 'driver',
-              recipientRole: 'parent',
-              recipientId: parent.id,
-              title: 'Bus Arrived at Stop',
-              message: `The bus has arrived at ${routeStop.address || 'the stop'} for ${student.firstName}`,
-              type: 'info',
-            });
-          }
+      // Notify parents of this route's students at this stop (one bulk insert).
+      // A notify failure must not 500 after the completion was written.
+      try {
+        const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, routeId, { stopId: routeStopId });
+        if (recipients.length > 0) {
+          await storage.createSystemNotifications(recipients.map(r => ({
+            companyId: routeCompanyId,
+            senderId: userId,
+            senderRole: 'driver' as const,
+            recipientRole: 'parent' as const,
+            recipientId: r.parentId,
+            title: 'Bus Arrived at Stop',
+            message: `The bus has arrived at ${routeStop.address || 'the stop'} for ${r.firstName}`,
+            type: 'info' as const,
+          })));
         }
+      } catch (notifyError) {
+        console.error("Error sending stop notifications:", notifyError);
       }
 
       res.json({ success: true, completion });
