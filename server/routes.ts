@@ -1070,7 +1070,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!targetDriver) {
           return res.status(404).json({ message: "Driver not found" });
         }
-        if (!isUnscopedMaster(user) && targetDriver.companyId !== user.companyId) {
+        if (isOutsideCallerTenant(user, targetDriver.companyId)) {
           return res.status(404).json({ message: "Driver not found" });
         }
       }
@@ -3913,7 +3913,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Verify the student belongs to this admin's company before issuing a
       // link code — otherwise an admin in Company A could hand out a code that
       // grants a parent live tracking of Company B's student.
-      if (!isUnscopedMaster(user) && student.companyId !== user.companyId) {
+      if (isOutsideCallerTenant(user, student.companyId)) {
         return res.status(404).json({ message: "Student not found" });
       }
 
