@@ -3511,6 +3511,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const adminAlertBodySchema = z.object({
+    type: z.enum(['delay', 'emergency', 'info', 'route_change']),
+    title: z.string().trim().min(1).max(100),
+    message: z.string().trim().min(1).max(300),
+    routeId: z.string().nullable().optional(),
+    busId: z.string().nullable().optional(),
+    isGlobal: z.boolean().optional(),
+    estimatedDelay: z.number().int().min(0).nullable().optional(),
+    expiresAt: z.string().nullable().optional(),
+  });
+
   // Create notification (admin only)
   app.post('/api/notifications', isAuthenticated, async (req: any, res) => {
     try {
@@ -3524,14 +3535,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
-      const { type, title, message, routeId, busId, isGlobal, estimatedDelay, expiresAt } = req.body;
-      
-      if (!title || !message || !type) {
-        return res.status(400).json({ message: "Title, message, and type are required" });
+      const parsedBody = adminAlertBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        return res.status(400).json({ message: "Invalid alert data" });
+      }
+      const { type, title, message, routeId, busId, isGlobal, estimatedDelay, expiresAt } = parsedBody.data;
+
+      // Alerts are always written for the caller's own company.
+      const companyId = user.companyId;
+      if (!companyId) {
+        return res.status(400).json({ message: "No company assigned" });
       }
 
       // If no specific route is selected (routeId is null, empty, or "all"), mark as global
       const effectiveRouteId = routeId && routeId !== "all" ? routeId : null;
+
+      // Tenant checks on body FKs, before any write (T-5)
+      if (effectiveRouteId && !(await isRouteInCompany(effectiveRouteId, companyId))) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      if (busId) {
+        const bus = await storage.getBusById(busId);
+        if (!bus || bus.companyId !== companyId) {
+          return res.status(404).json({ message: "Bus not found" });
+        }
+      }
+
       const shouldBeGlobal = isGlobal || !effectiveRouteId;
 
       const notification = await storage.createParentNotification({
@@ -3541,15 +3570,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         routeId: effectiveRouteId,
         busId: busId || null,
         createdById: userId,
-        companyId: user.companyId,
+        companyId,
         isGlobal: shouldBeGlobal,
-        estimatedDelay: estimatedDelay || null,
+        estimatedDelay: estimatedDelay ?? null,
         expiresAt: expiresAt ? new Date(expiresAt) : null,
       });
 
-      // Send push notification to parents
-      if (user.companyId) {
-        pushService.notifyParentsOfAlert(user.companyId, title, message, type).catch((err) => {
+      // Push to exactly the parents who will see this row (a global row reaches
+      // the whole company even if it carries a routeId).
+      const recipientIds = await storage.getAlertRecipients(companyId, shouldBeGlobal ? null : effectiveRouteId);
+      if (recipientIds.length > 0) {
+        pushService.notifyUsersOfAlert(recipientIds, title, message, type).catch((err) => {
           console.error("Push notification error:", err);
         });
       }
