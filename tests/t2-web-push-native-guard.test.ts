@@ -30,6 +30,7 @@ const setPushCardState = vi.fn();
 vi.mock("@/hooks/use-native-push", () => ({ setPushCardState: (s: unknown) => setPushCardState(s) }));
 
 import { useWebPush, turnOnWebPush } from "../client/src/hooks/use-web-push";
+import { setLoggingOut } from "../client/src/lib/pushToken";
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 const requestPermission = vi.fn(async () => "granted");
@@ -48,6 +49,7 @@ describe("use-web-push (web and native push never both run; prompt only from a t
     isNativePlatform.mockReturnValue(false);
   });
   afterEach(() => {
+    setLoggingOut(false);
     vi.unstubAllGlobals();
   });
 
@@ -96,6 +98,31 @@ describe("use-web-push (web and native push never both run; prompt only from a t
     useWebPush({ id: "u-granted", role: "parent" });
     await flush();
     expect(apiRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("web + 'granted': logout (user → null) then the same user logs in again in the same tab → a second POST (Q61b)", async () => {
+    stubNotification("granted");
+    useWebPush({ id: "u-relogin", role: "parent" });
+    await flush();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    useWebPush(null); // logged out, no reload: the server turned this user's web tokens off
+    await flush();
+    expect(apiRequest).toHaveBeenCalledTimes(1);
+
+    useWebPush({ id: "u-relogin", role: "parent" });
+    await flush();
+    expect(apiRequest).toHaveBeenCalledTimes(2);
+    expect(apiRequest).toHaveBeenLastCalledWith("/api/device-tokens", "POST", { token: "web-token-1", platform: "web" });
+  });
+
+  it("web + 'granted' while isLoggingOut() is true: no POST (Q61b)", async () => {
+    stubNotification("granted");
+    setLoggingOut(true);
+    useWebPush({ id: "u-loggingout", role: "parent" });
+    await flush();
+    expect(getWebPushToken).toHaveBeenCalledTimes(1);
+    expect(apiRequest).not.toHaveBeenCalled();
   });
 
   it.each([

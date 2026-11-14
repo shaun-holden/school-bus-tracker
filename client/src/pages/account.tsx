@@ -46,7 +46,8 @@ export default function AccountPage() {
       window.location.href = "/delete-account?done=1";
     } catch (err) {
       setError(deleteAccountErrorText(err));
-      // Don't keep a wrong password: not in the field, not in the mutation cache.
+      // Don't keep a wrong password: clear the field, and reset the mutation so
+      // TanStack drops it from the mutation cache on the next tick (gcTime 0 in use-auth).
       setPassword("");
       resetDeleteAccount();
     }

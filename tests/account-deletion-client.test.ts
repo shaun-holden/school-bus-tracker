@@ -1,7 +1,33 @@
 // Q59 client: account deletion. Unit only (no DB, no DOM): the pure helpers in
 // client/src/lib/accountDeletion.ts, plus source-text checks on App.tsx routes
-// and the delete mutation in use-auth.ts.
-import { describe, it, expect } from 'vitest';
+// and the delete mutation in use-auth.ts, plus (Q61b) the delete mutation run in a real QueryClient.
+import { describe, it, expect, vi } from 'vitest';
+
+// Q61b: capture the options useAuth() hands to useMutation, so the behaviour
+// test can run the real delete mutation options in a real QueryClient.
+const { mutationOptions, queryClientForHook, apiRequestMock } = vi.hoisted(() => ({
+  mutationOptions: [] as Array<Record<string, unknown>>,
+  queryClientForHook: { current: null as unknown },
+  apiRequestMock: vi.fn(),
+}));
+vi.mock('@tanstack/react-query', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@tanstack/react-query')>();
+  return {
+    ...actual,
+    useQueryClient: () => queryClientForHook.current,
+    useQuery: () => ({ data: null, isLoading: false, error: null }),
+    useMutation: (opts: Record<string, unknown>) => {
+      mutationOptions.push(opts);
+      return { mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false, error: null, reset: vi.fn() };
+    },
+  };
+});
+vi.mock('@/lib/queryClient', () => ({
+  apiRequest: (...a: unknown[]) => apiRequestMock(...a),
+  getQueryFn: () => async () => null,
+}));
+vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => false } }));
+vi.mock('@capacitor/push-notifications', () => ({ PushNotifications: {} }));
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import {
@@ -142,12 +168,35 @@ describe('use-auth.ts delete mutation', () => {
 });
 
 describe('Q61 follow-ups', () => {
-  it('account.tsx handleDelete: the catch clears the password and resets the mutation', () => {
+  it('account.tsx handleDelete: the catch clears the password field and calls resetDeleteAccount()', () => {
     const src = read('client/src/pages/account.tsx');
     const m = src.match(/const handleDelete = async \(\) => \{[\s\S]*?\} catch \(err\) \{([\s\S]*?)\n {4}\}/);
     expect(m, 'handleDelete catch').not.toBeNull();
     expect(m![1]).toContain('setPassword("");');
     expect(m![1]).toContain('resetDeleteAccount();');
+  });
+
+  it('Q61b: after a failed delete + reset(), the mutation cache no longer holds the password', async () => {
+    const { QueryClient, MutationObserver } =
+      await vi.importActual<typeof import('@tanstack/react-query')>('@tanstack/react-query');
+    const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    queryClientForHook.current = client;
+    mutationOptions.length = 0;
+    const { useAuth } = await import('../client/src/hooks/use-auth');
+    useAuth();
+    const deleteOpts = mutationOptions.find((o) => String(o.mutationFn).includes('/api/auth/delete-account'));
+    expect(deleteOpts, 'the delete mutation options').toBeDefined();
+
+    apiRequestMock.mockRejectedValueOnce(new Error('400: {"message":"Wrong password","code":"BAD_PASSWORD"}'));
+    const observer = new MutationObserver(client, deleteOpts as never);
+    await observer.mutate('secret-pw-x' as never).catch(() => {});
+    const holdsPassword = () =>
+      client.getMutationCache().getAll().some((m) => JSON.stringify(m.state.variables ?? null).includes('secret-pw-x'));
+    expect(holdsPassword(), 'the failed mutation is cached until reset').toBe(true);
+
+    observer.reset();
+    await new Promise((r) => setTimeout(r, 10));
+    expect(holdsPassword()).toBe(false);
   });
 
   it('use-auth exports resetDeleteAccount from the delete mutation', () => {

@@ -4,6 +4,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { askWebPushPermission, getWebPushToken, onForegroundMessage } from "@/lib/firebase";
 import { shouldOfferWebPush } from "@/lib/pushRoutes";
 import { setPushCardState } from "@/hooks/use-native-push";
+import { isLoggingOut } from "@/lib/pushToken";
 import { useToast } from "@/hooks/use-toast";
 
 /**
@@ -23,9 +24,14 @@ let activeUserId: string | null = null;
 // Starts the foreground toast listener once permission is granted from a tap.
 let startForegroundListener: (() => void) | null = null;
 // The last (userId, token) sent this page session, so a remount doesn't POST again.
+// Cleared when the hook runs with no user (logout without a reload): the server
+// turned the caller's web tokens off, so the next login must send it again.
+// (Not pushToken.sendTokenOnce: its key is cleared only by the native logout path.)
 let lastSentKey: string | null = null;
 
 async function sendWebTokenOnce(userId: string, token: string): Promise<void> {
+  // Logout or account deletion is running: don't turn the token back on.
+  if (isLoggingOut()) return;
   const key = `${userId}:${token}`;
   if (lastSentKey === key) return;
   try {
@@ -58,7 +64,11 @@ export function useWebPush(user: WebPushUser) {
 
   useEffect(() => {
     if (Capacitor.isNativePlatform()) return;
-    if (!userId) return;
+    if (!userId) {
+      // Logged out (or a role that gets no web push): the next login sends again.
+      lastSentKey = null;
+      return;
+    }
     if (typeof window === "undefined" || !("Notification" in window)) return;
 
     activeUserId = userId;

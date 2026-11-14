@@ -172,6 +172,10 @@ export function useAuth() {
         }
         return res;
       }),
+    // The variables are the password: with gcTime 0, the reset() after a failed
+    // delete lets TanStack drop the mutation (and the password) on the next tick,
+    // instead of keeping it in the mutation cache for the default 5 minutes.
+    gcTime: 0,
     onSuccess: () => {
       // The account is gone: drop every cached query.
       queryClient.clear();

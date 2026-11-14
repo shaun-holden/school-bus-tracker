@@ -2,7 +2,6 @@ import { Link } from "wouter";
 import { ArrowLeft, Bus, Mail } from "lucide-react";
 import { SUPPORT_EMAIL } from "@/lib/support";
 
-
 function Faq({ q, children }: { q: string; children: React.ReactNode }) {
   return (
     <div className="space-y-2">
