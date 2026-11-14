@@ -216,10 +216,10 @@ describe('6. messaging (Q19): master only while impersonating', () => {
       expect(res.body).toEqual({ message: 'Only parents and drivers can access messaging' });
     });
 
-    it(`POST /api/messages → 403 (red if ${MSG_CLAUSE})`, async () => {
+    it('POST /api/messages → 403 (Q62: the master send block runs before canAccessMessaging)', async () => {
       const res = await master.post('/api/messages').send({ recipientId: h.ids.parentA, content: 'master-unscoped' });
       expect(res.status).toBe(403);
-      expect(res.body).toEqual({ message: 'Only parents and drivers can send messages' });
+      expect(res.body).toEqual({ message: "Staff messages can't be sent while viewing a school" });
     });
   });
 
@@ -242,10 +242,10 @@ describe('6. messaging (Q19): master only while impersonating', () => {
       expect(Array.isArray(res.body)).toBe(true);
     });
 
-    it('POST /api/messages to parentA → 200, stored in company A from the master', async () => {
+    it('POST /api/messages to parentA → 403 (Q62: reading stays, sending is refused; red if the master send block is removed)', async () => {
       const res = await impersonator.post('/api/messages').send({ recipientId: h.ids.parentA, content: 'imp-to-parentA' });
-      expect(res.status).toBe(200);
-      expect(res.body).toMatchObject({ senderId: h.ids.master, recipientId: h.ids.parentA, companyId: h.ids.companyA });
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ message: "Staff messages can't be sent while viewing a school" });
     });
   });
 
