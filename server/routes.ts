@@ -4564,7 +4564,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Send push notification to recipient
       // First name + last initial only; never the email.
-      const senderName = user.firstName
+      // An impersonating master admin shows as "School staff", never by name.
+      const senderName = ('_masterAdminImpersonating' in user && user._masterAdminImpersonating === true) ? 'School staff'
+        : user.firstName
         ? `${user.firstName}${user.lastName ? ` ${user.lastName.charAt(0)}.` : ''}`
         : user.role === 'driver' ? 'Your driver'
         : user.role === 'parent' ? 'A parent'
