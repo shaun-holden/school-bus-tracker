@@ -40,7 +40,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          # Same major as production (nixpacks.toml nodejs_20).
+          # Same major as production (.node-version / RAILPACK_NODE_VERSION=20).
           node-version-file: .node-version
           cache: 'npm'
 

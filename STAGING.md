@@ -20,12 +20,12 @@ Railway settings live in the dashboard only. There is no `railway.json` and no `
 | `RAILPACK_NODE_VERSION` | `20` | `20` |
 | Build command | blank (Railpack runs `npm run build`) | blank |
 | Start command | `npm start` | `npm start` |
-| Health check path / timeout | `/healthz` / 300 | `/healthz` / 300 |
-| Restart policy | On Failure, max retries 3 | On Failure, max retries 3 |
+| Health check path / timeout | `/healthz` / 300 (to set at the next production ship) | `/healthz` / 300 |
+| Restart policy | On Failure, max retries 10 (staging 3) | On Failure, max retries 3 |
 | DB service (Postgres 17) | `Postgres` | `Postgres-cKuC` |
 | `DATABASE_URL` | `${{Postgres.DATABASE_URL}}` | `${{Postgres-cKuC.DATABASE_URL}}` |
 
-**Production cutover:** production's builder, start command and health check get switched in the dashboard when Q16 (the `railway.json` / `nixpacks.toml` removal) reaches production. That must happen before **2026-12-01**, when Railway stops reading `railway.json`.
+**Production cutover:** checked by DeShaun 2026-11-14: builder Railpack + Node 20 and the blank start command (`npm start`) are set. The health check path was still empty; it is set to `/healthz` / 300 at the next production ship.
 
 ### Variables (names only; values are set in the Railway dashboard, never in a Claude window)
 
