@@ -30,6 +30,8 @@ import OnboardingSuccess from "@/pages/onboarding-success";
 import OnboardingPending from "@/pages/onboarding-pending";
 import PrivacyPolicy from "@/pages/privacy";
 import Support from "@/pages/support";
+import DeleteAccount from "@/pages/delete-account";
+import AccountPage from "@/pages/account";
 
 // HF3: admins of a company that is not approved+active get 403s from every
 // admin API, so show the pending page instead of an empty dashboard. When the
@@ -153,12 +155,14 @@ function Router() {
       <Route path="/onboarding/success" component={OnboardingSuccess} />
       <Route path="/onboarding/pending" component={OnboardingPending} />
       <Route path="/privacy" component={PrivacyPolicy} />
+      <Route path="/delete-account" component={DeleteAccount} />
       <Route path="/support" component={Support} />
       {!isAuthenticated ? (
         <Route path="/" component={Landing} />
       ) : (
         <>
           <Route path="/select-role" component={RoleSelection} />
+          <Route path="/account" component={AccountPage} />
           {!user?.role && <Route path="/" component={RoleSelection} />}
           {user?.role === 'parent' && <Route path="/" component={ParentDashboard} />}
           {user?.role === 'parent' && <Route path="/parent" component={ParentDashboard} />}

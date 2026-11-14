@@ -146,6 +146,38 @@ export function useAuth() {
     },
   });
 
+  // Q59: parent/driver deletes their own account. Runs with the "logging out"
+  // flag on, so the registration listener can't re-send this phone's token.
+  const deleteAccountMutation = useMutation({
+    mutationFn: (password: string) =>
+      runWhileLoggingOut(async () => {
+        const res = await apiRequest("/api/auth/delete-account", "POST", { password });
+        // Only after the 200. On a throw (wrong password, on duty, ...) nothing changes.
+        // The server already turned this phone's token off; unregister so the OS
+        // stops delivering, then clear the tray, the in-memory token and the
+        // Bluetooth check-in id.
+        await unregisterNativePush();
+        if (Capacitor.isNativePlatform()) {
+          try {
+            await PushNotifications.removeAllDeliveredNotifications();
+          } catch {
+            // nothing to clear
+          }
+        }
+        clearPushToken();
+        try {
+          localStorage.removeItem("bluetooth_device_id");
+        } catch {
+          // storage unavailable
+        }
+        return res;
+      }),
+    onSuccess: () => {
+      // The account is gone: drop every cached query.
+      queryClient.clear();
+    },
+  });
+
   return {
     user: userQuery.data,
     isLoading: userQuery.isLoading,
@@ -162,5 +194,7 @@ export function useAuth() {
     logout: logoutMutation.mutate,
     logoutAsync: logoutMutation.mutateAsync,
     isLoggingOut: logoutMutation.isPending,
+    deleteAccountAsync: deleteAccountMutation.mutateAsync,
+    isDeletingAccount: deleteAccountMutation.isPending,
   };
 }

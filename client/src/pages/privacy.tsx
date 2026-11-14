@@ -143,7 +143,14 @@ export default function PrivacyPolicy() {
               <li>Access or correct your account information from within the App, or by contacting us.</li>
               <li>Turn location off by ending duty (drivers) or disabling location in device settings.</li>
               <li>Turn off notifications in your device settings; logging out deactivates your device token.</li>
-              <li>Request deletion of your account or information by contacting us at the address below.</li>
+              <li>
+                Delete your account yourself in the App (Menu → Account), or request deletion of your
+                account or information by contacting us at the address below. See{" "}
+                <a href="/delete-account" className="text-blue-700 underline" data-testid="link-delete-account">
+                  how to delete your account
+                </a>
+                .
+              </li>
             </ul>
           </Section>
 
