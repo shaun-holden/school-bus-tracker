@@ -16,6 +16,8 @@ const NO_NAME_EMAIL = 'q62-noname-driver@sbt.test';
 let master: Agent;
 let parentA: Agent;
 let driverA: Agent;
+let adminA: Agent;
+let driverAdminA: Agent;
 let noNameDriver: string;
 
 const send = () => vi.mocked(pushService.sendToUsers);
@@ -33,11 +35,13 @@ beforeAll(async () => {
   const [m] = await h.db.select().from(users).where(eq(users.id, h.ids.master));
   expect(m.firstName).toBeTruthy();
 
-  // 3 logins (MAX_LOGINS_PER_FILE is 8).
+  // 5 logins (MAX_LOGINS_PER_FILE is 8).
   master = await h.loginAs('master');
   expect((await master.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({})).status).toBe(200);
   parentA = await h.loginAs('parentA');
   driverA = await h.loginAs('driverA');
+  adminA = await h.loginAs('adminA');
+  driverAdminA = await h.loginAs('driverAdminA');
 });
 
 beforeEach(() => {
@@ -59,6 +63,19 @@ describe('Q62 sending', () => {
     expect(res.status).toBe(200);
     expect(send()).toHaveBeenCalledTimes(1);
   });
+
+  for (const who of ['adminA', 'driverAdminA'] as const) {
+    it(`${who} → POST /api/messages to parentA is 403 "Only parents and drivers can send messages", no message row (red if canAccessMessaging is removed from POST /api/messages)`, async () => {
+      const agent = who === 'adminA' ? adminA : driverAdminA;
+      const rows = async () => (await h.db.select().from(directMessages).where(eq(directMessages.senderId, h.ids[who]))).length;
+      const before = await rows();
+      const res = await agent.post('/api/messages').send({ recipientId: h.ids.parentA, content: `${who} to parent` });
+      expect(res.status).toBe(403);
+      expect(res.body).toEqual({ message: 'Only parents and drivers can send messages' });
+      expect(await rows()).toBe(before);
+      expect(send()).not.toHaveBeenCalled();
+    });
+  }
 
   it('an impersonating master can still read conversations (200)', async () => {
     expect((await master.get('/api/messages/conversations')).status).toBe(200);
