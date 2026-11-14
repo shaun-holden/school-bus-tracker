@@ -1,7 +1,7 @@
 import { Link } from "wouter";
 import { ArrowLeft, Bus, Mail } from "lucide-react";
+import { SUPPORT_EMAIL } from "@/lib/support";
 
-export const SUPPORT_EMAIL = "support@schoolbustracker.org";
 
 function Faq({ q, children }: { q: string; children: React.ReactNode }) {
   return (

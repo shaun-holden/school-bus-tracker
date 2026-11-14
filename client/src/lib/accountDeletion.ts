@@ -1,10 +1,11 @@
 // Q59: account deletion helpers (App Store 5.1.1(v) / Google Play).
-// Pure: the only import is the shared error-text fallback, so a Node unit test
-// can import this file.
+// Pure: it imports only lib/ helpers (error-text fallback, support address), so
+// a Node unit test can import this file.
 import { friendlyErrorText } from "./errorText";
+import { SUPPORT_EMAIL } from "./support";
 
 export const CONTACT_SUPPORT_TEXT =
-  "Staff accounts are removed by your school's administrator. To close a school account, email support@schoolbustracker.org.";
+  `Staff accounts are removed by your school's administrator. To close a school account, email ${SUPPORT_EMAIL}.`;
 
 /**
  * Parents and drivers delete their own account in the app. Staff (admin,
@@ -44,7 +45,8 @@ export function deleteAccountErrorText(err: unknown): string {
   // A 400 without a code is the Zod shape { message, errors }: empty or too long a password.
   if (status === 400 && code === undefined) return "Enter your password.";
   if (status === 401) return "Your session ended, sign in again.";
-  if (status === 403) return CONTACT_SUPPORT_TEXT;
+  // Only the route's own refusal; another 403 (e.g. the Origin guard) is not about the role.
+  if (status === 403 && code === "CONTACT_SUPPORT") return CONTACT_SUPPORT_TEXT;
   if (status === 409 && code === "ON_DUTY") return "Go off duty first.";
   if (status === 429) return "Too many attempts, try again in 15 minutes.";
   return friendlyErrorText(err);

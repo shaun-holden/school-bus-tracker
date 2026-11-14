@@ -1,6 +1,6 @@
 import { Link } from "wouter";
 import { ArrowLeft, Bus, CheckCircle2, Mail } from "lucide-react";
-import { SUPPORT_EMAIL } from "@/pages/support";
+import { SUPPORT_EMAIL } from "@/lib/support";
 
 // Q59: public page (no sign-in) on how to delete an account. This is the web
 // link given to Google Play; the Account page lands here with ?done=1.

@@ -18,12 +18,12 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { canSelfDeleteAccount, deleteAccountErrorText } from "@/lib/accountDeletion";
-import { SUPPORT_EMAIL } from "@/pages/support";
+import { SUPPORT_EMAIL } from "@/lib/support";
 
 // Q59: the signed-in user's account page. Parents and drivers can delete their
 // own account here (App Store 5.1.1(v) / Google Play); staff see "contact support".
 export default function AccountPage() {
-  const { user, isLoading, deleteAccountAsync, isDeletingAccount } = useAuth();
+  const { user, isLoading, deleteAccountAsync, isDeletingAccount, resetDeleteAccount } = useAuth();
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -46,6 +46,9 @@ export default function AccountPage() {
       window.location.href = "/delete-account?done=1";
     } catch (err) {
       setError(deleteAccountErrorText(err));
+      // Don't keep a wrong password: not in the field, not in the mutation cache.
+      setPassword("");
+      resetDeleteAccount();
     }
   };
 

@@ -196,5 +196,6 @@ export function useAuth() {
     isLoggingOut: logoutMutation.isPending,
     deleteAccountAsync: deleteAccountMutation.mutateAsync,
     isDeletingAccount: deleteAccountMutation.isPending,
+    resetDeleteAccount: deleteAccountMutation.reset,
   };
 }
