@@ -102,34 +102,4 @@ describe('Role-Based Access Control - Role Hierarchy', () => {
   });
 });
 
-describe('Role-Based Access Control - Registration Role Validation', () => {
-  // Replicates logic from customAuth.ts registration
-  function getRegistrationRole(requestedRole: string): string {
-    return (requestedRole === 'driver') ? 'driver' : 'parent';
-  }
-
-  it('should allow driver self-registration', () => {
-    expect(getRegistrationRole('driver')).toBe('driver');
-  });
-
-  it('should default to parent for unspecified role', () => {
-    expect(getRegistrationRole('')).toBe('parent');
-  });
-
-  it('should not allow admin self-registration', () => {
-    expect(getRegistrationRole('admin')).toBe('parent');
-  });
-
-  it('should not allow master_admin self-registration', () => {
-    expect(getRegistrationRole('master_admin')).toBe('parent');
-  });
-
-  it('should not allow driver_admin self-registration', () => {
-    expect(getRegistrationRole('driver_admin')).toBe('parent');
-  });
-
-  it('should default any unknown role to parent', () => {
-    expect(getRegistrationRole('superuser')).toBe('parent');
-    expect(getRegistrationRole('manager')).toBe('parent');
-  });
-});
+// Registration roles are tested over HTTP in tests/integration/wt1-register.test.ts.

@@ -101,9 +101,13 @@ describe('C1 PATCH /api/drivers/:id', () => {
     expect((await getUser(driverNullId)).phone).toBe('5550000000');
   });
 
-  it('adminA patching driverB gets 404', async () => {
+  it('adminA patching driverB gets 404 and driverB is unchanged (red if the PATCH isOutsideCallerTenant(user, targetDriver.companyId) check is removed)', async () => {
+    const before = (await getUser(h.ids.driverB)).phone;
     const res = await adminA.patch(`/api/drivers/${h.ids.driverB}`).send({ phone: '5551113333' });
     expect(res.status).toBe(404);
+    const after = (await getUser(h.ids.driverB)).phone;
+    expect(after).not.toBe('5551113333');
+    expect(after).toBe(before);
   });
 });
 
