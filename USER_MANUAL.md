@@ -2,7 +2,7 @@
 
 A practical guide for the three roles that use the app every day: **parents**, **drivers**, and **administrators**. A brief section for **master administrators** (platform owners) is at the end.
 
-The app is available as a web app at **https://www.schoolbustracker.org** and as an iOS app ("School Bus Tracker" in the App Store). Both versions share the same data.
+The app is available as a web app at **https://www.schoolbustracker.org** and as an iOS app ("School Bus Tracker" in the App Store) and an Android app (Google Play). All versions share the same data.
 
 ---
 
@@ -38,11 +38,14 @@ If the driver's phone cannot share location (permission denied, GPS unavailable)
 
 The app sends push notifications for:
 
-- **Bus arrival** at your child's stop
-- **Route alerts** posted by the driver (delays, route changes, emergencies)
-- **Direct messages** from the driver or administrator
+- **The bus leaving for school** and **arriving at school**
+- **Your child boarding** the bus
+- **Your child dropped off**
+- **The bus at your stop**
+- **Route alerts** (delays, route changes, emergencies)
+- **Direct messages** from the driver (administrators can't send messages)
 
-On iOS, allow notifications when prompted. You can also review past notifications in the **Notifications** tab.
+The app shows a **Turn on** card for notifications; tap it and allow notifications when the phone asks (iPhone and Android 13+). You can also review past notifications in the **Notifications** tab.
 
 ### Messaging
 
@@ -52,6 +55,19 @@ Tap the message icon on your child's card to send a direct message to the assign
 
 - **Rename / edit:** tap the child's card, then **Edit**.
 - **Unlink:** tap the child's card, then **Unlink**. This removes your access; the child's record is kept for the administrator.
+
+### Deleting your account
+
+Parents and drivers can delete their own account (drivers: go off duty first):
+
+1. Open the **Menu** and tap **Account**.
+2. Tap **Delete my account**, enter your password and confirm.
+
+**What is deleted:** your name, email address, phone number and login, and your links to your children. You're signed out on all your devices, and notifications for the account stop. Deletion happens straight away and can't be undone.
+
+**What the school keeps:** your school or camp keeps its own records, such as trips, attendance and messages. In those records your name is replaced with "Deleted user". If you sign up again later, the new account starts empty.
+
+Administrator and staff accounts are removed by your school's administrator; to close a school's account, contact support (see the **Support** page). Full details: https://www.schoolbustracker.org/delete-account
 
 ---
 
@@ -152,7 +168,7 @@ Schools are the locations buses pick up from and drop off at. Each school has a 
 
 ### Messaging
 
-Send one-to-one messages to parents or drivers within your organization. Administrators cannot message users outside their own company.
+Administrators don't send direct messages: messaging is between parents and drivers only. To reach parents, use notifications and alerts.
 
 ### Settings
 

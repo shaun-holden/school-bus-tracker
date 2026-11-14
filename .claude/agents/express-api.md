@@ -1,6 +1,6 @@
 ---
 name: express-api
-description: Use this agent to implement backend changes in the SchoolBusTracker Express/Drizzle/PostgreSQL API. Invoke ONLY after a plan from the planner agent has been written to `plans/` and reviewed. Handles route handlers, Drizzle schema/migrations, Stripe webhook logic, Firebase Admin SDK calls, and database queries. It does NOT make architectural decisions — it executes plans. For frontend work use `@agent-react-builder`. For iOS issues use `@agent-ios-debugger`.
+description: Use this agent to implement backend changes in the SchoolBusTracker Express/Drizzle/PostgreSQL API. Invoke ONLY after a plan from the planner agent has been written to `plans/` and reviewed. Handles route handlers, Drizzle schema/migrations, Stripe webhook logic, Firebase Admin SDK calls, and database queries. It does NOT make architectural decisions — it executes plans. For frontend work use `@agent-react-builder`. For native (iOS/Android) work: native sync/build/upload is DeShaun's: `npm run build && npx cap sync <ios|android>`, then fastlane; remind, never run.
 tools: Read, Write, Edit, Glob, Grep, Bash
 ---
 

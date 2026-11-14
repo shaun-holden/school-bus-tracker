@@ -29,7 +29,7 @@ Deployed on Railway. Build and deploy settings live in the Railway dashboard (Co
 | **Staging** | `staging` | https://school-bus-tracker-staging.up.railway.app (see `STAGING.md`) | its own Postgres (`Postgres-cKuC`), **synthetic seed only** | push to `staging`, CI-gated |
 | **Production** | `production` | https://www.schoolbustracker.org | live (`Postgres`) | push to `production`, CI-gated |
 
-- **Pushing `main` deploys nothing.** (Target model: takes effect when DeShaun switches production to the `production` branch, staging-plan S5.)
+- **Pushing `main` deploys nothing.** After a promotion, check that the Railway deploy shows the expected branch and commit.
 - **Promotion** (SHELL, each step needs DeShaun's OK; fast-forward only, so production is always a commit that already ran on staging):
   1. `git fetch origin && git merge-base --is-ancestor origin/staging main && git push origin main:staging`
   2. Verify on staging (web, plus the iOS app pointed at staging when auth, cookies or CORS changed).
@@ -41,7 +41,7 @@ Deployed on Railway. Build and deploy settings live in the Railway dashboard (Co
 
 **Layout.** Server in `server/` (Express + TypeScript), client in `client/src/` (React SPA built with Vite), shared Drizzle schema and Zod validation in `shared/schema.ts`, Postgres via `pg.Pool` + `drizzle-orm/node-postgres` (`server/db.ts`). Path aliases: `@/*` → `client/src/*`, `@shared/*` → `shared/*`.
 
-**Big central files.** `server/routes.ts` (5200+ lines, 120+ handlers) and `server/storage.ts` (2800+ lines, one `DatabaseStorage` class implementing `IStorage`). When adding a feature, the pattern is: new handler in `routes.ts`, new method on `IStorage` + `DatabaseStorage`. There is no per-domain file split yet — splitting would be a multi-hour refactor worth its own PR. `shared/schema.ts` (~30 tables) is the single source of truth for DB shape and client-side Zod validation.
+**Big central files.** `server/routes.ts` (5000+ lines, 130+ handlers) and `server/storage.ts` (3000+ lines, one `DatabaseStorage` class implementing `IStorage`). When adding a feature, the pattern is: new handler in `routes.ts`, new method on `IStorage` + `DatabaseStorage`. There is no per-domain file split yet — splitting would be a multi-hour refactor worth its own PR. `shared/schema.ts` (~35 tables) is the single source of truth for DB shape and client-side Zod validation.
 
 **Multi-tenant model.** Nearly every table carries `companyId` referencing `companies`. A "company" is a tenant (school district, camp, etc.). Two helpers in `server/tenant.ts` (pure, no imports; `routes.ts` imports them, along with `isOutsideCallerTenant`, `hasId` and the role helpers) are load-bearing:
 
@@ -63,7 +63,7 @@ Master admin can impersonate a tenant via `POST /api/master-admin/impersonate/:c
 
 **Client.** Wouter for routing. Role-based dashboards (`/admin`, `/driver`, `/parent`, `/` for master admin). `client/src/pages/` is flat, `components/` is split by role (`admin/`, `driver/`, `parent/`, `shared/`, `ui/`). Server state via TanStack Query (`client/src/lib/queryClient.ts`). Auth state via `useAuth()` in `client/src/hooks/use-auth.ts` — `logout` calls `queryClient.clear()` to wipe per-user caches. Forms use React Hook Form + Zod schemas imported from `shared/schema.ts`.
 
-**Auth.** Custom email/password in `server/customAuth.ts` with bcryptjs hashing and Passport local strategy, sessions stored in Postgres via `connect-pg-simple`. Session cookie is `httpOnly`, `secure` in production, and `sameSite` is conditional: `'none'` in production (required for the iOS Capacitor bundle's cross-origin requests in Phase B), `'lax'` otherwise. See `plans/offline-readiness-fix-phase-a.md` for the migration history. `SESSION_SECRET` is required unless `NODE_ENV` is explicitly `development` or `test` — the startup throws otherwise. Rate limiters (`authLimiter`, `registerLimiter`) are exported for reuse. `POST /api/auth/delete-account` lets a parent or driver scrub and deactivate their own account (never a hard delete of `users`; see `storage.deleteOwnAccount`).
+**Auth.** Custom email/password in `server/customAuth.ts` with bcryptjs hashing and Passport local strategy, sessions stored in Postgres via `connect-pg-simple`. Session cookie is `httpOnly`, `secure` in production, and `sameSite` is conditional: `'none'` in production (required for the iOS Capacitor bundle's cross-origin requests in Phase B), `'lax'` otherwise. See `plans/offline-readiness-fix-phase-a.md` for the migration history. `SESSION_SECRET` is required unless `NODE_ENV` is explicitly `development` or `test` — the startup throws otherwise. Rate limiters (`authLimiter`, `registerLimiter`, `loginLimiter`, `loginIpLimiter`) are exported for reuse. `POST /api/auth/delete-account` lets a parent or driver scrub and deactivate their own account (never a hard delete of `users`; see `storage.deleteOwnAccount`).
 
 **Billing.** Three Stripe plans (Starter/Professional/Enterprise). Feature flags live on the `companies` row (e.g., `parentPortalEnabled`); plan-based user caps are enforced by `storage.canCreateUser(companyId, role)`. Webhooks land in `server/webhookHandlers.ts` and use the stock Stripe SDK for signature verification (the old `stripe-replit-sync` dependency has been removed).
 
@@ -75,7 +75,7 @@ Master admin can impersonate a tenant via `POST /api/master-admin/impersonate/:c
 
 **Cross-origin readiness (Phase A, shipped 2026-05-17).** Server has CORS middleware (`cors` npm package) in the `createApp()` middleware chain in `server/app.ts`, registered between the Stripe webhook raw-body handler and `app.use(express.json())`. Allowlist is exported as `ALLOWED_ORIGINS` and includes `capacitor://localhost`, `ionic://localhost`, `http://localhost`, `https://www.schoolbustracker.org`, and `https://schoolbustracker.org`. Disallowed origins receive a clean 403 via `callback(null, false)` — no 500s in logs from rejected origins. The middleware is inert for same-origin web traffic (browser doesn't trigger preflights). Allowlist is regression-tested in `tests/cors.test.ts`.
 
-Client has an `apiUrl(path)` helper at `client/src/lib/apiBase.ts`. It returns the path unchanged on web (no-op for same-origin) and prepends `import.meta.env.VITE_API_BASE_URL` (or falls back to `https://www.schoolbustracker.org`) when `Capacitor.isNativePlatform()` is true. All `fetch('/api/...')` call sites in the client are wrapped: `queryClient.ts` (default fetcher), `App.tsx` (role PATCH), `pages/admin-dashboard.tsx` (6 sites), `pages/driver-password-setup.tsx`. The wrap is also a no-op for web because `getApiBase()` returns an empty string.
+Client has an `apiUrl(path)` helper at `client/src/lib/apiBase.ts`. It returns the path unchanged on web (no-op for same-origin) and prepends `import.meta.env.VITE_API_BASE_URL` (or falls back to `https://www.schoolbustracker.org`) when `Capacitor.isNativePlatform()` is true. All `fetch('/api/...')` call sites in the client are wrapped. The raw `fetch(apiUrl(…))` sites are `lib/queryClient.ts` (2: the default fetcher and `apiRequest`), `pages/admin-dashboard.tsx` (6) and `pages/driver-password-setup.tsx` (1); everything else, including `App.tsx`'s role PATCH, goes through `apiRequest`, which uses `apiUrl`. The wrap is also a no-op for web because `getApiBase()` returns an empty string.
 
 A passive `<OfflineBanner />` component at `client/src/components/shared/OfflineBanner.tsx` mounts inside `TooltipProvider` near the global `<Toaster />`. Listens to `window` `'online'`/`'offline'` events. Shows only when offline; refetch on reconnect is handled automatically by React Query's `refetchOnWindowFocus` default — no manual `invalidateQueries`.
 
@@ -142,5 +142,8 @@ Rules (non-negotiable):
 - `plans/offline-foundation.md` (early draft, superseded by phase-a)
 - `plans/offline-readiness-fix-phase-b.md` (bundled build + CapacitorHttp, shipped 2026-07-11)
 - `plans/td1-day-boundary-fix.md` (Q47 day-boundary fix; untracked, in the main folder)
+- `plans/native-push.md` (native push T1-T5; untracked, in the main folder)
+- `plans/q2-dependency-upgrades.md` (Q2 dependency upgrades; untracked, in the main folder)
+- `plans/account-deletion.md` (Q59 account deletion; untracked, in the main folder)
 
 **Phase B shipped 2026-07-11** as the bundled iOS build (`capacitor://localhost`) plus `CapacitorHttp` (`capacitor.config.ts`); a JWT auth migration turned out not to be needed. `PRODUCTION_SERVER_URL` stays as the code-free rollback. See `plans/offline-readiness-fix-phase-b.md`.
