@@ -13,6 +13,7 @@ import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { formatStoredDate } from "@/lib/localDate";
 
 const taskSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -237,7 +238,7 @@ export default function DriverTaskAssignment() {
                         {getStatusBadge(task.isCompleted, task.priority)}
                         <span className="text-xs text-gray-500 mt-1" data-testid={`task-due-date-${task.id}`}>
                           {task.dueDate ? 
-                            `Due: ${new Date(task.dueDate).toLocaleDateString()}` : 
+                            `Due: ${formatStoredDate(task.dueDate)}` : 
                             'Due: Today'
                           }
                         </span>

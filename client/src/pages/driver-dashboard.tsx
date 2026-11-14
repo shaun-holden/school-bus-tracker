@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { driverCheckInSchema, type DriverCheckIn } from "@shared/schema";
 import { Loader2, Send } from "lucide-react";
+import { formatStoredDate } from "@/lib/localDate";
 
 // Schema for driver route broadcast
 const driverBroadcastSchema = z.object({
@@ -2354,7 +2355,7 @@ export default function DriverDashboard() {
                                 {task.priority}
                               </Badge>
                             </TableCell>
-                            <TableCell>{task.dueDate ? new Date(task.dueDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "No date"}</TableCell>
+                            <TableCell>{task.dueDate ? formatStoredDate(task.dueDate, { month: "short", day: "numeric", year: "numeric" }, "en-US") : "No date"}</TableCell>
                             <TableCell>
                               <Badge 
                                 variant={task.status === 'completed' ? 'default' : 'outline'}

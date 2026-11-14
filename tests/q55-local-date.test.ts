@@ -2,7 +2,7 @@ process.env.TZ = 'America/New_York'; // CI runs in UTC, where the bug can't show
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { localDateString, localDateStringPlusDays } from '../client/src/lib/localDate';
+import { formatStoredDate, localDateString, localDateStringPlusDays } from '../client/src/lib/localDate';
 
 // Q55: the parent "Today" / "Tomorrow" absence date is the local day, not the UTC day.
 afterEach(() => vi.useRealTimers());
@@ -57,5 +57,54 @@ describe('Q55 ParentQuickActions uses the local-day helper', () => {
 
   it('the Report Absence dialog resets the date to today when it opens (stale mount-time default)', () => {
     expect(src).toMatch(/if \(open\) form\.setValue\("date", localDateString\(\)\);/);
+  });
+});
+
+describe('Q57 formatStoredDate: a stored date-only value shows as its stored day (TZ America/New_York)', () => {
+  it("UTC-midnight Nov 14 shows as Nov 14, not Nov 13 (red if timeZone: 'UTC' is removed)", () => {
+    const s = formatStoredDate('2026-11-14T00:00:00.000Z', { month: 'short', day: 'numeric', year: 'numeric' }, 'en-US');
+    expect(s).toContain('14');
+    expect(s).toContain('Nov');
+    expect(s).toBe('Nov 14, 2026');
+  });
+
+  it('a Date object works the same way, with the default options', () => {
+    expect(formatStoredDate(new Date('2026-11-14T00:00:00.000Z'), undefined, 'en-US')).toBe('11/14/2026');
+  });
+
+  it("null, undefined and 'not a date' → '' (callers keep their own fallback)", () => {
+    expect(formatStoredDate(null)).toBe('');
+    expect(formatStoredDate(undefined)).toBe('');
+    expect(formatStoredDate('not a date')).toBe('');
+  });
+});
+
+describe('Q57 the four stored-date sites use formatStoredDate', () => {
+  const read = (p: string) => readFileSync(resolve(__dirname, '..', p), 'utf8');
+  const admin = read('client/src/pages/admin-dashboard.tsx');
+  const tasks = read('client/src/components/admin/DriverTaskAssignment.tsx');
+  const driver = read('client/src/pages/driver-dashboard.tsx');
+
+  it('admin task list dueDate and driver hireDate use formatStoredDate (red if a site is reverted)', () => {
+    expect(admin).toMatch(/\{task\.dueDate \? formatStoredDate\(task\.dueDate\) : "-"\}/);
+    expect(admin).toMatch(/<span>\{formatStoredDate\(driver\.hireDate\)\}<\/span>/);
+    expect(admin).not.toMatch(/new Date\((task\.dueDate|driver\.hireDate)\)\.toLocaleDateString/);
+  });
+
+  it('DriverTaskAssignment dueDate uses formatStoredDate', () => {
+    expect(tasks).toMatch(/`Due: \$\{formatStoredDate\(task\.dueDate\)\}`/);
+    expect(tasks).not.toMatch(/new Date\(task\.dueDate\)\.toLocaleDateString/);
+  });
+
+  it('the driver task table dueDate uses formatStoredDate and keeps its en-US short format', () => {
+    expect(driver).toMatch(
+      /formatStoredDate\(task\.dueDate, \{ month: "short", day: "numeric", year: "numeric" \}, "en-US"\)/,
+    );
+    expect(driver).not.toMatch(/new Date\(task\.dueDate\)\.toLocaleDateString/);
+  });
+
+  it("the driver edit form keeps the UTC-day toISOString().split('T')[0] for licenseExpiryDate and hireDate (correct for these columns; don't 'fix' them)", () => {
+    expect(admin).toMatch(/licenseExpiryDate: driver\.licenseExpiryDate \? new Date\(driver\.licenseExpiryDate\)\.toISOString\(\)\.split\('T'\)\[0\]/);
+    expect(admin).toMatch(/hireDate: driver\.hireDate \? new Date\(driver\.hireDate\)\.toISOString\(\)\.split\('T'\)\[0\]/);
   });
 });
