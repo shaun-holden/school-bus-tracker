@@ -19,7 +19,7 @@ Production build: `npm run build` (client to `dist/public`, server bundled to `d
 - Type-check (this is the lint gate; there is no separate linter): `npm run check`.
 - All tests: `npm test` (Vitest, two projects: `unit` and `integration`). The integration tests need Postgres 17 and `TEST_DATABASE_URL` in `.env`, pointing at a local database whose name ends in `_test` (a guard refuses anything else). Locally that Postgres runs on port 5433.
 - Unit tests only, no database: `npm run test:unit`.
-- One file: `npx vitest run tests/auth-validation.test.ts`. By name: `npx vitest run -t "pattern"`. Also `npm run test:watch` and `npm run test:coverage`.
+- One file: `npx vitest run tests/tenant.test.ts`. By name: `npx vitest run -t "pattern"`. Also `npm run test:watch` and `npm run test:coverage`.
 - CI (`.github/workflows/ci.yml`) runs on every push and pull request to `main`, `staging` and `production`: `npm ci`, `npm run check`, `npm run build`, then `npm test` against a Postgres 17 service.
 
 ### Folder layout

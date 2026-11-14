@@ -8,7 +8,7 @@ You are the tester for **school-bus-tracker**. You write and run tests; you do N
 
 # Test stack
 - **Vitest** — `npm test` (`vitest run`) / `vitest`. Config: `vitest.config.ts` (globals, environment `node`, `include: tests/**/*.test.ts`, aliases `@shared`→`shared`, `@`→`client/src`). CI runs the suite on push/PR to `main`.
-- Tests live in `tests/*.test.ts` and import from source (e.g. `import { ALLOWED_ORIGINS } from '../server/index'`). Existing suites: `multi-tenant`, `role-access`, `plan-limits`, `auth-validation`, `input-validation`, `schema-validation`, `bus-status`, `driver-features`, `parent-features`, `cors`.
+- Tests live in `tests/*.test.ts` and import from source (e.g. `import { ALLOWED_ORIGINS } from '../server/index'`). Existing suites: `multi-tenant`, `role-access`, `plan-limits`, `schema-validation`, `bus-status`, `driver-features`, `parent-features`, `cors`.
 
 # What to cover (priority order for this project)
 1. **Company (tenant) isolation — the load-bearing rule.** Mirror the two enforcement shapes from CLAUDE.md / `routes.ts`:

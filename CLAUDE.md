@@ -14,7 +14,7 @@ Run from the repo root.
 - `npm run test:watch`, `npm run test:coverage` — same runner, different modes.
 - `npm run db:push` — apply `shared/schema.ts` to Postgres via Drizzle Kit (requires `DATABASE_URL`).
 
-Run a single test file: `npx vitest run tests/auth-validation.test.ts`
+Run a single test file: `npx vitest run tests/tenant.test.ts`
 Filter by name: `npx vitest run -t "pattern"`
 
 One-off scripts live in `scripts/`: `seed-master-admin.ts`, `seed-stripe-products.ts`, and `setup-native.sh` for local Capacitor setup.
@@ -141,6 +141,6 @@ Rules (non-negotiable):
 - `plans/offline-readiness-fix-phase-a.md` (server + client plumbing, shipped 2026-05-17)
 - `plans/offline-foundation.md` (early draft, superseded by phase-a)
 - `plans/offline-readiness-fix-phase-b.md` (bundled build + CapacitorHttp, shipped 2026-07-11)
-- `td1-day-boundary-fix.md` (Q47 day-boundary fix; untracked, in the main folder's `plans/`)
+- `plans/td1-day-boundary-fix.md` (Q47 day-boundary fix; untracked, in the main folder)
 
 **Phase B shipped 2026-07-11** as the bundled iOS build (`capacitor://localhost`) plus `CapacitorHttp` (`capacitor.config.ts`); a JWT auth migration turned out not to be needed. `PRODUCTION_SERVER_URL` stays as the code-free rollback. See `plans/offline-readiness-fix-phase-b.md`.
