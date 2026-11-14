@@ -7,6 +7,7 @@ import { WebhookHandlers } from './webhookHandlers';
 import { isCrossSiteWriteBlocked } from './authGate';
 import { pool } from "./db";
 import { ALLOWED_ORIGINS } from './origins';
+import { isDbQueryError, pgError } from './dbErrors';
 
 // Builds the Express app with every middleware and route in production order,
 // without seeding, without the client (dev or static) handlers, and without
@@ -145,6 +146,13 @@ export async function createApp(
   });
 
   app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    // A drizzle-wrapped DB error's message carries SQL + params: never send
+    // or log it. Log only the Postgres error code.
+    if (isDbQueryError(err)) {
+      console.error("Database error", pgError(err)?.code);
+      return res.status(500).json({ message: "Internal Server Error" });
+    }
+
     const status = err.status || err.statusCode || 500;
     const message = err.message || "Internal Server Error";
 

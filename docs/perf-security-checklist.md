@@ -120,6 +120,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | S-11 | Stripe webhook not idempotent (no `event.id` dedupe or ordering guard); Checkout takes `priceId` / `successUrl` / `cancelUrl` from the body | SEC-35, SEC-38 | `server/webhookHandlers.ts`; `POST /api/business/create-checkout-session` |
 | S-12 | Coworkers' email, phone and licence returned to drivers | SEC-29 | `GET /api/driver-profiles-checkin` |
 | S-13 | Bodies and responses in logs | SEC-36 (part), LEAK-11 | `POST /api/buses` logs the body and validated data; the `server/index.ts` response logger appends `JSON.stringify(capturedJsonResponse)`; `emailService.ts` logs `ADMIN_EMAIL` |
+| S-13 | drizzle 0.44+ `console.error(…, error)` logs SQL + params | Q2 OQ6 | ~170 `routes.ts` handlers log the whole error, so a failed query logs its SQL and bound params (emails, ids). Accepted 2026-11-13 (Q2 open question 6). Auth paths fixed in Q2b-1 (register, forgot-password, reset-password log a fixed text + `pgError(e)?.code` only) |
 | S-14 | Internal error text returned to clients | SEC-37 | `server/index.ts` error handler returns `err.message` on 500; `POST /api/buses` returns `error.message` / request data; route validation returns `details` |
 | S-16, S-17 | No audit log for privilege actions; free-text logs; names interpolated into HTML email | SEC-45, SEC-46 | role change, approve/suspend/reject, impersonation; `server/emailService.ts` templates |
 | — | No `helmet`, `x-powered-by` on | SEC-34 | `server/index.ts` |

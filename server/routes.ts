@@ -21,6 +21,7 @@ import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
 import { isMasterAdminUser, isUnscopedMaster, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
+import { isDbQueryError, pgError } from "./dbErrors";
 
 // Re-fetch the CALLER (never another user). Keeps the fresh DB row (current
 // role and isActive) and re-applies the impersonation overlay for a master
@@ -771,7 +772,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid driver data", errors: error.errors });
       }
       // Handle duplicate email constraint violation
-      if (error?.code === '23505' && error?.constraint === 'users_email_unique') {
+      const pg = pgError(error);
+      if (pg?.code === '23505' && pg?.constraint === 'users_email_unique') {
         return res.status(400).json({ message: "This email address is already in use by another user" });
       }
       res.status(500).json({ message: "Failed to update driver" });
@@ -1539,6 +1541,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json(route);
       } catch (validationError) {
         console.error('Route validation error:', validationError);
+        if (isDbQueryError(validationError)) {
+          return res.status(500).json({ message: "Failed to save route" });
+        }
         return res.status(400).json({ 
           message: "Invalid route data", 
           details: validationError instanceof Error ? validationError.message : validationError 
@@ -1642,6 +1647,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
       } catch (validationError) {
         console.error('Route validation error:', validationError);
+        if (isDbQueryError(validationError)) {
+          return res.status(500).json({ message: "Failed to save route" });
+        }
         return res.status(400).json({ 
           message: "Invalid route data", 
           details: validationError instanceof Error ? validationError.message : validationError 
@@ -1944,11 +1952,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           });
         }
         
-        return res.status(500).json({ 
-          message: "Failed to create bus", 
-          error: createError.message,
-          requestData: validatedData
-        });
+        return res.status(500).json({ message: "Failed to create bus" });
       }
       
       // Final verification - fetch buses to confirm addition (scoped).
@@ -1974,11 +1978,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       console.error("Error stack:", error.stack);
       console.error("Request body:", req.body);
       
-      res.status(500).json({ 
-        message: "Internal server error during bus creation", 
-        error: error.message,
-        timestamp: new Date().toISOString()
-      });
+      res.status(500).json({ message: "Failed to create bus" });
     }
   });
 
@@ -2970,7 +2970,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       res.status(201).json(routeSchool);
     } catch (error: any) {
       console.error("Error adding school to route:", error);
-      if (error?.code === '23505') { // Unique constraint violation
+      if (pgError(error)?.code === '23505') { // Unique constraint violation
         return res.status(409).json({ message: "School already assigned to this route" });
       }
       res.status(500).json({ message: "Failed to add school to route" });

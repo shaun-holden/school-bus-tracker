@@ -99,6 +99,7 @@ import {
   type InsertRouteStopCompletion,
 } from "@shared/schema";
 import { db } from "./db";
+import { isDbQueryError, pgError } from "./dbErrors";
 import { eq, and, desc, asc, sql, or, inArray, isNull, exists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
 
 // Tenant calendar-day predicate. Day columns are `timestamp without time zone`
@@ -1014,6 +1015,13 @@ export class DatabaseStorage implements IStorage {
         
         return newBus;
       } catch (dbError: any) {
+        if (isDbQueryError(dbError)) {
+          // The wrapped message carries SQL + params, and pg detail can carry
+          // values: log only the code and constraint name.
+          const pg = pgError(dbError);
+          console.error('DATABASE INSERTION ERROR:', { code: pg?.code, constraint: pg?.constraint });
+          throw dbError;
+        }
         console.error('DATABASE INSERTION ERROR:', dbError);
         console.error('Error code:', dbError.code);
         console.error('Error detail:', dbError.detail);
@@ -1023,6 +1031,11 @@ export class DatabaseStorage implements IStorage {
       
       // This code is now handled in the try block above
     } catch (error: any) {
+      if (isDbQueryError(error)) {
+        const pg = pgError(error);
+        console.error('=== STORAGE CREATE BUS ERROR ===', { code: pg?.code, constraint: pg?.constraint });
+        throw new Error(`Failed to create bus: ${pg?.message ?? 'database error'}`);
+      }
       console.error('=== STORAGE CREATE BUS ERROR ===');
       console.error('Error:', error);
       console.error('Error details:', {
