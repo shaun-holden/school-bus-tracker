@@ -2264,7 +2264,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { studentId } = req.params;
-      const { date, notes } = req.body;
 
       // Verify parent owns this student
       const [directStudents, linkedStudents] = await Promise.all([
@@ -2274,19 +2273,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
       
       if (!student) {
-        return res.status(403).json({ message: "Unauthorized - not your student" });
+        return res.status(404).json({ message: "Student not found" });
       }
 
-      const attendanceDate = new Date(date);
-      const attendanceData = {
-        studentId,
-        routeId: student.routeId!,
-        date: attendanceDate,
-        isAbsent: true,
-        notes: notes || "Parent reported absence"
-      };
+      const { date, notes } = req.body;
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ message: "Invalid date" });
+      }
 
-      const attendance = await storage.createAttendance(attendanceData);
+      if (!student.routeId) {
+        return res.status(400).json({ message: "This student isn't on a route yet" });
+      }
+
+      // The reported day is a calendar day in the student's company zone.
+      const tz = (student.companyId ? (await storage.getCompanyById(student.companyId))?.timezone : null) || 'UTC';
+      const attendance = await storage.createParentAbsence({
+        studentId,
+        routeId: student.routeId,
+        companyId: student.companyId ?? null,
+        dateString: date,
+        timezone: tz,
+        notes: notes || "Parent reported absence",
+      });
       res.json(attendance);
     } catch (error) {
       console.error("Error reporting absence:", error);
@@ -3381,10 +3389,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Student not found on your route" });
       }
       const route = await storage.getRouteById(routeId);
+      if (!route) return res.status(404).json({ message: "Route not found" });
 
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
-      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route?.companyId ?? null);
+      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route.companyId ?? null);
       res.json(attendance);
     } catch (error) {
       console.error("Error marking student attendance:", error);

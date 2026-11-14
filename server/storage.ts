@@ -182,6 +182,7 @@ export interface IStorage {
   // Attendance operations
   getAttendanceByDate(dateString: string, companyId?: string, timezone?: string): Promise<Attendance[]>;
   createAttendance(attendance: InsertAttendance): Promise<Attendance>;
+  createParentAbsence(data: { studentId: string; routeId: string; companyId: string | null; dateString: string; timezone: string; notes: string }): Promise<Attendance>;
   updateAttendance(id: string, updates: Partial<InsertAttendance>): Promise<Attendance | undefined>;
   
   // Bus operations
@@ -929,6 +930,27 @@ export class DatabaseStorage implements IStorage {
   async createAttendance(attendanceRecord: InsertAttendance): Promise<Attendance> {
     const [newAttendance] = await db.insert(attendance).values(attendanceRecord).returning();
     return newAttendance;
+  }
+
+  // Parent-reported absence for a calendar day in the company's zone.
+  // attendance.date is `timestamp without time zone` holding UTC wall time.
+  // Storing local NOON of the reported day in the company zone (converted to
+  // UTC wall time) makes onLocalDay(attendance.date, tz, day) return that day
+  // in every zone; noon avoids DST gaps at midnight. tz and date stay bound
+  // parameters (S-19).
+  async createParentAbsence(data: { studentId: string; routeId: string; companyId: string | null; dateString: string; timezone: string; notes: string }): Promise<Attendance> {
+    const [row] = await db
+      .insert(attendance)
+      .values({
+        studentId: data.studentId,
+        routeId: data.routeId,
+        companyId: data.companyId,
+        isAbsent: true,
+        notes: data.notes,
+        date: sql`((${data.dateString}::date + time '12:00') AT TIME ZONE ${data.timezone}) AT TIME ZONE 'UTC'`,
+      })
+      .returning();
+    return row;
   }
 
   async updateAttendance(id: string, updates: Partial<InsertAttendance>): Promise<Attendance | undefined> {
