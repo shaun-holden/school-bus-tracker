@@ -1,15 +1,15 @@
 PODS:
-  - Capacitor (8.5.1):
+  - Capacitor (8.6.2):
     - CapacitorCordova
   - CapacitorApp (8.1.0):
     - Capacitor
-  - CapacitorCordova (8.5.1)
+  - CapacitorCordova (8.6.2)
   - CapacitorGeolocation (8.2.0):
     - Capacitor
     - IONGeolocationLib (= 2.1.0)
   - CapacitorHaptics (8.0.2):
     - Capacitor
-  - CapacitorKeyboard (8.0.2):
+  - CapacitorKeyboard (8.0.6):
     - Capacitor
   - CapacitorPushNotifications (8.0.3):
     - Capacitor
@@ -55,12 +55,12 @@ EXTERNAL SOURCES:
     :path: "../../node_modules/@capacitor/status-bar"
 
 SPEC CHECKSUMS:
-  Capacitor: 8ca6676b3b1147b00f7f3a547ccf68defd658d55
+  Capacitor: 0a406b8a50b1ddcfe49fbc5795515918d5294708
   CapacitorApp: 449ffe26375e96f8aaaee625ac6e01e5c57c8650
-  CapacitorCordova: eb79411a3a0ed517eeb4c6dcf5933ce4bcbb5c9e
+  CapacitorCordova: 8e68a712e47128cf5b97e88b9c2b406b9b956b22
   CapacitorGeolocation: b36f6287bfc9f2eefa04dc900496f2c8ae666136
   CapacitorHaptics: 296f771ecd89c7a1bd92a7b6826a7d268e2e70f5
-  CapacitorKeyboard: 8aa4f4ae80b2c92f92c07bf0181c464c2e7f5ff0
+  CapacitorKeyboard: f9e85e685082e9f63404de15db4a4291448b0912
   CapacitorPushNotifications: e4437b4ec1b2070685bf032c210f346432214c5f
   CapacitorSplashScreen: 4b46c72298db552b3c57ce021ef028b6dc7f1fa7
   CapacitorStatusBar: 01d5763b4ed720de5ce2edbc938de6a98f4c8f32
