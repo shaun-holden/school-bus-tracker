@@ -377,6 +377,76 @@ export async function setupCustomAuth(app: Express) {
     });
   });
 
+  // Account self-deletion for parents and drivers. Staff accounts and an
+  // impersonating master admin are refused. The user id and role come from the
+  // session only, never from the body. The data change is a scrub + deactivate
+  // in storage.deleteOwnAccount (never a hard delete of users).
+  const deleteAccountBodySchema = z.object({ password: z.string().min(1).max(200) });
+
+  app.post("/api/auth/delete-account", authLimiter, isAuthenticated, async (req, res) => {
+    try {
+      const parsed = deleteAccountBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ message: "Invalid request", errors: parsed.error.errors });
+      }
+
+      const sessionUser = req.user as Express.User;
+      const userId = sessionUser.id;
+      const role = sessionUser.role;
+      if ((role !== 'parent' && role !== 'driver') || (req.session as any).impersonatedCompanyId) {
+        return res.status(403).json({
+          code: 'CONTACT_SUPPORT',
+          message: "Staff accounts are removed by your school's administrator. Please contact support.",
+        });
+      }
+
+      const creds = await storage.getPasswordCredentials(userId);
+      if (!creds || !(await comparePasswords(parsed.data.password, creds.passwordHash))) {
+        console.warn('Account deletion refused: bad password', { userId });
+        return res.status(400).json({ code: 'BAD_PASSWORD', message: 'Password is incorrect' });
+      }
+
+      const companyId = sessionUser.companyId;
+      const result = await storage.deleteOwnAccount(userId);
+      if (result === 'on_duty') {
+        return res.status(409).json({ code: 'ON_DUTY', message: 'Go off duty before deleting your account.' });
+      }
+      if (result === 'not_found') {
+        return res.status(401).json({ message: 'Unauthorized' });
+      }
+
+      console.log('Account deleted', { userId, role, companyId });
+
+      // The account is already deleted, so every path below ends in 200 with
+      // the session cookie cleared, even if logout or destroy fails.
+      const prod = process.env.NODE_ENV === 'production';
+      const finish = () => {
+        res.clearCookie('connect.sid', {
+          path: '/',
+          httpOnly: true,
+          secure: prod,
+          sameSite: prod ? 'none' : 'lax',
+        });
+        res.json({ message: 'Account deleted' });
+      };
+      req.logout((logoutErr) => {
+        if (logoutErr) {
+          console.error('Account deletion: logout failed');
+          return finish();
+        }
+        req.session.destroy((destroyErr) => {
+          if (destroyErr) {
+            console.error('Account deletion: session destroy failed');
+          }
+          finish();
+        });
+      });
+    } catch (err) {
+      console.error('Account deletion failed', pgError(err)?.code);
+      res.status(500).json({ message: 'Failed to delete account' });
+    }
+  });
+
   app.get("/api/auth/user", (req, res) => {
     if (!req.isAuthenticated()) {
       return res.status(401).json({ message: "Unauthorized" });
