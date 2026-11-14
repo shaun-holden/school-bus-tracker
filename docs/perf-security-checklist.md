@@ -112,7 +112,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | T-2 | Cross-tenant or ownership 403s that reveal a record exists | (R1 route table) | parent paths of GET/PUT/DELETE `/api/students/:id` |
 | T-5 | Foreign-key ids from the body not tenant-checked | SEC-33 | `POST /api/buses` (`driverId`/`currentRouteId`) |
 | T-7 | Raw `req.body` into an update | SEC-26 | `PATCH /api/schools/:id` → `storage.updateSchool(id, req.body)` |
-| T-9, S-2 | Parents (any non-driver) get every company bus/route; staff routes without a role check | SEC-29, SEC-21 | `GET /api/buses` and `GET /api/routes` else-branches; `GET /api/attendance`, `GET /api/admin-requests`, admin-requests ack/complete |
+| T-9, S-2 | Parents (any non-driver) get every company bus/route; staff routes without a role check | SEC-29, SEC-21 | `GET /api/buses` and `GET /api/routes` else-branches; `GET /api/attendance` |
 | S-5 | `http://localhost` is allowed with credentials in production (also used by the HF3 Origin guard) | SEC-44 | `ALLOWED_ORIGINS` in `server/origins.ts` |
 | S-7, S-16 | Impersonation start/stop doesn't regenerate the session and isn't logged; password reset doesn't revoke other sessions | SEC-41, SEC-45 | `/api/master-admin/impersonate/:companyId`, `/stop-impersonating`; `/api/auth/reset-password` |
 | S-6 | Default cookie name `connect.sid`; no server-side absolute session timeout (7-day TTL only) | (gaps S2n, S5n) | `getSession` in `server/customAuth.ts` |

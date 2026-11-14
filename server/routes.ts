@@ -2282,6 +2282,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ message: "Invalid date" });
       }
+      const [y, m, d] = date.split('-').map(Number);
+      const parsed = new Date(Date.UTC(y, m - 1, d));
+      if (parsed.getUTCFullYear() !== y || parsed.getUTCMonth() !== m - 1 || parsed.getUTCDate() !== d) {
+        return res.status(400).json({ message: "Invalid date" });
+      }
 
       if (!student.routeId) {
         return res.status(400).json({ message: "This student isn't on a route yet" });
@@ -2299,7 +2304,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       res.json(attendance);
     } catch (error) {
-      console.error("Error reporting absence:", error);
+      console.error("Error reporting absence", pgError(error)?.code);
       res.status(500).json({ message: "Failed to report absence" });
     }
   });
