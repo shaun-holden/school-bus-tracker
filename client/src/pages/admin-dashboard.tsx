@@ -18,6 +18,7 @@ import { BusTrackingMap, BusTrackingLegend } from "@/components/shared/BusTracki
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { apiUrl } from "@/lib/apiBase";
+import { formatStoredDate } from "@/lib/localDate";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -442,7 +443,7 @@ function DriverTasksSection({ drivers }: { drivers: any }) {
                     </Badge>
                   </TableCell>
                   <TableCell>
-                    {task.dueDate ? new Date(task.dueDate).toLocaleDateString() : "-"}
+                    {task.dueDate ? formatStoredDate(task.dueDate) : "-"}
                   </TableCell>
                   <TableCell>
                     {task.isCompleted ? (
@@ -5330,7 +5331,7 @@ export default function AdminDashboard() {
                                 {driver.hireDate && (
                                   <div className="flex items-center text-gray-600">
                                     <span className="w-16">Hired:</span>
-                                    <span>{new Date(driver.hireDate).toLocaleDateString()}</span>
+                                    <span>{formatStoredDate(driver.hireDate)}</span>
                                   </div>
                                 )}
                                 {dutyStartTime && (
