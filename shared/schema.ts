@@ -152,7 +152,7 @@ export const companyRoles = pgTable("company_roles", {
   companyId: varchar("company_id").references(() => companies.id, { onDelete: 'cascade' }).notNull(),
   name: varchar("name").notNull(),
   roleType: companyRoleTypeEnum("role_type").notNull(),
-  permissions: jsonb("permissions").default('[]'), // JSON array of permission strings
+  permissions: jsonb("permissions").default([]), // JSON array of permission strings
   isDefault: boolean("is_default").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
@@ -570,6 +570,7 @@ export const studentAttendance = pgTable("student_attendance", {
   routeId: varchar("route_id").notNull().references(() => routes.id),
   attendanceDate: timestamp("attendance_date").defaultNow(),
   status: varchar("status", { enum: ["present", "absent"] }).notNull(),
+  droppedOffAt: timestamp("dropped_off_at"), // T4b E5: set once when the driver drops the child off (status stays 'present')
   notes: text("notes"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),

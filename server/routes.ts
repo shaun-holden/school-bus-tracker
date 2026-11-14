@@ -20,6 +20,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
+import { pushToRecipients, targetsPerParent, stopArrivalPayload, schoolArrivalPayload, schoolDeparturePayload, boardedPayload, droppedOffPayload, messagePayload, alertPayload } from "./pushEvents";
 import { isMasterAdminUser, isUnscopedMaster, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
 import { isDbQueryError, pgError } from "./dbErrors";
 
@@ -2282,6 +2283,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ message: "Invalid date" });
       }
+      const [y, m, d] = date.split('-').map(Number);
+      const parsed = new Date(Date.UTC(y, m - 1, d));
+      if (parsed.getUTCFullYear() !== y || parsed.getUTCMonth() !== m - 1 || parsed.getUTCDate() !== d) {
+        return res.status(400).json({ message: "Invalid date" });
+      }
 
       if (!student.routeId) {
         return res.status(400).json({ message: "This student isn't on a route yet" });
@@ -2299,7 +2305,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       });
       res.json(attendance);
     } catch (error) {
-      console.error("Error reporting absence:", error);
+      console.error("Error reporting absence", pgError(error)?.code);
       res.status(500).json({ message: "Failed to report absence" });
     }
   });
@@ -3140,7 +3146,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const company = await storage.getCompanyById(routeCompanyId);
       const tz = company?.timezone || 'UTC';
-      const visit = await storage.recordSchoolArrival(userId, schoolId, routeId, tz, routeCompanyId);
+      const { visit, created } = await storage.recordSchoolArrival(userId, schoolId, routeId, tz, routeCompanyId);
 
       // Update bus journey with arrive_school event
       try {
@@ -3171,8 +3177,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             type: 'info' as const,
           })));
         }
+        // Push only for the first arrival of the day (created).
+        if (created) {
+          await pushToRecipients('school_arrival', routeCompanyId, targetsPerParent(recipients, (names) => schoolArrivalPayload(school?.name, names, schoolId)));
+        }
       } catch (notifyError) {
-        console.error("Error sending arrival notifications:", notifyError);
+        console.error("Error sending arrival notifications", pgError(notifyError)?.code);
       }
 
       res.json(visit);
@@ -3215,9 +3225,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Visit not found" });
       }
       const routeCompanyId = route.companyId;
+      const company = await storage.getCompanyById(routeCompanyId);
+      const tz = company?.timezone || 'UTC';
 
-      const visit = await storage.recordSchoolDeparture(existing.id);
-      if (!visit) {
+      // Only a visit of today (tenant day) can depart; another day's visit is
+      // the same 404 as a missing one, with nothing written.
+      const { visit, today, departed } = await storage.recordSchoolDeparture(existing.id, tz);
+      if (!today || !visit) {
         return res.status(404).json({ message: "Visit not found" });
       }
 
@@ -3225,8 +3239,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         const assignedBus = await storage.getBusByDriverId(userId);
         if (assignedBus) {
-          const company = await storage.getCompanyById(routeCompanyId);
-          const tz = company?.timezone || 'UTC';
           const todayJourney = await storage.getTodayBusJourney(assignedBus.id, tz);
           if (todayJourney && !todayJourney.departSchoolAt) {
             await storage.updateJourneyEvent(todayJourney.id, 'depart_school');
@@ -3253,8 +3265,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             type: 'info' as const,
           })));
         }
+        // Push only for the first departure (departed_at was NULL).
+        if (departed) {
+          await pushToRecipients('school_departure', routeCompanyId, targetsPerParent(recipients, (names) => schoolDeparturePayload(school?.name, names, visit.id)));
+        }
       } catch (notifyError) {
-        console.error("Error sending departure notifications:", notifyError);
+        console.error("Error sending departure notifications", pgError(notifyError)?.code);
       }
 
       res.json(visit);
@@ -3395,11 +3411,106 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
-      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route.companyId ?? null);
+      const { attendance, previousStatus } = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route.companyId ?? null);
+
+      // Decision 1A: notify the student's parents only on a transition to
+      // present, and only when the route has a company. A notify failure must
+      // not fail the request.
+      const routeCompanyId = route.companyId;
+      if (routeCompanyId && status === 'present' && previousStatus !== 'present') {
+        try {
+          const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, routeId, { studentIds: [studentId] });
+          if (recipients.length > 0) {
+            await storage.createSystemNotifications(recipients.map(r => ({
+              companyId: routeCompanyId,
+              senderId: userId,
+              senderRole: 'driver' as const,
+              recipientRole: 'parent' as const,
+              recipientId: r.parentId,
+              title: 'On the Bus',
+              message: `${r.firstName} is on the bus`,
+              type: 'info' as const,
+            })));
+          }
+          await pushToRecipients('boarded', routeCompanyId, targetsPerParent(recipients, (names) => boardedPayload(names, studentId)));
+        } catch (notifyError) {
+          console.error("Error sending boarded notifications", pgError(notifyError)?.code);
+        }
+      }
+
       res.json(attendance);
     } catch (error) {
-      console.error("Error marking student attendance:", error);
+      console.error("Error marking student attendance", pgError(error)?.code);
       res.status(500).json({ message: "Failed to mark student attendance" });
+    }
+  });
+
+  const studentDropoffBodySchema = z.object({ studentId: z.string().min(1) }).strict();
+
+  // Driver marks a student dropped off. Only a student on the driver's
+  // assigned route, in the caller's tenant, with today's row marked present.
+  app.post('/api/driver/student-dropoff', isAuthenticated, async (req: any, res) => {
+    try {
+      const parsedBody = studentDropoffBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        return res.status(400).json({ message: "Invalid request" });
+      }
+      const { studentId } = parsedBody.data;
+
+      const user = await getCaller(req);
+      if (!user || !isDriverRole(user)) {
+        return res.status(403).json({ message: "Unauthorized - driver required" });
+      }
+
+      const student = await storage.getStudentById(studentId);
+      const routeId = user.assignedRouteId;
+      if (!student || !routeId || student.routeId !== routeId) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+
+      const route = await storage.getRouteById(routeId);
+      if (!route || !route.companyId) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+      if (isOutsideCallerTenant(user, route.companyId)) {
+        return res.status(404).json({ message: "Student not found" });
+      }
+      const routeCompanyId = route.companyId;
+
+      const company = await storage.getCompanyById(routeCompanyId);
+      const tz = company?.timezone || 'UTC';
+      const { result, attendance } = await storage.markStudentDroppedOff(studentId, user.id, routeId, tz);
+
+      if (result === 'no_row' || result === 'not_present') {
+        return res.status(409).json({ message: "Student isn't marked present today" });
+      }
+
+      if (result === 'dropped') {
+        try {
+          const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, routeId, { studentIds: [studentId] });
+          if (recipients.length > 0) {
+            await storage.createSystemNotifications(recipients.map(r => ({
+              companyId: routeCompanyId,
+              senderId: user.id,
+              senderRole: 'driver' as const,
+              recipientRole: 'parent' as const,
+              recipientId: r.parentId,
+              title: 'Dropped Off',
+              message: `${r.firstName} has been dropped off`,
+              type: 'info' as const,
+            })));
+          }
+          await pushToRecipients('dropped_off', routeCompanyId, targetsPerParent(recipients, (names) => droppedOffPayload(names, studentId)));
+        } catch (notifyError) {
+          console.error("Error sending drop-off notifications", pgError(notifyError)?.code);
+        }
+      }
+
+      // dropped or already: 200 with the row (already sends nothing).
+      res.json(attendance);
+    } catch (error) {
+      console.error("Error marking student drop-off", pgError(error)?.code);
+      res.status(500).json({ message: "Failed to mark drop-off" });
     }
   });
 
@@ -3666,11 +3777,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Push to exactly the parents who will see this row (a global row reaches
       // the whole company even if it carries a routeId).
-      const recipientIds = await storage.getAlertRecipients(companyId, shouldBeGlobal ? null : effectiveRouteId);
-      if (recipientIds.length > 0) {
-        pushService.notifyUsersOfAlert(recipientIds, title, message, type).catch((err) => {
-          console.error("Push notification error:", err);
-        });
+      // A push failure must not fail the request: the row is already saved.
+      try {
+        const recipientIds = await storage.getAlertRecipients(companyId, shouldBeGlobal ? null : effectiveRouteId);
+        if (recipientIds.length > 0) {
+          await pushToRecipients('alert', companyId, recipientIds.map((id) => ({ userId: id, payload: alertPayload(title, message, type) })));
+        }
+      } catch (pushError) {
+        console.error("Error sending alert push", pgError(pushError)?.code);
       }
 
       res.json(notification);
@@ -4453,9 +4567,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : user.role === 'driver' ? 'Your driver'
         : user.role === 'parent' ? 'A parent'
         : 'School staff';
-      pushService.notifyNewMessage(recipientId, senderName, undefined, user.id).catch((err) => {
-        console.error("Push notification error:", err);
-      });
+      // A push failure must not fail the request: the message is already saved.
+      try {
+        await pushToRecipients('message', effectiveCompanyId, [{ userId: recipientId, payload: messagePayload(senderName, user.id) }]);
+      } catch (pushError) {
+        console.error("Error sending message push", pgError(pushError)?.code);
+      }
 
       res.json(message);
     } catch (error) {
@@ -4660,15 +4777,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No company assigned" });
       }
 
+      const company = await storage.getCompanyById(routeCompanyId);
+      const tz = company?.timezone || 'UTC';
+
       // Mark the stop as completed
-      const completion = await storage.markStopCompleted({
+      const { completion, first } = await storage.markStopCompleted({
         routeStopId,
         routeId,
         driverId: userId,
         busId: driverBus.id,
         companyId: routeCompanyId,
         stopSequence,
-      });
+      }, tz);
 
       // Notify parents of this route's students at this stop (one bulk insert).
       // A notify failure must not 500 after the completion was written.
@@ -4682,12 +4802,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
             recipientRole: 'parent' as const,
             recipientId: r.parentId,
             title: 'Bus Arrived at Stop',
-            message: `The bus has arrived at ${routeStop.address || 'the stop'} for ${r.firstName}`,
+            // Stop name, never the address (decision 3A).
+            message: `The bus has arrived at ${routeStop.name?.trim() || 'your stop'} for ${r.firstName}`,
             type: 'info' as const,
           })));
         }
+        // Push only for the first completion of this stop today.
+        if (first) {
+          await pushToRecipients('stop_arrival', routeCompanyId, targetsPerParent(recipients, (names) => stopArrivalPayload(routeStop.name, names, routeStopId)));
+        }
       } catch (notifyError) {
-        console.error("Error sending stop notifications:", notifyError);
+        console.error("Error sending stop notifications", pgError(notifyError)?.code);
       }
 
       res.json({ success: true, completion });

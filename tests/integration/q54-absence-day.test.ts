@@ -91,6 +91,15 @@ describe('Q54 validation and order of checks', () => {
     expect(await rowsFor(h.ids.studentA)).toHaveLength(0);
   });
 
+  it('an impossible calendar day (2026-02-30) → 400 "Invalid date" and no row, never a 500 (red if the real-calendar-day check is removed)', async () => {
+    for (const date of ['2026-02-30', '2026-13-01', '2026-04-31']) {
+      const res = await parentA.post(url(h.ids.studentA)).send({ date });
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ message: 'Invalid date' });
+    }
+    expect(await rowsFor(h.ids.studentA)).toHaveLength(0);
+  });
+
   it('the parent\'s own child with no route → 400 "This student isn\'t on a route yet", not a 500', async () => {
     const res = await parentA.post(url(noRouteOwn)).send({ date: '2026-12-01' });
     expect(res.status).toBe(400);
