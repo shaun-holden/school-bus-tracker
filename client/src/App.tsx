@@ -94,9 +94,9 @@ function Router() {
     };
   }, []);
 
-  // Register for web push notifications once authenticated (web only; the
-  // phone app uses native push below).
-  useWebPush(!!isAuthenticated && !!user?.id);
+  // Web push for a logged-in parent or driver (web only; the phone app uses
+  // native push below). The browser prompt only comes from the card's tap (Q61).
+  useWebPush(isAuthenticated ? user : null);
   useNativePush(user);
 
   useEffect(() => {

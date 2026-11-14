@@ -120,7 +120,7 @@ export default function ParentDashboard() {
       />
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Phone app only: soft ask for push (renders nothing on web or once handled) */}
+        {/* Phone app and web: soft ask for push (renders nothing once handled) */}
         <PushPermissionCard role="parent" />
 
         {/* Prominent Notification Alert Banner */}

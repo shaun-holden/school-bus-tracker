@@ -2,7 +2,9 @@ import { useState } from "react";
 import { Bell } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Capacitor } from "@capacitor/core";
 import { dismissPushCard, turnOnPush, usePushCardState } from "@/hooks/use-native-push";
+import { turnOnWebPush } from "@/hooks/use-web-push";
 
 const TEXT: Record<"parent" | "driver", string> = {
   parent: "Get a notice when the bus reaches your stop",
@@ -10,20 +12,23 @@ const TEXT: Record<"parent" | "driver", string> = {
 };
 
 /**
- * Soft ask for native push. Shows only when useNativePush found the permission
- * not yet asked (or denied) for a logged-in parent or driver on the phone app.
- * The OS prompt comes only from "Turn on".
+ * Soft ask for push, on the phone app (useNativePush) and on the web
+ * (useWebPush, Q61). Shows only when the permission is not yet asked (or
+ * denied) for a logged-in parent or driver. The OS or browser prompt comes
+ * only from "Turn on".
  */
 export function PushPermissionCard({ role }: { role: "parent" | "driver" }) {
   const state = usePushCardState();
   const [busy, setBusy] = useState(false);
+  const isNative = Capacitor.isNativePlatform();
 
   if (state === "hidden") return null;
 
   const onTurnOn = async () => {
     setBusy(true);
     try {
-      await turnOnPush();
+      if (isNative) await turnOnPush();
+      else await turnOnWebPush();
     } catch {
       console.warn("Push permission request failed");
     } finally {
@@ -40,7 +45,9 @@ export function PushPermissionCard({ role }: { role: "parent" | "driver" }) {
             <p className="font-medium text-gray-900">{TEXT[role]}</p>
             {state === "denied" ? (
               <p className="text-sm text-gray-600 mt-1">
-                Notifications are off. Turn them on in Settings &gt; School Bus Tracker.
+                {isNative
+                  ? "Notifications are off. Turn them on in Settings > School Bus Tracker."
+                  : "Notifications are blocked for this site. Allow them in your browser's site settings."}
               </p>
             ) : (
               <div className="flex flex-wrap gap-2 mt-3">

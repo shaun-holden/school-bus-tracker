@@ -40,7 +40,17 @@ function getFirebaseMessaging(): Messaging | null {
   return messaging;
 }
 
-export async function requestNotificationPermission(): Promise<string | null> {
+function notificationPermission(): NotificationPermission | null {
+  if (typeof window === "undefined" || !("Notification" in window)) return null;
+  return Notification.permission;
+}
+
+/**
+ * This browser's FCM token, only when notifications are already allowed.
+ * Never shows the browser prompt (Q61, PL-3): safe to call on page load.
+ */
+export async function getWebPushToken(): Promise<string | null> {
+  if (notificationPermission() !== "granted") return null;
   const msg = getFirebaseMessaging();
   if (!msg) {
     console.warn("Firebase messaging not available in this environment");
@@ -51,11 +61,6 @@ export async function requestNotificationPermission(): Promise<string | null> {
     return null;
   }
   try {
-    const permission = await Notification.requestPermission();
-    if (permission !== "granted") {
-      console.log("Notification permission denied");
-      return null;
-    }
     const registration = await navigator.serviceWorker.register(
       "/firebase-messaging-sw.js"
     );
@@ -63,11 +68,26 @@ export async function requestNotificationPermission(): Promise<string | null> {
       vapidKey,
       serviceWorkerRegistration: registration,
     });
-    return token;
-  } catch (err) {
-    console.error("Error getting FCM token:", err);
+    return token || null;
+  } catch {
+    console.error("Error getting FCM token");
     return null;
   }
+}
+
+/**
+ * Shows the browser's notification prompt, then gets the token if allowed.
+ * Call ONLY from a tap (PushPermissionCard "Turn on"), never on load.
+ */
+export async function askWebPushPermission(): Promise<string | null> {
+  if (notificationPermission() === null) return null;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return null;
+  } catch {
+    return null;
+  }
+  return getWebPushToken();
 }
 
 export function onForegroundMessage(

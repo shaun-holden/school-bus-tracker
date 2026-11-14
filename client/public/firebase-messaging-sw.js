@@ -17,6 +17,10 @@ firebase.initializeApp(firebaseConfig);
 const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
+  // Q61 (PL-4): when the push has a `notification`, the SDK has already shown
+  // it; showing it here too gave two notifications. Only data-only pushes
+  // (none are sent today) are shown below.
+  if (payload.notification) return;
   const notificationTitle = payload.notification?.title || 'SchoolBus Tracker';
   const notificationOptions = {
     body: payload.notification?.body || '',
@@ -27,6 +31,9 @@ messaging.onBackgroundMessage((payload) => {
   self.registration.showNotification(notificationTitle, notificationOptions);
 });
 
+// Runs only for notifications shown above (data-only pushes). The SDK handles
+// clicks on the notifications it shows itself and opens the server's
+// webpush fcmOptions.link (PL-5, type-based routing: later, server side).
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(clients.openWindow('/'));

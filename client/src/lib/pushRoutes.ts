@@ -65,11 +65,22 @@ export function parseInitialTab(search: string | null | undefined): DriverTab | 
 
 type PushUser = { role?: string | null; _masterAdminImpersonating?: boolean } | null | undefined;
 
-/** Only a parent or driver (never an impersonating master) on a native app gets push. */
-export function shouldOfferPush(user: PushUser, isNative: boolean): boolean {
-  if (!isNative || !user) return false;
+/** The push role rule: a parent or driver, never an impersonating master. */
+function isPushRole(user: PushUser): boolean {
+  if (!user) return false;
   if (user._masterAdminImpersonating === true) return false;
   return user.role === "parent" || user.role === "driver";
+}
+
+/** Only a parent or driver (never an impersonating master) on a native app gets push. */
+export function shouldOfferPush(user: PushUser, isNative: boolean): boolean {
+  if (!isNative) return false;
+  return isPushRole(user);
+}
+
+/** Web push (Q61, PL-3): the same role rule; staff and masters are never asked. */
+export function shouldOfferWebPush(user: PushUser): boolean {
+  return isPushRole(user);
 }
 
 /** Android back button: go back inside the app when possible, else minimise (never exit to a blank page). */
