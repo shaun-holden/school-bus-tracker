@@ -22,6 +22,7 @@ import {
   linkCodes,
   parentChildLinks,
   driverInvitations,
+  sessions,
   type User,
   type UpsertUser,
   type Student,
@@ -100,7 +101,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { isDbQueryError, pgError } from "./dbErrors";
-import { eq, ne, and, desc, asc, sql, or, inArray, isNull, exists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
+import { eq, ne, and, desc, asc, sql, or, inArray, isNull, exists, notExists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
 
 // Tenant calendar-day predicate. Day columns are `timestamp without time zone`
 // holding UTC wall time (drizzle writes toISOString()). The inner
@@ -358,6 +359,7 @@ export interface IStorage {
   deactivateDeviceTokenById(id: string): Promise<void>;
   deactivateWebDeviceTokensForUser(userId: string): Promise<void>;
   deactivateDeviceTokensForUser(userId: string): Promise<void>;
+  deleteOwnAccount(userId: string): Promise<'deleted' | 'not_found' | 'on_duty'>;
   getDeviceTokensForUser(userId: string): Promise<DeviceToken[]>;
   getDeviceTokensForUsers(userIds: string[]): Promise<DeviceToken[]>;
 }
@@ -3290,6 +3292,139 @@ export class DatabaseStorage implements IStorage {
     await db.update(deviceTokens)
       .set({ isActive: false })
       .where(eq(deviceTokens.userId, userId));
+  }
+
+  // Account self-deletion (parent or driver): scrub + deactivate the users row
+  // and remove this user's personal data, all in one transaction. Every
+  // statement is filtered to this one user.
+  // Never hard-delete users: direct_messages cascades and would erase the other person's conversation; other FKs block (reader-pre-account-deletion §3).
+  async deleteOwnAccount(userId: string): Promise<'deleted' | 'not_found' | 'on_duty'> {
+    return await db.transaction(async (tx): Promise<'deleted' | 'not_found' | 'on_duty'> => {
+      // 1. Lock the users row. The in-lock isOnDuty check is the only on-duty gate.
+      const [user] = await tx
+        .select({ id: users.id, email: users.email, companyId: users.companyId, isOnDuty: users.isOnDuty })
+        .from(users)
+        .where(eq(users.id, userId))
+        .for('update');
+      if (!user) return 'not_found';
+      if (user.isOnDuty) return 'on_duty';
+      const originalEmail = user.email;
+      const originalCompanyId = user.companyId;
+
+      // 2. No-school children (no company, this user is the parent, no other
+      // parent linked). Runs before step 5 removes this user's links.
+      const candidates = await tx
+        .select({ id: students.id })
+        .from(students)
+        .where(and(
+          isNull(students.companyId),
+          eq(students.parentId, userId),
+          notExists(
+            tx.select({ one: sql`1` })
+              .from(parentChildLinks)
+              .where(and(
+                eq(parentChildLinks.studentId, students.id),
+                ne(parentChildLinks.parentId, userId),
+              )),
+          ),
+        ));
+      let deleted = 0;
+      let kept = 0;
+      if (candidates.length > 0) {
+        const candidateIds = candidates.map(c => c.id);
+        // A child with attendance or message history is kept (those FKs block).
+        const attRows = await tx.selectDistinct({ studentId: attendance.studentId }).from(attendance)
+          .where(inArray(attendance.studentId, candidateIds));
+        const saRows = await tx.selectDistinct({ studentId: studentAttendance.studentId }).from(studentAttendance)
+          .where(inArray(studentAttendance.studentId, candidateIds));
+        const dmRows = await tx.selectDistinct({ studentId: directMessages.studentId }).from(directMessages)
+          .where(inArray(directMessages.studentId, candidateIds));
+        const keepIds = new Set<string>();
+        for (const r of [...attRows, ...saRows, ...dmRows]) {
+          if (r.studentId) keepIds.add(r.studentId);
+        }
+        const deleteIds = candidateIds.filter(id => !keepIds.has(id));
+        kept = candidateIds.length - deleteIds.length;
+        if (deleteIds.length > 0) {
+          await tx.delete(emergencyContacts).where(inArray(emergencyContacts.studentId, deleteIds));
+          // Links and check-ins cascade. The isNull guard makes sure a student
+          // with a company is never deleted here.
+          const removed = await tx.delete(students)
+            .where(and(inArray(students.id, deleteIds), isNull(students.companyId), eq(students.parentId, userId)))
+            .returning({ id: students.id });
+          deleted = removed.length;
+        }
+      }
+      console.log('Account deletion: no-school children', { deleted, kept });
+
+      // 3. Pending invitations for this person.
+      if (originalEmail && originalCompanyId) {
+        await tx.delete(invitations).where(and(
+          sql`lower(${invitations.email}) = lower(${originalEmail})`,
+          eq(invitations.companyId, originalCompanyId),
+        ));
+      }
+      await tx.delete(driverInvitations).where(eq(driverInvitations.driverId, userId));
+
+      // 4. Unassign buses/routes; anonymize the driver name on shift reports.
+      await tx.update(buses).set({ driverId: null }).where(eq(buses.driverId, userId));
+      await tx.update(routes).set({ driverId: null }).where(eq(routes.driverId, userId));
+      await tx.update(driverShiftReports)
+        .set({ driverName: 'Deleted user' })
+        .where(eq(driverShiftReports.driverId, userId));
+
+      // 5. Parent-child links.
+      await tx.delete(parentChildLinks).where(eq(parentChildLinks.parentId, userId));
+
+      // 6. Bluetooth device ids on this parent's check-ins.
+      await tx.update(studentCheckIns)
+        .set({ deviceId: null })
+        .where(eq(studentCheckIns.parentId, userId));
+
+      // 7. Push tokens.
+      await tx.update(deviceTokens)
+        .set({ isActive: false, updatedAt: new Date() })
+        .where(eq(deviceTokens.userId, userId));
+
+      // 8. Password.
+      await tx.delete(passwordCredentials).where(eq(passwordCredentials.userId, userId));
+
+      // 9. Every session of this user (the id is a bound parameter).
+      await tx.delete(sessions).where(sql`${sessions.sess}->'passport'->>'user' = ${userId}`);
+
+      // 10. Scrub the users row last. id, role and createdAt are kept.
+      await tx.update(users)
+        .set({
+          email: `deleted-${userId}@deleted.invalid`,
+          firstName: 'Deleted',
+          lastName: 'user',
+          profileImageUrl: null,
+          phone: null,
+          address: null,
+          licenseNumber: null,
+          licenseState: null,
+          licenseExpiryDate: null,
+          dateOfBirth: null,
+          emergencyContactName: null,
+          emergencyContactPhone: null,
+          hireDate: null,
+          lastCheckInFuelLevel: null,
+          lastCheckInInteriorClean: null,
+          lastCheckInExteriorClean: null,
+          lastCheckInTime: null,
+          assignedRouteId: null,
+          dutyStartTime: null,
+          companyRoleId: null,
+          departmentId: null,
+          companyId: null,
+          isActive: false,
+          isOnDuty: false,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+
+      return 'deleted';
+    });
   }
 
   async getDeviceTokensForUser(userId: string): Promise<DeviceToken[]> {
