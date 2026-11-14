@@ -26,6 +26,11 @@ function setCardState(next: PushCardState) {
   cardListeners.forEach((fn) => fn());
 }
 
+/** Web setter for the same card store (Q61): use-web-push.ts sets it from Notification.permission. */
+export function setPushCardState(next: PushCardState) {
+  setCardState(next);
+}
+
 function subscribeCard(fn: () => void) {
   cardListeners.add(fn);
   return () => {

@@ -7,6 +7,7 @@ import {
   parseInitialTab,
   DRIVER_TABS,
   shouldOfferPush,
+  shouldOfferWebPush,
   backButtonAction,
 } from "../client/src/lib/pushRoutes";
 import { logoutBody, getPushToken, setPushToken, clearPushToken } from "../client/src/lib/pushToken";
@@ -98,6 +99,28 @@ describe("shouldOfferPush: parent/driver on native only", () => {
   it("an impersonating master (overlay role parent/driver) → false (impersonation check)", () => {
     expect(shouldOfferPush({ role: "parent", _masterAdminImpersonating: true }, true)).toBe(false);
     expect(shouldOfferPush({ role: "driver", _masterAdminImpersonating: true }, true)).toBe(false);
+  });
+});
+
+describe("shouldOfferWebPush (Q61): parent/driver only, no native flag", () => {
+  it.each([
+    ["parent", undefined, true],
+    ["driver", undefined, true],
+    ["admin", undefined, false],
+    ["driver_admin", undefined, false],
+    ["master_admin", undefined, false],
+    ["master_admin", true, false],
+    ["parent", true, false],
+    ["driver", true, false],
+    [null, undefined, false],
+    ["", undefined, false],
+  ] as const)("role %s, impersonating %s → %s", (role, imp, expected) => {
+    expect(shouldOfferWebPush({ role, _masterAdminImpersonating: imp })).toBe(expected);
+  });
+
+  it("no user → false", () => {
+    expect(shouldOfferWebPush(null)).toBe(false);
+    expect(shouldOfferWebPush(undefined)).toBe(false);
   });
 });
 
