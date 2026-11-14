@@ -207,7 +207,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const deviceToken = await storage.registerDeviceToken(user.id, token, platform);
       res.json({ success: true, id: deviceToken.id });
     } catch (error) {
-      console.error("Error registering device token:", error);
+      console.error("Error registering device token", pgError(error)?.code);
       res.status(500).json({ message: "Failed to register device token" });
     }
   });
@@ -229,7 +229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.deactivateDeviceTokenForUser(userId, parsed.data.token);
       res.json({ success: true });
     } catch (error) {
-      console.error("Error removing device token:", error);
+      console.error("Error removing device token", pgError(error)?.code);
       res.status(500).json({ message: "Failed to remove device token" });
 
     }
@@ -1575,10 +1575,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         res.json(route);
       } catch (validationError) {
-        console.error('Route validation error:', validationError);
         if (isDbQueryError(validationError)) {
+          console.error('Route save failed', pgError(validationError)?.code);
           return res.status(500).json({ message: "Failed to save route" });
         }
+        console.error('Route validation error:', validationError);
         return res.status(400).json({ 
           message: "Invalid route data", 
           details: validationError instanceof Error ? validationError.message : validationError 
@@ -1681,10 +1682,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json(updatedRoute);
         
       } catch (validationError) {
-        console.error('Route validation error:', validationError);
         if (isDbQueryError(validationError)) {
+          console.error('Route save failed', pgError(validationError)?.code);
           return res.status(500).json({ message: "Failed to save route" });
         }
+        console.error('Route validation error:', validationError);
         return res.status(400).json({ 
           message: "Invalid route data", 
           details: validationError instanceof Error ? validationError.message : validationError 

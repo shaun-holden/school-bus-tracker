@@ -363,7 +363,7 @@ export async function setupCustomAuth(app: Express) {
         }
         await storage.deactivateWebDeviceTokensForUser(userId);
       } catch (err) {
-        console.error("Failed to deactivate device tokens on logout:", err);
+        console.error("Failed to deactivate device tokens on logout", pgError(err)?.code);
         // Proceed with logout anyway — session destruction is more important
         // than token cleanup, and stale tokens are a lesser evil than a
         // stuck session.
