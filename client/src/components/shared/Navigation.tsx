@@ -4,8 +4,8 @@ import { useTheme } from "@/hooks/use-theme";
 import { formatRole } from "@/lib/roleLabel";
 import { logoutThenRedirect } from "@/lib/pushToken";
 import { useQuery } from "@tanstack/react-query";
-import { UserCog, Bell, Eye, Sun, Moon, Menu } from "lucide-react";
-import { Link } from "wouter";
+import { UserCog, UserRound, Bell, Eye, Sun, Moon, Menu } from "lucide-react";
+import { Link, useLocation } from "wouter";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -18,6 +18,7 @@ import {
 export default function Navigation() {
   const { user, logoutAsync, isLoggingOut } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const [, setLocation] = useLocation();
 
   const { data: unreadCount } = useQuery<{ unreadCount: number }>({
     queryKey: ["/api/parent-notifications/unread-count"],
@@ -111,6 +112,17 @@ export default function Navigation() {
                   Change Role
                 </Button>
               )}
+              <Link href="/account">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-white hover:bg-blue-700"
+                  data-testid="button-account"
+                >
+                  <UserRound className="w-4 h-4 mr-1" />
+                  Account
+                </Button>
+              </Link>
               <Button
                 variant="ghost"
                 size="sm"
@@ -177,6 +189,14 @@ export default function Navigation() {
                   >
                     {theme === "light" ? <Moon className="w-4 h-4 mr-2" /> : <Sun className="w-4 h-4 mr-2" />}
                     {theme === "light" ? "Dark mode" : "Light mode"}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="min-h-11"
+                    onClick={() => setLocation('/account')}
+                    data-testid="button-account-mobile"
+                  >
+                    <UserRound className="w-4 h-4 mr-2" />
+                    Account
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem

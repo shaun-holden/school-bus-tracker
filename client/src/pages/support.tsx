@@ -1,7 +1,7 @@
 import { Link } from "wouter";
 import { ArrowLeft, Bus, Mail } from "lucide-react";
 
-const SUPPORT_EMAIL = "support@schoolbustracker.org";
+export const SUPPORT_EMAIL = "support@schoolbustracker.org";
 
 function Faq({ q, children }: { q: string; children: React.ReactNode }) {
   return (
@@ -76,6 +76,15 @@ export default function Support() {
           <Faq q="The bus location isn't updating.">
             Parents can see a bus only while its driver is on duty. Drivers: make sure duty is turned
             on and that the app has permission to use your location in your device settings.
+          </Faq>
+
+          <Faq q="How do I delete my account?">
+            Parents and drivers can delete their account in the app: Menu → Account → Delete my
+            account. Staff accounts are removed by your school's administrator. See{" "}
+            <a href="/delete-account" className="text-blue-700 underline" data-testid="link-delete-account">
+              how to delete your account
+            </a>{" "}
+            for the details, including what to do if you can't sign in.
           </Faq>
 
           <Faq q="I'm an administrator with a billing or account question.">
