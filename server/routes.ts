@@ -20,7 +20,7 @@ import { z } from "zod";
 import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
 import { pushService } from "./pushService";
-import { pushToRecipients, targetsPerParent, stopArrivalPayload, schoolArrivalPayload, schoolDeparturePayload, boardedPayload, droppedOffPayload } from "./pushEvents";
+import { pushToRecipients, targetsPerParent, stopArrivalPayload, schoolArrivalPayload, schoolDeparturePayload, boardedPayload, droppedOffPayload, messagePayload, alertPayload } from "./pushEvents";
 import { isMasterAdminUser, isUnscopedMaster, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
 import { isDbQueryError, pgError } from "./dbErrors";
 
@@ -3440,7 +3440,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(attendance);
     } catch (error) {
-      console.error("Error marking student attendance:", error);
+      console.error("Error marking student attendance", pgError(error)?.code);
       res.status(500).json({ message: "Failed to mark student attendance" });
     }
   });
@@ -3777,11 +3777,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Push to exactly the parents who will see this row (a global row reaches
       // the whole company even if it carries a routeId).
-      const recipientIds = await storage.getAlertRecipients(companyId, shouldBeGlobal ? null : effectiveRouteId);
-      if (recipientIds.length > 0) {
-        pushService.notifyUsersOfAlert(recipientIds, title, message, type).catch((err) => {
-          console.error("Push notification error:", err);
-        });
+      // A push failure must not fail the request: the row is already saved.
+      try {
+        const recipientIds = await storage.getAlertRecipients(companyId, shouldBeGlobal ? null : effectiveRouteId);
+        if (recipientIds.length > 0) {
+          await pushToRecipients('alert', companyId, recipientIds.map((id) => ({ userId: id, payload: alertPayload(title, message, type) })));
+        }
+      } catch (pushError) {
+        console.error("Error sending alert push", pgError(pushError)?.code);
       }
 
       res.json(notification);
@@ -4564,9 +4567,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         : user.role === 'driver' ? 'Your driver'
         : user.role === 'parent' ? 'A parent'
         : 'School staff';
-      pushService.notifyNewMessage(recipientId, senderName, undefined, user.id).catch((err) => {
-        console.error("Push notification error:", err);
-      });
+      // A push failure must not fail the request: the message is already saved.
+      try {
+        await pushToRecipients('message', effectiveCompanyId, [{ userId: recipientId, payload: messagePayload(senderName, user.id) }]);
+      } catch (pushError) {
+        console.error("Error sending message push", pgError(pushError)?.code);
+      }
 
       res.json(message);
     } catch (error) {

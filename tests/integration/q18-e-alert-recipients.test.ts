@@ -4,7 +4,8 @@
 // company-A parents plus null-company parents linked to an A student. Never
 // a company-B parent, an inactive parent or a non-parent. Foreign routeId /
 // busId give 404 and an over-long title 400, with no row and no push.
-// Asserts on the mocked pushService.notifyUsersOfAlert arguments (the
+// Asserts on the mocked pushService.sendToUsers ids + payload (T4b: alerts go
+// through pushToRecipients and the fence; the
 // integration setup mocks pushService). Real HTTP + real Postgres.
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
@@ -27,9 +28,10 @@ let parentA3Id: string;
 let parentInactiveId: string;
 let routeA2: string;
 
-const pushMock = () => vi.mocked(pushService.notifyUsersOfAlert);
+const pushMock = () => vi.mocked(pushService.sendToUsers);
 const pushedIds = () => {
   expect(pushMock()).toHaveBeenCalledTimes(1);
+  expect((pushMock().mock.calls[0][1] as { data?: unknown }).data).toEqual({ type: 'alert' });
   return [...(pushMock().mock.calls[0][0] as string[])].sort();
 };
 const noticeCount = async () => (await h.db.select().from(parentNotifications)).length;
