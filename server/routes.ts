@@ -207,7 +207,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const deviceToken = await storage.registerDeviceToken(user.id, token, platform);
       res.json({ success: true, id: deviceToken.id });
     } catch (error) {
-      console.error("Error registering device token:", error);
+      console.error("Error registering device token", pgError(error)?.code);
       res.status(500).json({ message: "Failed to register device token" });
     }
   });
@@ -229,7 +229,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.deactivateDeviceTokenForUser(userId, parsed.data.token);
       res.json({ success: true });
     } catch (error) {
-      console.error("Error removing device token:", error);
+      console.error("Error removing device token", pgError(error)?.code);
       res.status(500).json({ message: "Failed to remove device token" });
 
     }
@@ -963,9 +963,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
+      if (!isAdminRole(user.role) && !isDriverRole(user)) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
       const scope = companyScope(user);
       if (scope === null) return res.json([]);
       const requests = await storage.getAllAdminRequests(scope);
+      // Drivers see only requests addressed to all drivers or to themselves.
+      if (!isAdminRole(user.role)) {
+        return res.json(requests.filter(r => r.driverId == null || r.driverId === user.id));
+      }
       res.json(requests);
     } catch (error) {
       console.error("Error fetching admin requests:", error);
@@ -1033,9 +1040,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Create maintenance request
   // Acknowledge admin request
-  app.patch('/api/admin-requests/:id/acknowledge', isAuthenticated, async (req, res) => {
+  app.patch('/api/admin-requests/:id/acknowledge', isAuthenticated, async (req: any, res) => {
     try {
+      const user = await getCaller(req);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
       const { id } = req.params;
+      // 404 masks both other-tenant rows and requests addressed to another driver.
+      const row = await storage.getAdminRequestById(id);
+      if (!row || isOutsideCallerTenant(user, row.companyId)) {
+        return res.status(404).json({ message: "Request not found" });
+      }
+      const allowed = isAdminRole(user.role)
+        || (isDriverRole(user) && (row.driverId == null || row.driverId === user.id));
+      if (!allowed) {
+        return res.status(404).json({ message: "Request not found" });
+      }
       const updatedRequest = await storage.acknowledgeAdminRequest(id);
       
       if (!updatedRequest) {
@@ -1050,9 +1071,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Complete admin request
-  app.patch('/api/admin-requests/:id/complete', isAuthenticated, async (req, res) => {
+  app.patch('/api/admin-requests/:id/complete', isAuthenticated, async (req: any, res) => {
     try {
+      const user = await getCaller(req);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
       const { id } = req.params;
+      // 404 masks both other-tenant rows and requests addressed to another driver.
+      const row = await storage.getAdminRequestById(id);
+      if (!row || isOutsideCallerTenant(user, row.companyId)) {
+        return res.status(404).json({ message: "Request not found" });
+      }
+      const allowed = isAdminRole(user.role)
+        || (isDriverRole(user) && (row.driverId == null || row.driverId === user.id));
+      if (!allowed) {
+        return res.status(404).json({ message: "Request not found" });
+      }
       const updatedRequest = await storage.completeAdminRequest(id);
       
       if (!updatedRequest) {
@@ -1540,10 +1575,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         
         res.json(route);
       } catch (validationError) {
-        console.error('Route validation error:', validationError);
         if (isDbQueryError(validationError)) {
+          console.error('Route save failed', pgError(validationError)?.code);
           return res.status(500).json({ message: "Failed to save route" });
         }
+        console.error('Route validation error:', validationError);
         return res.status(400).json({ 
           message: "Invalid route data", 
           details: validationError instanceof Error ? validationError.message : validationError 
@@ -1646,10 +1682,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json(updatedRoute);
         
       } catch (validationError) {
-        console.error('Route validation error:', validationError);
         if (isDbQueryError(validationError)) {
+          console.error('Route save failed', pgError(validationError)?.code);
           return res.status(500).json({ message: "Failed to save route" });
         }
+        console.error('Route validation error:', validationError);
         return res.status(400).json({ 
           message: "Invalid route data", 
           details: validationError instanceof Error ? validationError.message : validationError 
@@ -2229,7 +2266,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { studentId } = req.params;
-      const { date, notes } = req.body;
 
       // Verify parent owns this student
       const [directStudents, linkedStudents] = await Promise.all([
@@ -2239,19 +2275,28 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
       
       if (!student) {
-        return res.status(403).json({ message: "Unauthorized - not your student" });
+        return res.status(404).json({ message: "Student not found" });
       }
 
-      const attendanceDate = new Date(date);
-      const attendanceData = {
-        studentId,
-        routeId: student.routeId!,
-        date: attendanceDate,
-        isAbsent: true,
-        notes: notes || "Parent reported absence"
-      };
+      const { date, notes } = req.body;
+      if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ message: "Invalid date" });
+      }
 
-      const attendance = await storage.createAttendance(attendanceData);
+      if (!student.routeId) {
+        return res.status(400).json({ message: "This student isn't on a route yet" });
+      }
+
+      // The reported day is a calendar day in the student's company zone.
+      const tz = (student.companyId ? (await storage.getCompanyById(student.companyId))?.timezone : null) || 'UTC';
+      const attendance = await storage.createParentAbsence({
+        studentId,
+        routeId: student.routeId,
+        companyId: student.companyId ?? null,
+        dateString: date,
+        timezone: tz,
+        notes: notes || "Parent reported absence",
+      });
       res.json(attendance);
     } catch (error) {
       console.error("Error reporting absence:", error);
@@ -3346,10 +3391,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Student not found on your route" });
       }
       const route = await storage.getRouteById(routeId);
+      if (!route) return res.status(404).json({ message: "Route not found" });
 
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
-      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route?.companyId ?? null);
+      const attendance = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route.companyId ?? null);
       res.json(attendance);
     } catch (error) {
       console.error("Error marking student attendance:", error);
@@ -4777,14 +4823,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID and device ID are required" });
       }
 
-      // Verify parent has access to this student
-      const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
-      const hasAccess = linkedStudents.some(s => s.id === studentId);
-      if (!hasAccess) {
-        return res.status(403).json({ message: "You don't have access to this student" });
+      // Verify parent has access to this student (direct parentId or link code)
+      const [directStudents, linkedStudents] = await Promise.all([
+        storage.getStudentsByParentId(userId),
+        storage.getLinkedStudentsByParentId(userId),
+      ]);
+      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
+      if (!student) {
+        return res.status(404).json({ message: "Student not found" });
       }
 
-      const effectiveCompanyId = linkedStudents[0]?.companyId || user.companyId;
+      const effectiveCompanyId = student.companyId || user.companyId;
       const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
       const tz = company?.timezone || 'UTC';
       const checkIn = await storage.enableStudentCheckIn(studentId, userId, deviceId, effectiveCompanyId || undefined, tz);
@@ -4813,14 +4862,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID is required" });
       }
 
-      // Verify parent has access to this student
-      const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
-      const hasAccess = linkedStudents.some(s => s.id === studentId);
-      if (!hasAccess) {
-        return res.status(403).json({ message: "You don't have access to this student" });
+      // Verify parent has access to this student (direct parentId or link code)
+      const [directStudents, linkedStudents] = await Promise.all([
+        storage.getStudentsByParentId(userId),
+        storage.getLinkedStudentsByParentId(userId),
+      ]);
+      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
+      if (!student) {
+        return res.status(404).json({ message: "Student not found" });
       }
 
-      const effectiveCompanyId = linkedStudents[0]?.companyId || user.companyId;
+      const effectiveCompanyId = student.companyId || user.companyId;
       const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
       const tz = company?.timezone || 'UTC';
       await storage.disableStudentCheckIn(studentId, tz);

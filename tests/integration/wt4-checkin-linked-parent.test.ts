@@ -2,8 +2,8 @@
 // parent linked to the student ONLY by link code (parentChildLinks, no
 // students.parentId). Replaces the copied canManageCheckIn and friends in
 // tests/parent-features.test.ts. A student of another company is refused
-// with the routes' existence-neutral 403 ("You don't have access to this
-// student"; same reply for a missing id). Real HTTP + real Postgres.
+// with the routes' existence-neutral 404 ("Student not found"; same reply
+// for a missing id; Q50 moved this from 403 to 404, checklist T-2). Real HTTP + real Postgres.
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { studentCheckIns } from '@shared/schema';
@@ -11,7 +11,7 @@ import { useIntegrationHarness, type Agent } from './harness';
 import { seedTd1Extras, TD1_EMAILS, SEED_PASSWORD } from './seed';
 
 const h = useIntegrationHarness();
-const NO_ACCESS = { message: "You don't have access to this student" };
+const NO_ACCESS = { message: 'Student not found' };
 
 let parentLinkA: Agent;
 let parentLinkAId: string;
@@ -46,14 +46,14 @@ describe('WT-4 check-in for a parent linked only by link code', () => {
     expect(await checkInsFor(h.ids.studentA)).toHaveLength(0);
   });
 
-  it("enable for company B's student → 403 and no row (red if the enable access check is removed)", async () => {
+  it("enable for company B's student → 404 and no row (red if the enable access check is removed)", async () => {
     const res = await parentLinkA.post('/api/check-in/enable').send({ studentId: h.ids.studentB, deviceId: 'wt4-device' });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(res.body).toEqual(NO_ACCESS);
     expect(await checkInsFor(h.ids.studentB)).toHaveLength(0);
   });
 
-  it("disable for company B's student → 403 and B's check-in is untouched (red if the disable access check is removed)", async () => {
+  it("disable for company B's student → 404 and B's check-in is untouched (red if the disable access check is removed)", async () => {
     await h.db.insert(studentCheckIns).values({
       studentId: h.ids.studentB,
       parentId: h.ids.parentB,
@@ -62,7 +62,7 @@ describe('WT-4 check-in for a parent linked only by link code', () => {
       status: 'waiting',
     });
     const res = await parentLinkA.post('/api/check-in/disable').send({ studentId: h.ids.studentB });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
     expect(res.body).toEqual(NO_ACCESS);
     expect(await checkInsFor(h.ids.studentB)).toHaveLength(1);
   });

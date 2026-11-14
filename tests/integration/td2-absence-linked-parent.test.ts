@@ -41,10 +41,13 @@ describe('TD-2 absence report ownership', () => {
     expect(rows[0].isAbsent).toBe(true);
   });
 
-  it('(b) company B\'s parent reporting studentA absent gets 403 and no row (red if the ownership check is deleted)', async () => {
+  it('(b) company B\'s parent reporting studentA absent gets 404 "Student not found", the same body as a missing id, and no row (red if the ownership check is deleted; Q54 moved 403 to 404, T-2)', async () => {
+    const missing = await parentB.post('/api/students/no-such-student/absence').send({ date: '2026-12-01' });
+    expect(missing.status).toBe(404);
     const res = await parentB.post(url()).send({ date: '2026-12-01' });
-    expect(res.status).toBe(403);
-    expect(res.body).toEqual({ message: 'Unauthorized - not your student' });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Student not found' });
+    expect(res.body).toEqual(missing.body);
     expect(await rowsForStudentA()).toHaveLength(0);
   });
 
