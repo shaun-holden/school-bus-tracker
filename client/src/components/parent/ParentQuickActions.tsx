@@ -11,6 +11,7 @@ import { z } from "zod";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiRequest } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { localDateString, localDateStringPlusDays } from "@/lib/localDate";
 
 const absenceSchema = z.object({
   studentId: z.string().min(1, "Please select a student"),
@@ -31,7 +32,7 @@ export default function ParentQuickActions() {
     resolver: zodResolver(absenceSchema),
     defaultValues: {
       studentId: "",
-      date: new Date().toISOString().split('T')[0],
+      date: localDateString(),
       notes: "",
     },
   });
@@ -76,16 +77,23 @@ export default function ParentQuickActions() {
   const studentsList = Array.isArray(students) ? students : [];
   const hasSingleChild = studentsList.length === 1;
 
+  // The form's default date is computed at mount and form.reset() brings it
+  // back, so a page left open past midnight would default to yesterday.
+  const handleAbsenceDialogOpenChange = (open: boolean) => {
+    if (open) form.setValue("date", localDateString());
+    setIsAbsenceDialogOpen(open);
+  };
+
   const handleQuickAbsentToday = () => {
     if (hasSingleChild) {
       reportAbsenceMutation.mutate({
         studentId: studentsList[0].id,
-        date: new Date().toISOString().split('T')[0],
+        date: localDateString(),
         notes: "",
       });
     } else {
       setIsAbsenceDialogOpen(true);
-      form.setValue("date", new Date().toISOString().split('T')[0]);
+      form.setValue("date", localDateString());
     }
   };
 
@@ -107,7 +115,7 @@ export default function ParentQuickActions() {
           </Button>
         )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <Dialog open={isAbsenceDialogOpen} onOpenChange={setIsAbsenceDialogOpen}>
+          <Dialog open={isAbsenceDialogOpen} onOpenChange={handleAbsenceDialogOpenChange}>
             <DialogTrigger asChild>
               <Button 
                 className="bg-warning hover:bg-warning/90 text-white p-4 h-auto"
@@ -159,7 +167,7 @@ export default function ParentQuickActions() {
                             variant="outline"
                             size="sm"
                             className="flex-1"
-                            onClick={() => field.onChange(new Date().toISOString().split('T')[0])}
+                            onClick={() => field.onChange(localDateString())}
                             data-testid="button-absent-today"
                           >
                             Today
@@ -169,11 +177,7 @@ export default function ParentQuickActions() {
                             variant="outline"
                             size="sm"
                             className="flex-1"
-                            onClick={() => {
-                              const tomorrow = new Date();
-                              tomorrow.setDate(tomorrow.getDate() + 1);
-                              field.onChange(tomorrow.toISOString().split('T')[0]);
-                            }}
+                            onClick={() => field.onChange(localDateStringPlusDays(1))}
                             data-testid="button-absent-tomorrow"
                           >
                             Tomorrow
