@@ -4812,14 +4812,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID and device ID are required" });
       }
 
-      // Verify parent has access to this student
-      const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
-      const hasAccess = linkedStudents.some(s => s.id === studentId);
-      if (!hasAccess) {
-        return res.status(403).json({ message: "You don't have access to this student" });
+      // Verify parent has access to this student (direct parentId or link code)
+      const [directStudents, linkedStudents] = await Promise.all([
+        storage.getStudentsByParentId(userId),
+        storage.getLinkedStudentsByParentId(userId),
+      ]);
+      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
+      if (!student) {
+        return res.status(404).json({ message: "Student not found" });
       }
 
-      const effectiveCompanyId = linkedStudents[0]?.companyId || user.companyId;
+      const effectiveCompanyId = student.companyId || user.companyId;
       const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
       const tz = company?.timezone || 'UTC';
       const checkIn = await storage.enableStudentCheckIn(studentId, userId, deviceId, effectiveCompanyId || undefined, tz);
@@ -4848,14 +4851,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID is required" });
       }
 
-      // Verify parent has access to this student
-      const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
-      const hasAccess = linkedStudents.some(s => s.id === studentId);
-      if (!hasAccess) {
-        return res.status(403).json({ message: "You don't have access to this student" });
+      // Verify parent has access to this student (direct parentId or link code)
+      const [directStudents, linkedStudents] = await Promise.all([
+        storage.getStudentsByParentId(userId),
+        storage.getLinkedStudentsByParentId(userId),
+      ]);
+      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
+      if (!student) {
+        return res.status(404).json({ message: "Student not found" });
       }
 
-      const effectiveCompanyId = linkedStudents[0]?.companyId || user.companyId;
+      const effectiveCompanyId = student.companyId || user.companyId;
       const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
       const tz = company?.timezone || 'UTC';
       await storage.disableStudentCheckIn(studentId, tz);
