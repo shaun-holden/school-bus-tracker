@@ -8,7 +8,7 @@
 // Real HTTP + real Postgres. Each "no push" test sits next to a positive one.
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { routes, students, studentAttendance, systemNotifications } from '@shared/schema';
+import { routes, students, studentAttendance, systemNotifications, users } from '@shared/schema';
 import { pushService } from '../../server/pushService';
 import { useIntegrationHarness, type Agent } from './harness';
 import { insertUser, SEED_PASSWORD } from './seed';
@@ -21,6 +21,7 @@ let driverA: Agent;
 let parentA: Agent;
 let otherRouteStudent: string;
 let driverOnB: Agent;
+let master: Agent;
 
 const send = () => vi.mocked(pushService.sendToUsers);
 const pushesOfType = (type: string) =>
@@ -43,10 +44,11 @@ beforeAll(async () => {
     { email: 't4b-driver-on-b@sbt.test', firstName: 'A-DriverOnB', lastName: 'Seed', role: 'driver', companyId: h.ids.companyA, assignedRouteId: h.ids.routeB },
     { password: true },
   );
-  // 3 logins (MAX_LOGINS_PER_FILE is 8).
+  // 4 logins (MAX_LOGINS_PER_FILE is 8).
   const agent = h.anon();
   expect((await h.loginAttempt('t4b-driver-on-b@sbt.test', SEED_PASSWORD, agent)).status).toBe(200);
   driverOnB = agent;
+  master = await h.loginAs('master');
   driverA = await h.loginAs('driverA');
   parentA = await h.loginAs('parentA');
 });
@@ -141,5 +143,38 @@ describe('T4b E5 drop-off endpoint', () => {
     expect((await driverA.post(DROP).send({})).status).toBe(400);
     expect((await driverA.post(DROP).send({ studentId: h.ids.studentA, extra: 1 })).status).toBe(400);
     expect((await parentA.post(DROP).send({ studentId: h.ids.studentA })).status).toBe(403);
+  });
+});
+
+describe('T4b follow-ups (SHELL merge)', () => {
+  it('E4b: a company-A driver whose assignedRouteId is (bad data) company B\'s route marks B\'s child present → the mark is saved but there is no B parent notice and no push (red if the E4b isOutsideCallerTenant check is removed)', async () => {
+    const res = await driverOnB.post(MARK).send({ studentId: h.ids.studentB, status: 'present' });
+    expect(res.status).toBe(200);
+    expect(await h.db.select().from(studentAttendance).where(eq(studentAttendance.studentId, h.ids.studentB))).toHaveLength(1);
+    expect(await h.db.select().from(systemNotifications).where(eq(systemNotifications.recipientId, h.ids.parentB))).toHaveLength(0);
+    expect(send()).not.toHaveBeenCalled();
+  });
+
+  it('E5: an unscoped master whose assignedRouteId is a company-less route gets 404 on drop-off and dropped_off_at stays NULL (red if the !route.companyId clause is removed)', async () => {
+    const [r] = await h.db.insert(routes).values({ companyId: null, name: 'Null-Route' }).returning({ id: routes.id });
+    const [kid] = await h.db
+      .insert(students)
+      .values({ companyId: null, firstName: 'Null-Kid', lastName: 'Seed', parentId: h.ids.parentNull, routeId: r.id })
+      .returning({ id: students.id });
+    const [mark] = await h.db
+      .insert(studentAttendance)
+      .values({ companyId: null, studentId: kid.id, driverId: h.ids.master, routeId: r.id, status: 'present', attendanceDate: new Date() })
+      .returning({ id: studentAttendance.id });
+    await h.db.update(users).set({ assignedRouteId: r.id }).where(eq(users.id, h.ids.master));
+    try {
+      const res = await master.post(DROP).send({ studentId: kid.id });
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ message: 'Student not found' });
+      const [row] = await h.db.select().from(studentAttendance).where(eq(studentAttendance.id, mark.id));
+      expect(row.droppedOffAt).toBeNull();
+      expect(send()).not.toHaveBeenCalled();
+    } finally {
+      await h.db.update(users).set({ assignedRouteId: null }).where(eq(users.id, h.ids.master));
+    }
   });
 });
