@@ -226,7 +226,8 @@ export interface IStorage {
 
   // Student attendance operations
   getTodaysStudentAttendance(driverId: string, routeId: string, timezone?: string): Promise<StudentAttendance[]>;
-  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string, companyId?: string | null): Promise<StudentAttendance>;
+  markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone?: string, companyId?: string | null): Promise<{ attendance: StudentAttendance; previousStatus: 'present' | 'absent' | null }>;
+  markStudentDroppedOff(studentId: string, driverId: string, routeId: string, timezone: string): Promise<{ result: 'no_row' | 'not_present' | 'dropped' | 'already'; attendance?: StudentAttendance }>;
   getAttendanceByRoute(routeId: string, dateString?: string, timezone?: string): Promise<StudentAttendance[]>;
   getAllAttendanceData(companyId?: string, timezone?: string): Promise<StudentAttendance[]>;
   getTodaysAttendanceForStudents(studentIds: string[], timezone?: string): Promise<StudentAttendance[]>;
@@ -329,7 +330,7 @@ export interface IStorage {
   // System notification operations
   createSystemNotification(notification: InsertSystemNotification): Promise<SystemNotification>;
   createSystemNotifications(rows: InsertSystemNotification[]): Promise<SystemNotification[]>;
-  getParentRecipientsForRouteEvent(companyId: string, routeId: string, opts: { schoolId?: string; stopId?: string }): Promise<Array<{ parentId: string; studentId: string; firstName: string }>>;
+  getParentRecipientsForRouteEvent(companyId: string, routeId: string, opts: { schoolId?: string; stopId?: string; studentIds?: string[] }): Promise<Array<{ parentId: string; studentId: string; firstName: string }>>;
   getSystemNotificationsForAdmin(companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForDriver(driverId: string, companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForParent(parentId: string, companyId: string): Promise<SystemNotification[]>;
@@ -1479,44 +1480,53 @@ export class DatabaseStorage implements IStorage {
     return attendance;
   }
 
-  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone: string = 'UTC', companyId?: string | null): Promise<StudentAttendance> {
+  // One transaction, serialized per student/driver/route by an advisory lock
+  // (key built in JS, bound). previousStatus = today's row status before this
+  // update, or null when this call inserted, so the caller can push only on a
+  // transition to present. Every read/write uses tx.
+  async markStudentAttendance(driverId: string, studentId: string, routeId: string, status: "present" | "absent", timezone: string = 'UTC', companyId?: string | null): Promise<{ attendance: StudentAttendance; previousStatus: 'present' | 'absent' | null }> {
     const today = new Date();
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(today);
+    const lockKey = `att:${studentId}:${driverId}:${routeId}`;
 
-    // Dedupe in the tenant's calendar day, not server-local. Without this,
-    // an EST tenant marking attendance after 8pm would create a second
-    // row instead of updating the existing day's record.
-    const existingAttendance = await db
-      .select()
-      .from(studentAttendance)
-      .where(and(
-        eq(studentAttendance.studentId, studentId),
-        eq(studentAttendance.driverId, driverId),
-        eq(studentAttendance.routeId, routeId),
-        onLocalDay(studentAttendance.attendanceDate, timezone, dateString)
-      ))
-      .orderBy(desc(studentAttendance.createdAt))
-      .limit(1);
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
 
-    if (existingAttendance.length > 0) {
-      // Update existing attendance
-      const [updatedAttendance] = await db
-        .update(studentAttendance)
-        .set({
-          status,
-          updatedAt: today,
-          // Backfill a legacy NULL companyId so admins can see the row;
-          // never overwrite an existing value.
-          ...(companyId
-            ? { companyId: sql`coalesce(${studentAttendance.companyId}, ${companyId})` }
-            : {}),
-        })
-        .where(eq(studentAttendance.id, existingAttendance[0].id))
-        .returning();
-      return updatedAttendance;
-    } else {
+      // Dedupe in the tenant's calendar day, not server-local. Without this,
+      // an EST tenant marking attendance after 8pm would create a second
+      // row instead of updating the existing day's record.
+      const existingAttendance = await tx
+        .select()
+        .from(studentAttendance)
+        .where(and(
+          eq(studentAttendance.studentId, studentId),
+          eq(studentAttendance.driverId, driverId),
+          eq(studentAttendance.routeId, routeId),
+          onLocalDay(studentAttendance.attendanceDate, timezone, dateString)
+        ))
+        .orderBy(desc(studentAttendance.createdAt))
+        .limit(1);
+
+      if (existingAttendance.length > 0) {
+        // Update existing attendance
+        const [updatedAttendance] = await tx
+          .update(studentAttendance)
+          .set({
+            status,
+            updatedAt: today,
+            // Backfill a legacy NULL companyId so admins can see the row;
+            // never overwrite an existing value.
+            ...(companyId
+              ? { companyId: sql`coalesce(${studentAttendance.companyId}, ${companyId})` }
+              : {}),
+          })
+          .where(eq(studentAttendance.id, existingAttendance[0].id))
+          .returning();
+        return { attendance: updatedAttendance, previousStatus: existingAttendance[0].status };
+      }
+
       // Create new attendance record
-      const [newAttendance] = await db
+      const [newAttendance] = await tx
         .insert(studentAttendance)
         .values({
           studentId,
@@ -1527,8 +1537,45 @@ export class DatabaseStorage implements IStorage {
           companyId: companyId ?? null,
         })
         .returning();
-      return newAttendance;
-    }
+      return { attendance: newAttendance, previousStatus: null };
+    });
+  }
+
+  // Drop-off for today's row of this student/driver/route (tenant day via
+  // onLocalDay, newest first). no_row / not_present write nothing. The update
+  // is guarded by status = 'present' AND dropped_off_at IS NULL, so only the
+  // first drop-off stamps it (dropped); a repeat re-reads the row (already).
+  async markStudentDroppedOff(studentId: string, driverId: string, routeId: string, timezone: string): Promise<{ result: 'no_row' | 'not_present' | 'dropped' | 'already'; attendance?: StudentAttendance }> {
+    const now = new Date();
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
+
+    const [row] = await db
+      .select()
+      .from(studentAttendance)
+      .where(and(
+        eq(studentAttendance.studentId, studentId),
+        eq(studentAttendance.driverId, driverId),
+        eq(studentAttendance.routeId, routeId),
+        onLocalDay(studentAttendance.attendanceDate, timezone, dateString)
+      ))
+      .orderBy(desc(studentAttendance.createdAt))
+      .limit(1);
+    if (!row) return { result: 'no_row' };
+    if (row.status !== 'present') return { result: 'not_present', attendance: row };
+
+    const [updated] = await db
+      .update(studentAttendance)
+      .set({ droppedOffAt: now, updatedAt: now })
+      .where(and(
+        eq(studentAttendance.id, row.id),
+        eq(studentAttendance.status, 'present'),
+        isNull(studentAttendance.droppedOffAt),
+      ))
+      .returning();
+    if (updated) return { result: 'dropped', attendance: updated };
+
+    const [current] = await db.select().from(studentAttendance).where(eq(studentAttendance.id, row.id));
+    return { result: 'already', attendance: current };
   }
 
   async getAttendanceByRoute(routeId: string, dateString?: string, timezone: string = 'UTC'): Promise<StudentAttendance[]> {
@@ -2754,7 +2801,7 @@ export class DatabaseStorage implements IStorage {
 
   // Parent recipients for a driver route event (school arrival/departure, stop
   // completed). Students must be in `companyId` and on `routeId` (optionally
-  // narrowed by schoolId / stopId). Parents come from two sources:
+  // narrowed by schoolId / stopId / studentIds). Parents come from two sources:
   //  1. parentChildLinks (link-code flow): users.role = 'parent' AND
   //     (users.companyId = companyId OR users.companyId IS NULL). A null-company
   //     parent is reachable only via a link to a student of this company; a
@@ -2767,15 +2814,17 @@ export class DatabaseStorage implements IStorage {
   async getParentRecipientsForRouteEvent(
     companyId: string,
     routeId: string,
-    opts: { schoolId?: string; stopId?: string },
+    opts: { schoolId?: string; stopId?: string; studentIds?: string[] },
   ): Promise<Array<{ parentId: string; studentId: string; firstName: string }>> {
     if (!companyId || !routeId) return [];
+    if (opts.studentIds && opts.studentIds.length === 0) return [];
 
     const studentFilter = and(
       eq(students.companyId, companyId),
       eq(students.routeId, routeId),
       opts.schoolId ? eq(students.schoolId, opts.schoolId) : undefined,
       opts.stopId ? eq(students.stopId, opts.stopId) : undefined,
+      opts.studentIds ? inArray(students.id, opts.studentIds) : undefined,
     );
     const cols = { parentId: users.id, studentId: students.id, firstName: students.firstName };
 
