@@ -100,7 +100,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { isDbQueryError, pgError } from "./dbErrors";
-import { eq, and, desc, asc, sql, or, inArray, isNull, exists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
+import { eq, ne, and, desc, asc, sql, or, inArray, isNull, exists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
 
 // Tenant calendar-day predicate. Day columns are `timestamp without time zone`
 // holding UTC wall time (drizzle writes toISOString()). The inner
@@ -308,6 +308,7 @@ export interface IStorage {
   getDriversForParent(parentId: string, companyId?: string): Promise<User[]>;
   getParentsForDriver(driverId: string, companyId: string): Promise<User[]>;
   getAlertRecipients(companyId: string, routeId: string | null): Promise<string[]>;
+  filterPushRecipients(userIds: string[], companyId: string | null | undefined): Promise<string[]>;
 
   // Student check-in operations (Bluetooth boarding)
   enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone?: string): Promise<StudentCheckIn>;
@@ -2405,6 +2406,62 @@ export class DatabaseStorage implements IStorage {
         eq(users.role, 'parent'),
         sql`coalesce(${users.isActive}, true) = true`,
         audience,
+      ));
+    return rows.map(r => r.id);
+  }
+
+  // Push fence (T4b, decisions 9 / 2A, B4): keeps only the ids that may get a
+  // push for an event in companyId. One query, distinct ids:
+  //  - no company / no ids -> []; inner join on the companyId PARAMETER, so a
+  //    missing company returns [].
+  //  - user active (coalesce true); role parent or driver only (never admin,
+  //    driver_admin or master_admin).
+  //  - company approved and active (coalesce true).
+  //  - 2A: parents only while the company's parent portal is on; drivers
+  //    unaffected.
+  //  - tenant: user of this company, OR a null-company parent with a child
+  //    (students.parentId or a parentChildLinks row) in this company.
+  async filterPushRecipients(userIds: string[], companyId: string | null | undefined): Promise<string[]> {
+    if (!companyId) return [];
+    const ids = Array.from(new Set(userIds));
+    if (!ids.length) return [];
+
+    const hasChildInCompany = exists(
+      db
+        .select({ one: sql`1` })
+        .from(students)
+        .where(and(
+          eq(students.companyId, companyId),
+          or(
+            eq(students.parentId, users.id),
+            exists(
+              db
+                .select({ one: sql`1` })
+                .from(parentChildLinks)
+                .where(and(
+                  eq(parentChildLinks.parentId, users.id),
+                  eq(parentChildLinks.studentId, students.id),
+                )),
+            ),
+          ),
+        )),
+    );
+
+    const rows = await db
+      .selectDistinct({ id: users.id })
+      .from(users)
+      .innerJoin(companies, eq(companies.id, companyId))
+      .where(and(
+        inArray(users.id, ids),
+        sql`coalesce(${users.isActive}, true) = true`,
+        inArray(users.role, ['parent', 'driver']),
+        eq(companies.status, 'approved'),
+        sql`coalesce(${companies.isActive}, true) = true`,
+        or(ne(users.role, 'parent'), sql`coalesce(${companies.parentPortalEnabled}, false) = true`),
+        or(
+          eq(users.companyId, companyId),
+          and(eq(users.role, 'parent'), isNull(users.companyId), hasChildInCompany),
+        ),
       ));
     return rows.map(r => r.id);
   }
