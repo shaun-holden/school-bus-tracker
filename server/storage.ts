@@ -219,9 +219,9 @@ export interface IStorage {
   
   // School visit operations for driver arrivals/departures
   getSchoolVisitsByDriverRoute(driverId: string, routeId: string): Promise<SchoolVisit[]>;
-  recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone?: string, companyId?: string | null): Promise<SchoolVisit>;
+  recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone?: string, companyId?: string | null): Promise<{ visit: SchoolVisit; created: boolean }>;
   getSchoolVisitById(id: string): Promise<SchoolVisit | undefined>;
-  recordSchoolDeparture(visitId: string): Promise<SchoolVisit | undefined>;
+  recordSchoolDeparture(visitId: string, timezone?: string): Promise<{ visit?: SchoolVisit; today: boolean; departed: boolean }>;
   getTodaysSchoolVisits(driverId: string, timezone?: string): Promise<SchoolVisit[]>;
 
   // Student attendance operations
@@ -347,7 +347,7 @@ export interface IStorage {
   getBusJourneysByBus(busId: string, limit?: number): Promise<BusJourney[]>;
 
   // Route stop completion tracking
-  markStopCompleted(data: { routeStopId: string; routeId: string; driverId: string; busId: string; companyId: string; stopSequence: number }): Promise<RouteStopCompletion>;
+  markStopCompleted(data: { routeStopId: string; routeId: string; driverId: string; busId: string; companyId: string; stopSequence: number }, timezone?: string): Promise<{ completion: RouteStopCompletion; first: boolean }>;
   getTodayCompletedStops(routeId: string, timezone?: string): Promise<RouteStopCompletion[]>;
   getLastCompletedStop(routeId: string, timezone?: string): Promise<RouteStopCompletion | undefined>;
 
@@ -1359,37 +1359,46 @@ export class DatabaseStorage implements IStorage {
     return visit;
   }
 
-  async recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone: string = 'UTC', companyId?: string | null): Promise<SchoolVisit> {
+  // One transaction, serialized per driver/school/route by an advisory lock
+  // (key built in JS, bound): find today's visit (tenant day via onLocalDay)
+  // and stamp arrivedAt, or insert one. created = this call inserted, so only
+  // the first arrival of the day pushes. Every read/write uses tx.
+  async recordSchoolArrival(driverId: string, schoolId: string, routeId: string, timezone: string = 'UTC', companyId?: string | null): Promise<{ visit: SchoolVisit; created: boolean }> {
     const now = new Date();
     const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
+    const lockKey = `visit:${driverId}:${schoolId}:${routeId}`;
 
-    // Dedupe by tenant calendar day. Without the tz projection, an evening
-    // arrival in EST would land on a different UTC date than a morning
-    // arrival the same school day, creating a duplicate row instead of
-    // updating the existing visit.
-    const existingVisit = await db
-      .select()
-      .from(schoolVisits)
-      .where(and(
-        eq(schoolVisits.driverId, driverId),
-        eq(schoolVisits.schoolId, schoolId),
-        eq(schoolVisits.routeId, routeId),
-        onLocalDay(schoolVisits.visitDate, timezone, dateString)
-      ))
-      .orderBy(desc(schoolVisits.createdAt))
-      .limit(1);
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
 
-    if (existingVisit.length > 0) {
-      // Update existing visit with arrival time
-      const [updatedVisit] = await db
-        .update(schoolVisits)
-        .set({ arrivedAt: now, updatedAt: now })
-        .where(eq(schoolVisits.id, existingVisit[0].id))
-        .returning();
-      return updatedVisit;
-    } else {
+      // Dedupe by tenant calendar day. Without the tz projection, an evening
+      // arrival in EST would land on a different UTC date than a morning
+      // arrival the same school day, creating a duplicate row instead of
+      // updating the existing visit.
+      const existingVisit = await tx
+        .select()
+        .from(schoolVisits)
+        .where(and(
+          eq(schoolVisits.driverId, driverId),
+          eq(schoolVisits.schoolId, schoolId),
+          eq(schoolVisits.routeId, routeId),
+          onLocalDay(schoolVisits.visitDate, timezone, dateString)
+        ))
+        .orderBy(desc(schoolVisits.createdAt))
+        .limit(1);
+
+      if (existingVisit.length > 0) {
+        // Update existing visit with arrival time
+        const [updatedVisit] = await tx
+          .update(schoolVisits)
+          .set({ arrivedAt: now, updatedAt: now })
+          .where(eq(schoolVisits.id, existingVisit[0].id))
+          .returning();
+        return { visit: updatedVisit, created: false };
+      }
+
       // Create new visit record
-      const [newVisit] = await db
+      const [newVisit] = await tx
         .insert(schoolVisits)
         .values({
           // companyId is set on new rows only; legacy rows stay NULL.
@@ -1401,17 +1410,41 @@ export class DatabaseStorage implements IStorage {
           visitDate: now,
         })
         .returning();
-      return newVisit;
-    }
+      return { visit: newVisit, created: true };
+    });
   }
 
-  async recordSchoolDeparture(visitId: string): Promise<SchoolVisit | undefined> {
+  // Departure only for a visit of today (tenant day via onLocalDay); a visit
+  // from another day writes nothing (today: false). The update is guarded by
+  // departed_at IS NULL, so only the first departure stamps it and pushes
+  // (departed: true); a repeat re-reads the visit (departed: false).
+  async recordSchoolDeparture(visitId: string, timezone: string = 'UTC'): Promise<{ visit?: SchoolVisit; today: boolean; departed: boolean }> {
+    const now = new Date();
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
+
+    const [todays] = await db
+      .select({ id: schoolVisits.id })
+      .from(schoolVisits)
+      .where(and(
+        eq(schoolVisits.id, visitId),
+        onLocalDay(schoolVisits.visitDate, timezone, dateString)
+      ))
+      .limit(1);
+    if (!todays) {
+      return { today: false, departed: false };
+    }
+
     const [updatedVisit] = await db
       .update(schoolVisits)
-      .set({ departedAt: new Date(), updatedAt: new Date() })
-      .where(eq(schoolVisits.id, visitId))
+      .set({ departedAt: now, updatedAt: now })
+      .where(and(eq(schoolVisits.id, visitId), isNull(schoolVisits.departedAt)))
       .returning();
-    return updatedVisit;
+    if (updatedVisit) {
+      return { visit: updatedVisit, today: true, departed: true };
+    }
+
+    const [visit] = await db.select().from(schoolVisits).where(eq(schoolVisits.id, visitId));
+    return { visit, today: true, departed: false };
   }
 
   async getTodaysSchoolVisits(driverId: string, timezone: string = 'UTC'): Promise<SchoolVisit[]> {
@@ -3049,6 +3082,10 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Route stop completion tracking
+  // One transaction, serialized per stop by an advisory lock (key built in JS,
+  // bound). Always inserts a completion (unchanged behaviour); first = no
+  // completion for this stop existed yet on the tenant's day (onLocalDay), so
+  // only the first arrival of the day pushes. Every read/write uses tx.
   async markStopCompleted(data: {
     routeStopId: string;
     routeId: string;
@@ -3056,24 +3093,40 @@ export class DatabaseStorage implements IStorage {
     busId: string;
     companyId: string;
     stopSequence: number
-  }): Promise<RouteStopCompletion> {
+  }, timezone: string = 'UTC'): Promise<{ completion: RouteStopCompletion; first: boolean }> {
     // Store wall-clock for both fields (instead of UTC-midnight + now);
     // the read side projects through onLocalDay to bucket by tenant day.
     const now = new Date();
-    const [completion] = await db
-      .insert(routeStopCompletions)
-      .values({
-        routeStopId: data.routeStopId,
-        routeId: data.routeId,
-        driverId: data.driverId,
-        busId: data.busId,
-        companyId: data.companyId,
-        stopSequence: data.stopSequence,
-        completionDate: now,
-        arrivedAt: now,
-      })
-      .returning();
-    return completion;
+    const todayString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(now);
+    const lockKey = `stop:${data.routeStopId}`;
+
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+
+      const existing = await tx
+        .select({ id: routeStopCompletions.id })
+        .from(routeStopCompletions)
+        .where(and(
+          eq(routeStopCompletions.routeStopId, data.routeStopId),
+          onLocalDay(routeStopCompletions.completionDate, timezone, todayString)
+        ))
+        .limit(1);
+
+      const [completion] = await tx
+        .insert(routeStopCompletions)
+        .values({
+          routeStopId: data.routeStopId,
+          routeId: data.routeId,
+          driverId: data.driverId,
+          busId: data.busId,
+          companyId: data.companyId,
+          stopSequence: data.stopSequence,
+          completionDate: now,
+          arrivedAt: now,
+        })
+        .returning();
+      return { completion, first: existing.length === 0 };
+    });
   }
 
   async getTodayCompletedStops(routeId: string, timezone: string = 'UTC'): Promise<RouteStopCompletion[]> {

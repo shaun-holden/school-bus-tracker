@@ -77,8 +77,8 @@ describe('Q8 A4 recipients', () => {
     const rows = await stopRows();
     expect(rows.map((r) => `${r.recipientId}|${r.message}`).sort()).toEqual(
       [
-        `${h.ids.parentA}|The bus has arrived at A-10 Stop St for A-Student`,
-        `${h.ids.parentNull}|The bus has arrived at A-10 Stop St for A-Student`,
+        `${h.ids.parentA}|The bus has arrived at A-Stop-1 for A-Student`,
+        `${h.ids.parentNull}|The bus has arrived at A-Stop-1 for A-Student`,
       ].sort(),
     );
     expect(rows.every((r) => r.companyId === h.ids.companyA)).toBe(true);
