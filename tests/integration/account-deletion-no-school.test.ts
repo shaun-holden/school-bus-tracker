@@ -9,7 +9,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { students, parentChildLinks, directMessages, users } from '@shared/schema';
 import { useIntegrationHarness } from './harness';
-import { seedQ8Extras, seedQ8Round2, SEED_PASSWORD, type Q8R2Ids } from './seed';
+import { seedQ8Extras, seedQ8Round2, insertUser, SEED_PASSWORD, type Q8R2Ids } from './seed';
 
 const h = useIntegrationHarness();
 
@@ -17,13 +17,15 @@ let r2: Q8R2Ids;
 let solo: string;
 let shared: string;
 let withHistory: string;
+let historyParent: string;
+const HISTORY_PARENT_EMAIL = 'q59-null-history-parent@sbt.test';
 
 const exists = async (id: string) => (await h.db.select().from(students).where(eq(students.id, id))).length === 1;
 
-async function noSchoolKid(firstName: string) {
+async function noSchoolKid(firstName: string, parentId: string = h.ids.parentNull) {
   const [s] = await h.db
     .insert(students)
-    .values({ companyId: null, firstName, lastName: 'Seed', parentId: h.ids.parentNull })
+    .values({ companyId: null, firstName, lastName: 'Seed', parentId })
     .returning({ id: students.id });
   return s.id;
 }
@@ -34,14 +36,20 @@ beforeAll(async () => {
   solo = await noSchoolKid('Null-Solo');
   shared = await noSchoolKid('Null-Shared');
   await h.db.insert(parentChildLinks).values({ parentId: h.ids.parentB, studentId: shared });
-  withHistory = await noSchoolKid('Null-History');
-  await h.db.insert(directMessages).values({ senderId: h.ids.parentNull, recipientId: h.ids.driverA, content: 'About my child', studentId: withHistory });
+  // Case (c) has its own no-company parent and its own deletion, so a
+  // missing history check fails that case by name (not this shared setup).
+  historyParent = await insertUser(
+    { email: HISTORY_PARENT_EMAIL, firstName: 'Null-HistoryParent', lastName: 'Seed', role: 'parent', companyId: null },
+    { password: true },
+  );
+  withHistory = await noSchoolKid('Null-History', historyParent);
+  await h.db.insert(directMessages).values({ senderId: historyParent, recipientId: h.ids.driverA, content: 'About my child', studentId: withHistory });
   // A-ShortNull really is a company-A student whose parentId is parentNull.
   const [shortNull] = await h.db.select().from(students).where(eq(students.id, r2.studentShortNull));
   expect(shortNull.companyId).toBe(h.ids.companyA);
   expect(shortNull.parentId).toBe(h.ids.parentNull);
 
-  // 1 login (MAX_LOGINS_PER_FILE is 8).
+  // 1 login here + 1 in case (c) (MAX_LOGINS_PER_FILE is 8).
   const parentNull = await h.loginAs('parentNull');
   const res = await parentNull.post('/api/auth/delete-account').send({ password: SEED_PASSWORD });
   expect(res.status).toBe(200);
@@ -63,7 +71,12 @@ describe('Q59 no-school children of a deleted no-company parent', () => {
     expect(await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.studentId, shared))).toHaveLength(1);
   });
 
-  it('(c) a no-school child with a direct-message history stays (red if the history-keep check is removed)', async () => {
+  it('(c) a no-school child with a direct-message history stays when its only parent deletes (red if the history-keep check is removed)', async () => {
+    const agent = h.anon();
+    expect((await h.loginAttempt(HISTORY_PARENT_EMAIL, SEED_PASSWORD, agent)).status).toBe(200);
+    const res = await agent.post('/api/auth/delete-account').send({ password: SEED_PASSWORD });
+    expect(res.status).toBe(200);
+    expect((await h.db.select().from(users).where(eq(users.id, historyParent)))[0].isActive).toBe(false);
     expect(await exists(withHistory)).toBe(true);
     expect(await h.db.select().from(directMessages).where(eq(directMessages.studentId, withHistory))).toHaveLength(1);
   });

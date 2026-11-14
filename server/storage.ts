@@ -2345,7 +2345,20 @@ export class DatabaseStorage implements IStorage {
       const unreadCount = data.messages.filter(m => m.recipientId === userId && !m.isRead).length;
       
       const otherUser = await this.getUser(otherUserId);
-      const recipientName = otherUser ? `${otherUser.firstName || ''} ${otherUser.lastName || ''}`.trim() || otherUser.email || 'Unknown' : 'Unknown';
+      // Never expose an email; a master admin always shows as "School staff".
+      let recipientName = 'Unknown';
+      if (otherUser) {
+        if (otherUser.role === 'master_admin') {
+          recipientName = 'School staff';
+        } else {
+          const fullName = `${otherUser.firstName || ''} ${otherUser.lastName || ''}`.trim();
+          recipientName = fullName
+            || (otherUser.role === 'driver' ? 'Driver'
+              : otherUser.role === 'parent' ? 'Parent'
+              : (otherUser.role === 'admin' || otherUser.role === 'driver_admin' || otherUser.role === 'master_admin') ? 'School staff'
+              : 'Unknown');
+        }
+      }
 
       conversations.push({
         recipientId: otherUserId,

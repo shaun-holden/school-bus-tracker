@@ -95,13 +95,10 @@ describe('T4b message push through the fence', () => {
 });
 
 describe('Q60 PL-7 impersonating master', () => {
-  it('a master impersonating company A messaging parentA is "School staff" with no part of the master\'s name (red if the impersonation branch is removed)', async () => {
+  it('a master impersonating company A can no longer send (Q62: 403, no push), so no push can ever carry the master\'s name; the "School staff" sender branch stays as defence in depth', async () => {
     const res = await masterImp.post('/api/messages').send({ recipientId: h.ids.parentA, content: 'From the office' });
-    expect(res.status).toBe(200);
-    const { ids, payload } = onlyPush();
-    expect(ids).toEqual([h.ids.parentA]);
-    expect(payload.body).toBe('School staff sent you a message');
-    expect(JSON.stringify(payload)).not.toContain('Master');
+    expect(res.status).toBe(403);
+    expect(pushMock()).not.toHaveBeenCalled();
   });
 
   it('positive control: a normal driver sender keeps first name + last initial', async () => {

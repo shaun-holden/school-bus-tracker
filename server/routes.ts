@@ -4514,6 +4514,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "User not found" });
       }
 
+      // A master admin (impersonating or not) never sends staff messages.
+      // Checked before canAccessMessaging, any lookup or any write; reading
+      // conversations while impersonating stays allowed.
+      if (isMasterAdminUser(user)) {
+        return res.status(403).json({ message: "Staff messages can't be sent while viewing a school" });
+      }
+
       if (!canAccessMessaging(user)) {
         return res.status(403).json({ message: "Only parents and drivers can send messages" });
       }
@@ -4565,6 +4572,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Send push notification to recipient
       // First name + last initial only; never the email.
       // An impersonating master admin shows as "School staff", never by name.
+      // Defence in depth: now unreachable, the isMasterAdminUser 403 above runs first.
       const senderName = ('_masterAdminImpersonating' in user && user._masterAdminImpersonating === true) ? 'School staff'
         : user.firstName
         ? `${user.firstName}${user.lastName ? ` ${user.lastName.charAt(0)}.` : ''}`
