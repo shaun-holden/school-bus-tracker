@@ -963,9 +963,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!user) {
         return res.status(404).json({ message: "User not found" });
       }
+      if (!isAdminRole(user.role) && !isDriverRole(user)) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
       const scope = companyScope(user);
       if (scope === null) return res.json([]);
       const requests = await storage.getAllAdminRequests(scope);
+      // Drivers see only requests addressed to all drivers or to themselves.
+      if (!isAdminRole(user.role)) {
+        return res.json(requests.filter(r => r.driverId == null || r.driverId === user.id));
+      }
       res.json(requests);
     } catch (error) {
       console.error("Error fetching admin requests:", error);
@@ -1033,9 +1040,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Create maintenance request
   // Acknowledge admin request
-  app.patch('/api/admin-requests/:id/acknowledge', isAuthenticated, async (req, res) => {
+  app.patch('/api/admin-requests/:id/acknowledge', isAuthenticated, async (req: any, res) => {
     try {
+      const user = await getCaller(req);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
       const { id } = req.params;
+      // 404 masks both other-tenant rows and requests addressed to another driver.
+      const row = await storage.getAdminRequestById(id);
+      if (!row || isOutsideCallerTenant(user, row.companyId)) {
+        return res.status(404).json({ message: "Request not found" });
+      }
+      const allowed = isAdminRole(user.role)
+        || (isDriverRole(user) && (row.driverId == null || row.driverId === user.id));
+      if (!allowed) {
+        return res.status(404).json({ message: "Request not found" });
+      }
       const updatedRequest = await storage.acknowledgeAdminRequest(id);
       
       if (!updatedRequest) {
@@ -1050,9 +1071,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Complete admin request
-  app.patch('/api/admin-requests/:id/complete', isAuthenticated, async (req, res) => {
+  app.patch('/api/admin-requests/:id/complete', isAuthenticated, async (req: any, res) => {
     try {
+      const user = await getCaller(req);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
       const { id } = req.params;
+      // 404 masks both other-tenant rows and requests addressed to another driver.
+      const row = await storage.getAdminRequestById(id);
+      if (!row || isOutsideCallerTenant(user, row.companyId)) {
+        return res.status(404).json({ message: "Request not found" });
+      }
+      const allowed = isAdminRole(user.role)
+        || (isDriverRole(user) && (row.driverId == null || row.driverId === user.id));
+      if (!allowed) {
+        return res.status(404).json({ message: "Request not found" });
+      }
       const updatedRequest = await storage.completeAdminRequest(id);
       
       if (!updatedRequest) {
