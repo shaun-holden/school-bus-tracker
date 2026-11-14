@@ -18,6 +18,7 @@ const NO_NAME_EMAIL = 'q-t4a-noname-parent@sbt.test';
 let noNameParent: Agent;
 let parentA: Agent;
 let driverA: Agent;
+let masterImp: Agent;
 let noNameParentId: string;
 
 type Payload = { title: string; body: string; data?: Record<string, unknown> };
@@ -34,12 +35,14 @@ beforeAll(async () => {
     { email: NO_NAME_EMAIL, firstName: null, lastName: null, role: 'parent', companyId: h.ids.companyA },
     { password: true },
   );
-  // 3 logins (MAX_LOGINS_PER_FILE is 8).
+  // 4 logins (MAX_LOGINS_PER_FILE is 8).
   const agent = h.anon();
   expect((await h.loginAttempt(NO_NAME_EMAIL, SEED_PASSWORD, agent)).status).toBe(200);
   noNameParent = agent;
   parentA = await h.loginAs('parentA');
   driverA = await h.loginAs('driverA');
+  masterImp = await h.loginAs('master');
+  expect((await masterImp.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({})).status).toBe(200);
 });
 
 beforeEach(() => {
@@ -88,5 +91,22 @@ describe('T4b message push through the fence', () => {
     const res = await parentA.post('/api/messages').send({ recipientId: inactive, content: 'Hello?' });
     expect(res.status).toBe(200);
     expect(pushMock()).not.toHaveBeenCalled();
+  });
+});
+
+describe('Q60 PL-7 impersonating master', () => {
+  it('a master impersonating company A messaging parentA is "School staff" with no part of the master\'s name (red if the impersonation branch is removed)', async () => {
+    const res = await masterImp.post('/api/messages').send({ recipientId: h.ids.parentA, content: 'From the office' });
+    expect(res.status).toBe(200);
+    const { ids, payload } = onlyPush();
+    expect(ids).toEqual([h.ids.parentA]);
+    expect(payload.body).toBe('School staff sent you a message');
+    expect(JSON.stringify(payload)).not.toContain('Master');
+  });
+
+  it('positive control: a normal driver sender keeps first name + last initial', async () => {
+    const res = await driverA.post('/api/messages').send({ recipientId: h.ids.parentA, content: 'Running late' });
+    expect(res.status).toBe(200);
+    expect(onlyPush().payload.body).toBe('A-Driver S. sent you a message');
   });
 });

@@ -468,6 +468,12 @@ export async function setupCustomAuth(app: Express) {
 
       const hashedPassword = await hashPassword(password);
       await storage.updatePassword(credentials.userId, hashedPassword);
+      // The password is already changed, so a failure here still returns success.
+      try {
+        await storage.deactivateDeviceTokensForUser(credentials.userId);
+      } catch (err) {
+        console.error("Reset-password: could not turn off device tokens", pgError(err)?.code);
+      }
 
       res.json({ message: "Password has been reset successfully" });
     } catch (error) {

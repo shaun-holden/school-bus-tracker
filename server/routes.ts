@@ -19,7 +19,6 @@ import {
 import { z } from "zod";
 import crypto from "crypto";
 import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailService";
-import { pushService } from "./pushService";
 import { pushToRecipients, targetsPerParent, stopArrivalPayload, schoolArrivalPayload, schoolDeparturePayload, boardedPayload, droppedOffPayload, messagePayload, alertPayload } from "./pushEvents";
 import { isMasterAdminUser, isUnscopedMaster, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
 import { isDbQueryError, pgError } from "./dbErrors";
@@ -3414,10 +3413,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { attendance, previousStatus } = await storage.markStudentAttendance(userId, studentId, routeId, status, tz, route.companyId ?? null);
 
       // Decision 1A: notify the student's parents only on a transition to
-      // present, and only when the route has a company. A notify failure must
-      // not fail the request.
+      // present, and only when the route has a company inside the caller's
+      // tenant (no in-app rows and no push otherwise; the attendance write and
+      // the response stay as they are). A notify failure must not fail the
+      // request.
       const routeCompanyId = route.companyId;
-      if (routeCompanyId && status === 'present' && previousStatus !== 'present') {
+      const routeInCallerTenant = !!routeCompanyId && !isOutsideCallerTenant(user, routeCompanyId);
+      if (routeCompanyId && routeInCallerTenant && status === 'present' && previousStatus !== 'present') {
         try {
           const recipients = await storage.getParentRecipientsForRouteEvent(routeCompanyId, routeId, { studentIds: [studentId] });
           if (recipients.length > 0) {
@@ -4562,7 +4564,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Send push notification to recipient
       // First name + last initial only; never the email.
-      const senderName = user.firstName
+      // An impersonating master admin shows as "School staff", never by name.
+      const senderName = ('_masterAdminImpersonating' in user && user._masterAdminImpersonating === true) ? 'School staff'
+        : user.firstName
         ? `${user.firstName}${user.lastName ? ` ${user.lastName.charAt(0)}.` : ''}`
         : user.role === 'driver' ? 'Your driver'
         : user.role === 'parent' ? 'A parent'
