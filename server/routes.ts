@@ -388,6 +388,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "You cannot change the role of an administrator" });
       }
 
+      // CD-1: parent → staff takes a staff seat, so it respects the plan cap
+      // of the TARGET's company (an unscoped master's own companyId is null).
+      // Checked before the write. staff → staff / staff → parent / same role
+      // aren't checked (Q51a: no parent cap in v1); a no-company target has
+      // no plan.
+      const isStaff = (r: string | null | undefined) => r === 'admin' || r === 'driver' || r === 'driver_admin';
+      if (!isStaff(existingUser.role) && isStaff(role) && existingUser.companyId) {
+        const canCreate = await storage.canCreateUser(existingUser.companyId, role);
+        if (!canCreate.allowed) {
+          return res.status(403).json({ message: canCreate.reason });
+        }
+      }
+
       const updatedUser = await storage.updateUserRole(id, role);
       if (!updatedUser) {
         return res.status(404).json({ message: "User not found" });
@@ -3916,6 +3929,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
+      // T-1 (Q74): record-by-id tenant check, same 404 as a missing row.
+      const notice = await storage.getNotificationById(id);
+      if (!notice || isOutsideCallerTenant(user, notice.companyId)) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
       const deleted = await storage.deleteNotification(id);
       
       if (!deleted) {
@@ -4098,7 +4116,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(401).json({ message: "Unauthorized - no user ID" });
       }
 
+      const user = await getCaller(req);
+      if (!user) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
       const { id } = req.params;
+      // CD-2 / T-1 (Q74): the row must be in the caller's company and visible
+      // to them by the same rules as GET /api/system-notifications (the list
+      // reads are reused, so the rules can't drift). Everything else is 404.
+      const row = await storage.getSystemNotificationById(id);
+      if (!row || isOutsideCallerTenant(user, row.companyId)) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      const companyId = user.companyId || '';
+      let visible = false;
+      if (isAdminRole(user.role)) {
+        visible = true;
+      } else if (user.role === 'driver') {
+        visible = (await storage.getSystemNotificationsForDriver(userId, companyId)).some(n => n.id === id);
+      } else if (user.role === 'parent') {
+        visible = (await storage.getSystemNotificationsForParent(userId, companyId)).some(n => n.id === id);
+      }
+      if (!visible) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
       const updated = await storage.markSystemNotificationAsRead(id);
 
       if (!updated) {
@@ -4124,6 +4165,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized" });
       }
       const { id } = req.params;
+      // CD-2 / T-1 (Q74): record-by-id tenant check.
+      const row = await storage.getSystemNotificationById(id);
+      if (!row || isOutsideCallerTenant(user, row.companyId)) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
       const deleted = await storage.deleteSystemNotification(id);
       if (!deleted) {
         return res.status(404).json({ message: "Notification not found" });
@@ -5659,38 +5705,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error fetching company features:", error);
       res.status(500).json({ message: "Failed to fetch company features" });
-    }
-  });
-
-  // Get current user counts for the company
-  app.get('/api/company/user-counts', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      if (!userId) {
-        return res.status(401).json({ message: "Unauthorized" });
-      }
-
-      const user = await getCaller(req);
-      if (!user || !user.companyId) {
-        return res.status(404).json({ message: "Company not found" });
-      }
-
-      const [staffCount, parentCount] = await Promise.all([
-        storage.getStaffUserCount(user.companyId),
-        storage.getParentUserCount(user.companyId),
-      ]);
-
-      const company = await storage.getCompanyById(user.companyId);
-
-      res.json({
-        staffCount,
-        parentCount,
-        staffLimit: company?.staffUserLimit,
-        parentLimit: company?.parentUserLimit,
-      });
-    } catch (error) {
-      console.error("Error fetching user counts:", error);
-      res.status(500).json({ message: "Failed to fetch user counts" });
     }
   });
 
