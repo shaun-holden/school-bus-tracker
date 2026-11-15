@@ -2430,6 +2430,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           assignedBus = await storage.getBusByDriverId(userId);
           const assignedRoute = user.assignedRouteId ? await storage.getRouteById(user.assignedRouteId) : null;
+          // A route from another tenant (or with no company) never names this report.
+          const routeOk = !!assignedRoute && !isOutsideCallerTenant(user, assignedRoute.companyId);
 
           // Count today's school visits and student attendance, scoped to the
           // tenant's calendar day (server-local UTC would split a late EST
@@ -2438,6 +2440,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
           tz = company?.timezone || 'UTC';
           const schoolVisits = await storage.getTodaysSchoolVisits(userId, tz);
           const studentAttendance = user.assignedRouteId ? await storage.getTodaysStudentAttendance(userId, user.assignedRouteId, tz) : [];
+          const issuesReported = user.companyId
+            ? await storage.countTodaysVehicleIssuesForDriver(userId, user.companyId, tz)
+            : 0;
 
           const shiftReport = {
             companyId: user.companyId ?? null,
@@ -2445,8 +2450,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             driverName: `${user.firstName || ''} ${user.lastName || ''}`.trim() || 'Unknown Driver',
             busId: assignedBus?.id || null,
             busNumber: assignedBus?.busNumber || null,
-            routeId: user.assignedRouteId || null,
-            routeName: assignedRoute?.name || null,
+            routeId: routeOk ? user.assignedRouteId : null,
+            routeName: routeOk && assignedRoute ? assignedRoute.name : null,
             shiftStartTime,
             shiftEndTime,
             totalDurationMinutes,
@@ -2457,8 +2462,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
             milesDriven: 0, // Could be calculated if we track mileage changes
             schoolsVisited: schoolVisits.length,
             studentsPickedUp: studentAttendance.filter(a => a.status === 'present').length,
-            studentsDroppedOff: studentAttendance.filter(a => a.status === 'present').length,
-            issuesReported: 0, // Could be integrated with vehicle issues
+            studentsDroppedOff: studentAttendance.filter(a => a.status === 'present' && a.droppedOffAt != null).length,
+            issuesReported,
             interiorCleanStart: user.lastCheckInInteriorClean,
             exteriorCleanStart: user.lastCheckInExteriorClean,
             notes: `Shift completed. Bus status: ${assignedBus?.status || 'unknown'}`,
