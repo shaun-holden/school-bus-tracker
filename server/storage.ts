@@ -207,6 +207,7 @@ export interface IStorage {
   getIssuesByBusId(busId: string): Promise<VehicleIssue[]>;
   createVehicleIssue(issue: InsertVehicleIssue): Promise<VehicleIssue>;
   resolveVehicleIssue(id: string): Promise<VehicleIssue | undefined>;
+  countTodaysVehicleIssuesForDriver(driverId: string, companyId: string, timezone?: string): Promise<number>;
   
   // Driver task operations
   getTasksByDriverId(driverId: string): Promise<DriverTask[]>;
@@ -1226,6 +1227,21 @@ export class DatabaseStorage implements IStorage {
       .where(eq(vehicleIssues.id, id))
       .returning();
     return resolvedIssue;
+  }
+
+  // Issues this driver reported on the company's local day (resolved or not).
+  // Tenant-scoped by companyId; day bucketed only through onLocalDay.
+  async countTodaysVehicleIssuesForDriver(driverId: string, companyId: string, timezone: string = 'UTC'): Promise<number> {
+    const dateString = new Intl.DateTimeFormat('en-CA', { timeZone: timezone }).format(new Date());
+    const [row] = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(vehicleIssues)
+      .where(and(
+        eq(vehicleIssues.driverId, driverId),
+        eq(vehicleIssues.companyId, companyId),
+        onLocalDay(vehicleIssues.createdAt, timezone, dateString)
+      ));
+    return Number(row?.count ?? 0);
   }
 
   // Driver task operations
