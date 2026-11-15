@@ -108,7 +108,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 
 | Line | Open item | IDs | Where (current `main`) |
 |---|---|---|---|
-| T-1 | Record-by-id handlers without a tenant check | SEC-21, SEC-22, SEC-28, SEC-40 | `DELETE /api/notifications/:id`; `DELETE` / `PATCH …/read` `/api/system-notifications/:id`; `GET /api/drivers/:id/invitation-status`; `GET /api/routes/:routeId/schools`; `PUT /api/routes/:routeId/schools/reorder` |
+| T-1 | Record-by-id handlers without a tenant check | SEC-21, SEC-22, SEC-28, SEC-40 | `DELETE /api/notifications/:id`; `DELETE` / `PATCH …/read` `/api/system-notifications/:id`; `GET /api/drivers/:id/invitation-status` |
 | T-2 | Cross-tenant or ownership 403s that reveal a record exists | (R1 route table) | parent paths of GET/PUT/DELETE `/api/students/:id` |
 | T-5 | Foreign-key ids from the body not tenant-checked | SEC-33 | `POST /api/buses` (`driverId`/`currentRouteId`) |
 | T-7 | Raw `req.body` into an update | SEC-26 | `PATCH /api/schools/:id` → `storage.updateSchool(id, req.body)` |
@@ -143,6 +143,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 - **Q8 + Q17b (dev1 `09c94d1`..):** SEC-25 (arrival `schoolId`, departure `visitId`, stop-completed `routeStopId`/`routeId` are tenant-checked; its other sites went in HF1), LEAK-5 and LEAK-8 (one batched recipient query + one bulk insert). Also the parent/driver system-notification read leak (a row with a `recipientId` is shown only to that user) and targeted parent notices (`targetParentId`) reaching only their target.
 - **Q7 `8f4cddb`:** DUP-2 and the impersonation-scoping part of SEC-45 (T-10, T-4): `getCaller(req)` keeps the overlay on re-fetch, and `companyScope`/`isOutsideCallerTenant` use `isUnscopedMaster`, so an impersonating master is scoped to the impersonated company. SEC-45's session-regeneration and audit-log parts (S-7, S-16 rows) stay open.
 - **T1 push transport (`dev2/work`):** LEAK-18 (S-22): APNs goes over HTTP/2 to an allow-listed host (`APNS_ENVIRONMENT`), with a 10 s timeout per APNs request and per FCM batch.
+- **Q70 `94b751b`:** T-1 GET/PUT /api/routes/:routeId/schools.
 
 ## Sources
 
