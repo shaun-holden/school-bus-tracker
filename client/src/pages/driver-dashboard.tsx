@@ -33,6 +33,7 @@ import {
 import { driverCheckInSchema, type DriverCheckIn } from "@shared/schema";
 import { Loader2, Send } from "lucide-react";
 import { formatStoredDate } from "@/lib/localDate";
+import { dropoffState, dropoffErrorText } from "@/lib/dropoff";
 
 // Schema for driver route broadcast
 const driverBroadcastSchema = z.object({
@@ -1096,6 +1097,39 @@ export default function DriverDashboard() {
     },
   });
 
+  // T2b: "Off the bus" (E5). The server takes exactly { studentId } (.strict())
+  // and answers 200 whether it's the first drop-off or a repeat (no second push).
+  const dropoffMutation = useMutation({
+    mutationFn: async ({ studentId }: { studentId: string }) => {
+      return await apiRequest("/api/driver/student-dropoff", "POST", { studentId });
+    },
+    onSuccess: () => {
+      refetchAttendance();
+      toast({
+        title: "Marked off the bus",
+        className: "border-green-500",
+      });
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/auth";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: dropoffErrorText(error),
+        variant: "destructive",
+      });
+    },
+  });
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
@@ -1312,6 +1346,9 @@ export default function DriverDashboard() {
                           ? studentAttendanceData.find((att: any) => att.studentId === student.id)
                           : null;
                         const isMarked = !!attendance;
+                        const dropState = dropoffState(attendance);
+                        const isDroppingOff =
+                          dropoffMutation.isPending && dropoffMutation.variables?.studentId === student.id;
                         return (
                         <Card
                           key={student.id}
@@ -1389,6 +1426,11 @@ export default function DriverDashboard() {
                                       : "bg-blue-100 text-blue-700"
                                   }`}>
                                     {attendance.status === "present" ? "Present" : "Absent"} at {new Date(attendance.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    {dropState === "dropped" && (
+                                      <div className="mt-1" data-testid={`text-dropoff-${student.id}`}>
+                                        Off the bus at {new Date(attendance.droppedOffAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      </div>
+                                    )}
                                   </div>
                                 ) : (
                                   <p className="text-xs text-center text-gray-500 italic">Tap card to mark Present</p>
@@ -1403,7 +1445,8 @@ export default function DriverDashboard() {
                                         : "hover:bg-green-50 hover:text-green-700 hover:border-green-300"
                                     }`}
                                     onClick={() => markAttendanceMutation.mutate({ studentId: student.id, status: "present" })}
-                                    disabled={markAttendanceMutation.isPending}
+                                    // After a drop-off the server keeps droppedOffAt on a status change, so lock the card (T2b).
+                                    disabled={markAttendanceMutation.isPending || dropState === "dropped"}
                                     data-testid={`button-mark-present-${student.id}`}
                                     aria-label={`Mark ${student.firstName} ${student.lastName} present`}
                                   >
@@ -1419,7 +1462,7 @@ export default function DriverDashboard() {
                                         : "hover:bg-blue-50 hover:text-blue-700 hover:border-blue-300"
                                     }`}
                                     onClick={() => markAttendanceMutation.mutate({ studentId: student.id, status: "absent" })}
-                                    disabled={markAttendanceMutation.isPending}
+                                    disabled={markAttendanceMutation.isPending || dropState === "dropped"}
                                     data-testid={`button-mark-absent-${student.id}`}
                                     aria-label={`Mark ${student.firstName} ${student.lastName} absent`}
                                   >
@@ -1427,6 +1470,20 @@ export default function DriverDashboard() {
                                     Absent
                                   </Button>
                                 </div>
+                                {dropState === "can_drop" && (
+                                  <Button
+                                    size="lg"
+                                    variant="outline"
+                                    className="w-full h-12 text-base hover:bg-green-50 hover:text-green-700 hover:border-green-300"
+                                    onClick={() => dropoffMutation.mutate({ studentId: student.id })}
+                                    disabled={isDroppingOff || !isOnDuty}
+                                    data-testid={`button-dropoff-${student.id}`}
+                                    aria-label={`Mark ${student.firstName} off the bus`}
+                                  >
+                                    <Home className="w-5 h-5 mr-1" />
+                                    {isDroppingOff ? "Saving..." : "Off the bus"}
+                                  </Button>
+                                )}
                               </div>
                             </div>
                           </CardContent>
