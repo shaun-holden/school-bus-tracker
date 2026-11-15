@@ -14,7 +14,9 @@ import {
   insertDriverTaskSchema,
   insertEmergencyContactSchema,
   updateDriverProfileSchema,
-  registerDeviceTokenSchema
+  registerDeviceTokenSchema,
+  recipientRoleEnum,
+  notificationTypeEnum
 } from "@shared/schema";
 import { z } from "zod";
 import crypto from "crypto";
@@ -52,6 +54,27 @@ async function isSchoolInCompany(schoolId: string, companyId: string | null | un
   const school = await storage.getSchoolById(schoolId);
   return !!school && school.companyId === companyId;
 }
+
+// System-notification bodies (Q69). recipientId / routeId stay outside these
+// schemas: Q65's hasId checks own them. Admin caps match the admin form; the
+// driver form has no max, so its caps sit above any real use.
+const adminNotificationBodySchema = z.object({
+  title: z.string().trim().min(1).max(100),
+  message: z.string().trim().min(1).max(300),
+  recipientRole: z.enum(recipientRoleEnum.enumValues),
+  type: z.enum(notificationTypeEnum.enumValues).default('info'),
+});
+const driverNotificationBodySchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  message: z.string().trim().min(1).max(2000),
+  type: z.enum(notificationTypeEnum.enumValues).default('info'),
+});
+
+// PUT /api/routes/:routeId/schools/reorder body (Q70).
+const reorderRouteSchoolBodySchema = z.object({
+  schoolId: z.string().min(1).max(64),
+  direction: z.enum(['up', 'down']),
+});
 
 // POST /api/messages body (Q65).
 const sendMessageBodySchema = z.object({
@@ -2925,6 +2948,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.put('/api/routes/:routeId/schools/reorder', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
+      if (!userId) {
+        return res.status(401).json({ message: "Unauthorized - no user ID" });
+      }
       const user = await getCaller(req);
       
       if (!user || !isAdminRole(user.role)) {
@@ -2932,12 +2958,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { routeId } = req.params;
-      const { schoolId, direction } = req.body; // direction: 'up' or 'down'
-      
+      // Q70 (T-1): record-by-id tenant check. isOutsideCallerTenant, not
+      // isRouteInCompany, so an unscoped master keeps this screen.
+      const route = await storage.getRouteById(routeId);
+      if (!route || isOutsideCallerTenant(user, route.companyId)) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
+      const parsedBody = reorderRouteSchoolBodySchema.safeParse(req.body ?? {});
+      if (!parsedBody.success) {
+        return res.status(400).json({ message: "Invalid reorder request" });
+      }
+      const { schoolId, direction } = parsedBody.data;
+
+      // Pre-check before reorderRouteSchool, which renumbers the route's
+      // links before it can throw.
+      const linked = await storage.getSchoolsByRouteId(routeId);
+      const index = linked.findIndex(s => s.id === schoolId);
+      if (index === -1) {
+        return res.status(404).json({ message: "School not found on this route" });
+      }
+      if (direction === 'up' && index === 0) {
+        return res.status(409).json({ message: "Already at the top" });
+      }
+      if (direction === 'down' && index === linked.length - 1) {
+        return res.status(409).json({ message: "Already at the bottom" });
+      }
+
       const result = await storage.reorderRouteSchool(routeId, schoolId, direction);
       res.json(result);
     } catch (error) {
-      console.error("Error reordering route schools:", error);
+      console.error("Error reordering route schools", pgError(error)?.code);
       res.status(500).json({ message: "Failed to reorder schools" });
     }
   });
@@ -2955,6 +3006,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { routeId } = req.params;
+      // Q70 (T-1): record-by-id tenant check (unscoped master allowed).
+      const route = await storage.getRouteById(routeId);
+      if (!route || isOutsideCallerTenant(user, route.companyId)) {
+        return res.status(404).json({ message: "Route not found" });
+      }
       const schools = await storage.getSchoolsByRouteId(routeId);
       
       res.json(schools);
@@ -3890,11 +3946,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
-      const { title, message, recipientRole, recipientId, routeId, type = 'info' } = req.body;
+      const { recipientId, routeId } = req.body ?? {};
 
-      if (!title || !message || !recipientRole) {
+      if (!req.body?.title || !req.body?.message || !req.body?.recipientRole) {
         return res.status(400).json({ message: "Title, message, and recipientRole are required" });
       }
+      // Q69: enum and length checks (a bad enum used to be a pg 500). Never echo the body.
+      const parsedNote = adminNotificationBodySchema.safeParse(req.body);
+      if (!parsedNote.success) {
+        return res.status(400).json({ message: "Invalid notification" });
+      }
+      const { title, message, recipientRole, type } = parsedNote.data;
 
       // Q65: body ids, when sent, must be non-empty strings in the caller's
       // company (getCaller's companyId, so an impersonating master is scoped).
@@ -3931,7 +3993,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(notification);
     } catch (error) {
-      console.error("Error creating system notification:", error);
+      console.error("Error creating system notification", pgError(error)?.code);
       res.status(500).json({ message: "Failed to create system notification" });
     }
   });
@@ -3949,11 +4011,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
-      const { title, message, routeId, type = 'info' } = req.body;
+      const { routeId } = req.body ?? {};
 
-      if (!title || !message) {
+      if (!req.body?.title || !req.body?.message) {
         return res.status(400).json({ message: "Title and message are required" });
       }
+      // Q69: enum and length checks. Never echo the body.
+      const parsedNote = driverNotificationBodySchema.safeParse(req.body);
+      if (!parsedNote.success) {
+        return res.status(400).json({ message: "Invalid notification" });
+      }
+      const { title, message, type } = parsedNote.data;
 
       // Q65: the route that gets stored (body or the assignedRouteId fallback)
       // must be in the driver's company and be one they drive or are assigned.
@@ -3986,7 +4054,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(notification);
     } catch (error) {
-      console.error("Error creating driver notification:", error);
+      console.error("Error creating driver notification", pgError(error)?.code);
       res.status(500).json({ message: "Failed to create notification" });
     }
   });

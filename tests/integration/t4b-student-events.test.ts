@@ -178,3 +178,32 @@ describe('T4b follow-ups (SHELL merge)', () => {
     }
   });
 });
+
+describe('Q68 a status change clears the drop-off', () => {
+  const row = async () =>
+    (await h.db.select().from(studentAttendance).where(eq(studentAttendance.studentId, h.ids.studentA)))[0];
+
+  it('(a) present → drop-off → absent clears droppedOffAt (red if the clear is removed); (b) then present → drop-off → 200 and a second "dropped_off" push, by design', async () => {
+    expect((await driverA.post(MARK).send({ studentId: h.ids.studentA, status: 'present' })).status).toBe(200);
+    expect((await driverA.post(DROP).send({ studentId: h.ids.studentA })).status).toBe(200);
+    expect((await row()).droppedOffAt).not.toBeNull();
+    expect((await driverA.post(MARK).send({ studentId: h.ids.studentA, status: 'absent' })).status).toBe(200);
+    expect((await row()).droppedOffAt).toBeNull();
+    expect(pushesOfType('dropped_off')).toHaveLength(1);
+    expect((await driverA.post(MARK).send({ studentId: h.ids.studentA, status: 'present' })).status).toBe(200);
+    expect((await driverA.post(DROP).send({ studentId: h.ids.studentA })).status).toBe(200);
+    expect((await row()).droppedOffAt).not.toBeNull();
+    expect(pushesOfType('dropped_off')).toHaveLength(2);
+  });
+
+  it('(c) present → drop-off → present again keeps droppedOffAt and a new drop-off pushes nothing (red if the clear runs on a same-status update)', async () => {
+    expect((await driverA.post(MARK).send({ studentId: h.ids.studentA, status: 'present' })).status).toBe(200);
+    expect((await driverA.post(DROP).send({ studentId: h.ids.studentA })).status).toBe(200);
+    const first = (await row()).droppedOffAt;
+    expect(first).not.toBeNull();
+    expect((await driverA.post(MARK).send({ studentId: h.ids.studentA, status: 'present' })).status).toBe(200);
+    expect((await row()).droppedOffAt).toEqual(first);
+    expect((await driverA.post(DROP).send({ studentId: h.ids.studentA })).status).toBe(200);
+    expect(pushesOfType('dropped_off')).toHaveLength(1);
+  });
+});

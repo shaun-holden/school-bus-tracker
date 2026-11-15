@@ -1516,6 +1516,9 @@ export class DatabaseStorage implements IStorage {
           .set({
             status,
             updatedAt: today,
+            // Q68: a real status change clears the drop-off (an absent child
+            // can't be off the bus); a same-status re-tap keeps it.
+            ...(existingAttendance[0].status !== status ? { droppedOffAt: null } : {}),
             // Backfill a legacy NULL companyId so admins can see the row;
             // never overwrite an existing value.
             ...(companyId
