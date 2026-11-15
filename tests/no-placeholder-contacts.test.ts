@@ -63,7 +63,10 @@ describe('no placeholder contacts in client/src (Q24)', () => {
 
   it('the pending page links the real support address and has no phone link', () => {
     const page = fs.readFileSync(path.join(CLIENT_SRC, 'pages/onboarding-pending.tsx'), 'utf8');
-    expect(page).toContain(`mailto:${SUPPORT_EMAIL}`);
+    // Q66: the page takes the address from lib/support.ts, which must hold the real one.
+    expect(page).toContain('href={`mailto:${SUPPORT_EMAIL}`}');
+    expect(page).toContain('import { SUPPORT_EMAIL } from "@/lib/support";');
+    expect(fs.readFileSync(path.join(CLIENT_SRC, 'lib/support.ts'), 'utf8')).toContain(`"${SUPPORT_EMAIL}"`);
     expect(page).not.toMatch(/href="tel:/);
   });
 });

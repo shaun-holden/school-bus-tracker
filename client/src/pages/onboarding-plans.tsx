@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter }
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
+import { SUPPORT_EMAIL } from "@/lib/support";
 import { Check, Loader2, ArrowRight } from "lucide-react";
 
 interface SubscriptionPlan {
@@ -162,7 +163,7 @@ export default function OnboardingPlans() {
           <p className="font-medium text-gray-700">All plans include a 30-day free trial. Cancel anytime before your trial ends.</p>
           <p className="mt-2">
             Need a custom plan?{" "}
-            <a href="mailto:support@schoolbustracker.org" className="text-blue-600 hover:underline">
+            <a href={`mailto:${SUPPORT_EMAIL}`} className="text-blue-600 hover:underline">
               Contact our sales team
             </a>
           </p>

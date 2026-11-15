@@ -1,8 +1,9 @@
 import { Link } from "wouter";
 import { ArrowLeft, Bus } from "lucide-react";
+import { SUPPORT_EMAIL } from "@/lib/support";
 
 const LAST_UPDATED = "July 11, 2026";
-const CONTACT_EMAIL = "support@schoolbustracker.org";
+const CONTACT_EMAIL = SUPPORT_EMAIL;
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (

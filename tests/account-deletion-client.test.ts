@@ -28,8 +28,8 @@ vi.mock('@/lib/queryClient', () => ({
 }));
 vi.mock('@capacitor/core', () => ({ Capacitor: { isNativePlatform: () => false } }));
 vi.mock('@capacitor/push-notifications', () => ({ PushNotifications: {} }));
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, readdirSync } from 'node:fs';
+import { resolve, sep } from 'node:path';
 import {
   canSelfDeleteAccount,
   deleteAccountErrorText,
@@ -210,5 +210,23 @@ describe('Q61 follow-ups', () => {
       expect(src, page).not.toContain('support@schoolbustracker.org');
     }
     expect(read('client/src/lib/accountDeletion.ts')).not.toContain('support@schoolbustracker.org');
+  });
+
+  it('Q66: in all of client/src only lib/support.ts holds the address, and no mailto: has a literal address', () => {
+    const root = resolve(__dirname, '..', 'client/src');
+    const files = (readdirSync(root, { recursive: true }) as string[])
+      .filter((f) => /\.tsx?$/.test(f))
+      .map((f) => f.split(sep).join('/'));
+    expect(files.length).toBeGreaterThan(50);
+    const withAddress = files.filter((f) => readFileSync(resolve(root, f), 'utf8').includes('support@schoolbustracker.org'));
+    expect(withAddress).toEqual(['lib/support.ts']);
+    const literalMailto = files.filter((f) => /mailto:[^$`"'\s{]+@/.test(readFileSync(resolve(root, f), 'utf8')));
+    expect(literalMailto).toEqual([]);
+  });
+
+  it('Q66: the onboarding and privacy pages import SUPPORT_EMAIL from lib/support.ts', () => {
+    for (const page of ['onboarding-plans', 'onboarding-pending', 'privacy']) {
+      expect(read(`client/src/pages/${page}.tsx`), page).toContain('import { SUPPORT_EMAIL } from "@/lib/support";');
+    }
   });
 });
