@@ -6,6 +6,8 @@
 // - POST /api/system-notifications `recipientId` / `routeId` and
 //   POST /api/driver/system-notifications `routeId` (body or the
 //   assignedRouteId fallback) must be in the caller's company.
+// Q69: the 2 system-notification POSTs check recipientRole / type enums and
+// title / message lengths (400 "Invalid notification", not a pg 500).
 // Real HTTP + real Postgres. Seeded with seedQ8Extras: routeA2 (company A, no
 // driver) with studentA3, and driverX (company A, assignedRouteId = routeB).
 import { describe, it, expect, beforeAll } from 'vitest';
@@ -224,5 +226,61 @@ describe('Q65 POST /api/driver/system-notifications routeId', () => {
     expect(fallback.status).toBe(404);
     expect(fallback.body).toEqual({ message: 'Route not found' });
     expect(await notesBy(q8.driverX)).toBe(before);
+  });
+});
+
+describe('Q69 system-notification enum and length checks', () => {
+  const TYPES = ['delay', 'emergency', 'info', 'route_change'] as const;
+  const admin = (extra: Record<string, unknown>) => ({ title: 'Q69', message: 'note', recipientRole: 'all_drivers', ...extra });
+  const driver = (extra: Record<string, unknown>) => ({ title: 'Q69', message: 'route note', ...extra });
+
+  it('admin recipientRole "bogus" → 400 "Invalid notification", nothing stored (red if recipientRole is a plain string)', async () => {
+    const before = await notesBy(h.ids.adminA);
+    const res = await adminA.post('/api/system-notifications').send(admin({ recipientRole: 'bogus' }));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ message: 'Invalid notification' });
+    expect(await notesBy(h.ids.adminA)).toBe(before);
+  });
+
+  it('admin type "bogus" → 400, nothing stored (red if the admin type is a plain string)', async () => {
+    const before = await notesBy(h.ids.adminA);
+    const res = await adminA.post('/api/system-notifications').send(admin({ type: 'bogus' }));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ message: 'Invalid notification' });
+    expect(await notesBy(h.ids.adminA)).toBe(before);
+  });
+
+  it('admin title of 101 characters → 400; a missing recipientRole keeps the old "required" text', async () => {
+    expect((await adminA.post('/api/system-notifications').send(admin({ title: 'x'.repeat(101) }))).status).toBe(400);
+    const missing = await adminA.post('/api/system-notifications').send({ title: 'Q69', message: 'note' });
+    expect(missing.status).toBe(400);
+    expect(missing.body).toEqual({ message: 'Title, message, and recipientRole are required' });
+  });
+
+  it('driver type "bogus" → 400, nothing stored (red if the driver type is a plain string)', async () => {
+    const before = await notesBy(h.ids.driverA);
+    const res = await driverA.post('/api/driver/system-notifications').send(driver({ type: 'bogus', routeId: h.ids.routeA }));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ message: 'Invalid notification' });
+    expect(await notesBy(h.ids.driverA)).toBe(before);
+  });
+
+  it('driver message of 2001 characters → 400', async () => {
+    const res = await driverA.post('/api/driver/system-notifications').send(driver({ message: 'x'.repeat(2001), routeId: h.ids.routeA }));
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ message: 'Invalid notification' });
+  });
+
+  it('controls: each valid type → 200 for admin (all_drivers) and driver; a 300-character driver message → 200', async () => {
+    for (const type of TYPES) {
+      const a = await adminA.post('/api/system-notifications').send(admin({ type }));
+      expect(a.status).toBe(200);
+      expect(a.body).toMatchObject({ type, recipientRole: 'all_drivers' });
+      const d = await driverA.post('/api/driver/system-notifications').send(driver({ type, routeId: h.ids.routeA }));
+      expect(d.status).toBe(200);
+      expect(d.body.type).toBe(type);
+    }
+    const long = await driverA.post('/api/driver/system-notifications').send(driver({ message: 'y'.repeat(300), routeId: h.ids.routeA }));
+    expect(long.status).toBe(200);
   });
 });
