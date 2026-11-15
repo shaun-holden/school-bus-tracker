@@ -14,7 +14,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { directMessages, parentChildLinks, students, systemNotifications, users } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
-import { seedQ8Extras, EMAILS, Q8_EMAILS, SEED_PASSWORD, type Q8Ids } from './seed';
+import { seedQ8Extras, insertUser, EMAILS, Q8_EMAILS, SEED_PASSWORD, type Q8Ids } from './seed';
 
 const h = useIntegrationHarness();
 
@@ -26,6 +26,10 @@ let parentNull: Agent;
 let adminA: Agent;
 let master: Agent;
 let driverX: Agent;
+let assignedDriver: Agent;
+let assignedDriverId: string;
+let studentAonB: string;
+const ASSIGNED_DRIVER_EMAIL = 'q71-driver-assigned@sbt.test';
 
 const sentBy = async (id: string) =>
   (await h.db.select().from(directMessages).where(eq(directMessages.senderId, id))).length;
@@ -49,7 +53,21 @@ beforeAll(async () => {
   // already adds this link; keep the insert so the file doesn't depend on it.
   await h.db.insert(parentChildLinks).values({ parentId: h.ids.parentNull, studentId: h.ids.studentA }).onConflictDoNothing();
 
-  // 6 logins (MAX_LOGINS_PER_FILE is 8).
+  // Q71: a company-A driver only ASSIGNED to routeA2 (routeA2 has no driverId;
+  // studentA3 is on it).
+  assignedDriverId = await insertUser(
+    { email: ASSIGNED_DRIVER_EMAIL, firstName: 'Q71-Assigned', lastName: 'Seed', role: 'driver', companyId: h.ids.companyA, assignedRouteId: q8.routeA2 },
+    { password: true },
+  );
+  // Q71: a company-A student on company B's routeB (bad data). driverX
+  // (company A) is assigned routeB, so only isRouteInCompany stops it.
+  const [aOnB] = await h.db
+    .insert(students)
+    .values({ companyId: h.ids.companyA, firstName: 'Q71-AonB', lastName: 'Seed', parentId: q8.parentA3, schoolId: h.ids.schoolA, routeId: h.ids.routeB })
+    .returning({ id: students.id });
+  studentAonB = aOnB.id;
+
+  // 7 logins (MAX_LOGINS_PER_FILE is 8).
   parentA = await h.loginAs('parentA');
   driverA = await h.loginAs('driverA');
   parentNull = await h.loginAs('parentNull');
@@ -58,6 +76,8 @@ beforeAll(async () => {
   expect((await master.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({})).status).toBe(200);
   driverX = h.anon();
   expect((await h.loginAttempt(Q8_EMAILS.driverX, SEED_PASSWORD, driverX)).status).toBe(200);
+  assignedDriver = h.anon();
+  expect((await h.loginAttempt(ASSIGNED_DRIVER_EMAIL, SEED_PASSWORD, assignedDriver)).status).toBe(200);
 });
 
 describe('Q65 POST /api/messages studentId', () => {
@@ -85,7 +105,21 @@ describe('Q65 POST /api/messages studentId', () => {
     expect(await sentBy(h.ids.driverA)).toBe(before);
   });
 
-  it('4. an unknown UUID → 404 (not 500); studentId {} → 400; a missing content keeps its 400 text', async () => {
+  it('Q71-1. a driver only assigned to routeA2 → parentA3 with studentA3 → 200, stored with that studentId (red if the assigned-route branch is removed)', async () => {
+    const res = await assignedDriver.post('/api/messages').send({ recipientId: q8.parentA3, content: 'about A3', studentId: q8.studentA3 });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ senderId: assignedDriverId, studentId: q8.studentA3, companyId: h.ids.companyA });
+  });
+
+  it('Q71-1b. driverX (company A, assigned to company B\'s routeB) → parentA3 with a company-A student on routeB → 404, no row (red if isRouteInCompany is dropped from the assigned-route path)', async () => {
+    const before = await sentBy(q8.driverX);
+    const res = await driverX.post('/api/messages').send({ recipientId: q8.parentA3, content: 'about A on B', studentId: studentAonB });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Student not found' });
+    expect(await sentBy(q8.driverX)).toBe(before);
+  });
+
+  it('4. an unknown UUID → 404 (not 500); studentId {} → 400; a missing content keeps its 400 text; content over 5000 → 400 "Message is too long" (red if the too_big branch is removed)', async () => {
     const unknown = await parentA.post('/api/messages').send({ recipientId: h.ids.driverA, content: 'x', studentId: '00000000-0000-4000-8000-000000000000' });
     expect(unknown.status).toBe(404);
     expect(unknown.body).toEqual({ message: 'Student not found' });
@@ -95,6 +129,10 @@ describe('Q65 POST /api/messages studentId', () => {
     const noContent = await parentA.post('/api/messages').send({ recipientId: h.ids.driverA });
     expect(noContent.status).toBe(400);
     expect(noContent.body).toEqual({ message: 'Recipient and content are required' });
+    // Q71: over-long content has its own text (red if the too_big branch is removed).
+    const tooLong = await parentA.post('/api/messages').send({ recipientId: h.ids.driverA, content: 'x'.repeat(5001) });
+    expect(tooLong.status).toBe(400);
+    expect(tooLong.body).toEqual({ message: 'Message is too long (5000 characters max)' });
   });
 
   it('5. controls: parentA → driverA with studentA → 200, stored; driverA → parentA with studentA → 200; no studentId → 200, NULL', async () => {
@@ -190,7 +228,7 @@ describe('Q65 POST /api/system-notifications (admin) body ids', () => {
 describe('Q65 POST /api/driver/system-notifications routeId', () => {
   const note = (extra: Record<string, unknown>) => ({ title: 'Q65', message: 'route note', ...extra });
 
-  it('9a. driverA with routeId = routeB → 404 "Route not found", nothing stored (red if the driver route check is removed)', async () => {
+  it('9a. driverA with company B\'s routeB → 404 "Route not found", nothing stored (stopped by both isRouteInCompany and the drives check; red only if the whole route check is removed — 9b and 9e pin each half)', async () => {
     const before = await notesBy(h.ids.driverA);
     const res = await driverA.post('/api/driver/system-notifications').send(note({ routeId: h.ids.routeB }));
     expect(res.status).toBe(404);

@@ -3015,7 +3015,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json(schools);
     } catch (error) {
-      console.error("Error fetching schools by route:", error);
+      console.error("Error fetching schools by route", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch schools by route" });
     }
   });
@@ -4533,7 +4533,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(contacts);
     } catch (error) {
-      console.error("Error fetching contacts:", error);
+      console.error("Error fetching contacts", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch contacts" });
     }
   });
@@ -4640,8 +4640,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Body shape (Q65). Never echo the body back.
       const parsed = sendMessageBodySchema.safeParse(req.body ?? {});
       if (!parsed.success) {
-        const missing = parsed.error.issues.some(i => i.path[0] === 'recipientId' || i.path[0] === 'content');
-        return res.status(400).json({ message: missing ? "Recipient and content are required" : "Invalid message" });
+        const tooLong = parsed.error.issues.some(i => i.path[0] === 'content' && i.code === 'too_big');
+        const missing = parsed.error.issues.some(i => (i.path[0] === 'recipientId' || i.path[0] === 'content') && i.code !== 'too_big');
+        return res.status(400).json({
+          message: tooLong ? "Message is too long (5000 characters max)"
+            : missing ? "Recipient and content are required"
+            : "Invalid message",
+        });
       }
       const { recipientId, content } = parsed.data;
       const studentId = parsed.data.studentId ?? null;
@@ -4689,9 +4694,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (user.role === 'parent') {
           senderLinkedStudents ??= await storage.getLinkedStudentsByParentId(userId);
           related = senderLinkedStudents.some(s => s.id === student.id);
-        } else if (user.role === 'driver') {
-          const driverRoutes = await storage.getRoutesByDriverId(userId);
-          related = !!student.routeId && driverRoutes.some(r => r.companyId === effectiveCompanyId && r.id === student.routeId);
+        } else if (user.role === 'driver' && student.routeId) {
+          // Q71: the driver's assigned route counts too (like the driver
+          // system-notification rule), still inside the company.
+          if (student.routeId === user.assignedRouteId) {
+            related = await isRouteInCompany(student.routeId, effectiveCompanyId);
+          } else {
+            const driverRoutes = await storage.getRoutesByDriverId(userId);
+            related = driverRoutes.some(r => r.companyId === effectiveCompanyId && r.id === student.routeId);
+          }
         }
         if (!related) {
           return res.status(404).json({ message: "Student not found" });
@@ -4725,7 +4736,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(message);
     } catch (error) {
-      console.error("Error sending message:", error);
+      console.error("Error sending message", pgError(error)?.code);
       res.status(500).json({ message: "Failed to send message" });
     }
   });
