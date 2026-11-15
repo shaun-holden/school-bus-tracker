@@ -254,6 +254,7 @@ export interface IStorage {
   markAllNotificationsRead(parentId: string): Promise<void>;
   getUnreadCountForParent(parentId: string): Promise<number>;
   deleteNotification(id: string): Promise<boolean>;
+  getNotificationById(id: string): Promise<ParentNotification | undefined>;
 
   // Multi-tenant authentication operations
   getUserByEmail(email: string): Promise<User | undefined>;
@@ -335,6 +336,7 @@ export interface IStorage {
   getSystemNotificationsForAdmin(companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForDriver(driverId: string, companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForParent(parentId: string, companyId: string): Promise<SystemNotification[]>;
+  getSystemNotificationById(id: string): Promise<SystemNotification | undefined>;
   markSystemNotificationAsRead(notificationId: string): Promise<SystemNotification | undefined>;
   deleteSystemNotification(id: string): Promise<boolean>;
   getUnreadNotificationCountForAdmin(companyId: string): Promise<number>;
@@ -599,7 +601,6 @@ export class DatabaseStorage implements IStorage {
       return { allowed: false, reason: 'Company not found' };
     }
 
-    const planType = company.planType || 'starter';
     const staffLimit = company.staffUserLimit;
     const parentLimit = company.parentUserLimit;
 
@@ -642,8 +643,8 @@ export class DatabaseStorage implements IStorage {
       return { allowed: true };
     }
 
-    // Unknown role, allow by default
-    return { allowed: true };
+    // Unknown role: refuse (CD-6; every real caller passes a known role).
+    return { allowed: false, reason: 'Unknown role' };
   }
 
   // School operations
@@ -1902,6 +1903,11 @@ export class DatabaseStorage implements IStorage {
     return notificationIds.filter(id => !readIds.has(id)).length;
   }
 
+  async getNotificationById(id: string): Promise<ParentNotification | undefined> {
+    const [row] = await db.select().from(parentNotifications).where(eq(parentNotifications.id, id));
+    return row;
+  }
+
   async deleteNotification(id: string): Promise<boolean> {
     const result = await db.delete(parentNotifications).where(eq(parentNotifications.id, id));
     return result.rowCount !== null && result.rowCount > 0;
@@ -2950,6 +2956,11 @@ export class DatabaseStorage implements IStorage {
         )
       )
       .orderBy(desc(systemNotifications.createdAt));
+  }
+
+  async getSystemNotificationById(id: string): Promise<SystemNotification | undefined> {
+    const [row] = await db.select().from(systemNotifications).where(eq(systemNotifications.id, id));
+    return row;
   }
 
   async markSystemNotificationAsRead(notificationId: string): Promise<SystemNotification | undefined> {

@@ -108,7 +108,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 
 | Line | Open item | IDs | Where (current `main`) |
 |---|---|---|---|
-| T-1 | Record-by-id handlers without a tenant check | SEC-21, SEC-22, SEC-28, SEC-40 | `DELETE /api/notifications/:id`; `DELETE` / `PATCH …/read` `/api/system-notifications/:id`; `GET /api/drivers/:id/invitation-status` |
+| T-1 | Record-by-id handlers without a tenant check | SEC-21, SEC-28, SEC-40 | `GET /api/drivers/:id/invitation-status` |
 | T-2 | Cross-tenant or ownership 403s that reveal a record exists | (R1 route table) | parent paths of GET/PUT/DELETE `/api/students/:id` |
 | T-5 | Foreign-key ids from the body not tenant-checked | SEC-33 | `POST /api/buses` (`driverId`/`currentRouteId`) |
 | T-7 | Raw `req.body` into an update | SEC-26 | `PATCH /api/schools/:id` → `storage.updateSchool(id, req.body)` |
@@ -132,7 +132,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 | X-1 | Older unit tests check copied rules or helper policy, not handlers | (gaps A5) | Q49 (`3a98ad9`) replaced the copied-rule tests WT-1/2/3/5/6 with real HTTP tests; `tests/driver-features.test.ts` still tests local copies, and `tests/multi-tenant.test.ts` tests helper policy (see `reader-audit-weak-tests-2026-11-13.md`). New tenant paths use the `tests/integration/` harness (`fa85158`) |
 | S-24 | Existing `npm audit` baseline: 11 high/critical on `main` after Q2b-1 | Q2 | dependency plan (Q2b-2, Q2b-3 next) |
 
-**Closed since the audit (verified in code; 27 IDs, plus part of SEC-45):**
+**Closed since the audit (verified in code; 28 IDs, plus part of SEC-45):**
 - **HF1 `ffee2c8` (10):** SEC-6, SEC-9, SEC-10, SEC-13, SEC-16, SEC-23, DUP-1, DUP-3, DUP-7, DUP-8. It also closed parts of LEAK-1 (tenant scope), SEC-25, SEC-28 and SEC-36 (by deleting dead routes) and SEC-46 (invite argument order).
 - **HF2 `594f8b6` (12):** SEC-1, SEC-2, SEC-3, SEC-4, SEC-5, SEC-11, SEC-12, SEC-14, SEC-15, SEC-17, SEC-20, SEC-27. It also closed part of SEC-36 (route log dumps, masked emails).
 - **HF3 `05656a4` (4):** SEC-7, SEC-8, SEC-18, SEC-19.
@@ -144,6 +144,7 @@ These are existing issues, re-checked in code after HF1 (`ffee2c8`), HF3 (`05656
 - **Q7 `8f4cddb`:** DUP-2 and the impersonation-scoping part of SEC-45 (T-10, T-4): `getCaller(req)` keeps the overlay on re-fetch, and `companyScope`/`isOutsideCallerTenant` use `isUnscopedMaster`, so an impersonating master is scoped to the impersonated company. SEC-45's session-regeneration and audit-log parts (S-7, S-16 rows) stay open.
 - **T1 push transport (`dev2/work`):** LEAK-18 (S-22): APNs goes over HTTP/2 to an allow-listed host (`APNS_ENVIRONMENT`), with a 10 s timeout per APNs request and per FCM batch.
 - **Q70 `94b751b`:** T-1 GET/PUT /api/routes/:routeId/schools.
+- **Q74 `2a087ae`:** SEC-22 / T-1 notification by-id handlers; CD-1 role-change staff cap.
 
 ## Sources
 
