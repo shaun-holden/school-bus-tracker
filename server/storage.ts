@@ -1216,7 +1216,8 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createVehicleIssue(issue: InsertVehicleIssue): Promise<VehicleIssue> {
-    const [newIssue] = await db.insert(vehicleIssues).values(issue).returning();
+    // Set from Node (UTC wall time), not defaultNow(): onLocalDay assumes UTC wall time.
+    const [newIssue] = await db.insert(vehicleIssues).values({ ...issue, createdAt: new Date() }).returning();
     return newIssue;
   }
 
