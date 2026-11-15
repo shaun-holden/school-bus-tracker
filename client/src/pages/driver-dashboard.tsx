@@ -571,7 +571,7 @@ export default function DriverDashboard() {
   });
 
   // Query for today's student attendance - always enabled when on duty
-  const { data: studentAttendanceData, refetch: refetchAttendance } = useQuery({
+  const { data: studentAttendanceData } = useQuery({
     queryKey: ["/api/student-attendance"],
     enabled: !!user && isOnDuty,
     retry: false,
@@ -1069,7 +1069,7 @@ export default function DriverDashboard() {
       return await apiRequest("/api/student-attendance", "POST", { studentId, status });
     },
     onSuccess: (_, variables) => {
-      refetchAttendance();
+      queryClient.invalidateQueries({ queryKey: ["/api/student-attendance"] });
       const statusColor = variables.status === "present" ? "green" : "blue";
       toast({
         title: "Attendance Recorded",
@@ -1104,7 +1104,7 @@ export default function DriverDashboard() {
       return await apiRequest("/api/driver/student-dropoff", "POST", { studentId });
     },
     onSuccess: () => {
-      refetchAttendance();
+      queryClient.invalidateQueries({ queryKey: ["/api/student-attendance"] });
       toast({
         title: "Marked off the bus",
         className: "border-green-500",
@@ -1426,6 +1426,7 @@ export default function DriverDashboard() {
                                       : "bg-blue-100 text-blue-700"
                                   }`}>
                                     {attendance.status === "present" ? "Present" : "Absent"} at {new Date(attendance.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    {/* droppedOffAt is set once by POST /api/driver/student-dropoff (E5); dropState "dropped" means present + droppedOffAt, so it's non-null here. */}
                                     {dropState === "dropped" && (
                                       <div className="mt-1" data-testid={`text-dropoff-${student.id}`}>
                                         Off the bus at {new Date(attendance.droppedOffAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
@@ -1445,7 +1446,7 @@ export default function DriverDashboard() {
                                         : "hover:bg-green-50 hover:text-green-700 hover:border-green-300"
                                     }`}
                                     onClick={() => markAttendanceMutation.mutate({ studentId: student.id, status: "present" })}
-                                    // After a drop-off the server keeps droppedOffAt on a status change, so lock the card (T2b).
+                                    // Lock after a drop-off: a status change would clear droppedOffAt (Q68) and re-arm the E5 push.
                                     disabled={markAttendanceMutation.isPending || dropState === "dropped"}
                                     data-testid={`button-mark-present-${student.id}`}
                                     aria-label={`Mark ${student.firstName} ${student.lastName} present`}
