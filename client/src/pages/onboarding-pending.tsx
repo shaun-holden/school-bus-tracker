@@ -6,6 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Clock, CheckCircle, XCircle, AlertTriangle, Mail, Loader2 } from "lucide-react";
+import { SUPPORT_EMAIL } from "@/lib/support";
 
 interface BusinessStatus {
   status: string;
@@ -152,12 +153,12 @@ export default function OnboardingPending() {
               <h3 className="font-medium text-gray-800 mb-3">Need Help?</h3>
               <div className="space-y-2 text-sm text-gray-600">
                 <a 
-                  href="mailto:support@schoolbustracker.org" 
+                  href={`mailto:${SUPPORT_EMAIL}`} 
                   className="flex items-center hover:text-blue-600"
                   data-testid="link-email-support"
                 >
                   <Mail className="w-4 h-4 mr-2" />
-                  support@schoolbustracker.org
+                  {SUPPORT_EMAIL}
                 </a>
               </div>
             </div>
