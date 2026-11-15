@@ -46,7 +46,8 @@ describe("driver-dashboard.tsx wiring", () => {
 
   it("the drop-off mutation posts exactly { studentId } to /api/driver/student-dropoff", () => {
     expect(src).toMatch(/apiRequest\("\/api\/driver\/student-dropoff", "POST", \{ studentId \}\)/);
-    expect(src.match(/\/api\/driver\/student-dropoff/g)).toHaveLength(1);
+    // One POST call site (the path may also appear in comments).
+    expect(src.match(/apiRequest\("\/api\/driver\/student-dropoff"/g)).toHaveLength(1);
   });
 
   it("the Off the bus button renders only when dropoffState(...) === 'can_drop'", () => {
@@ -66,10 +67,35 @@ describe("driver-dashboard.tsx wiring", () => {
     }
   });
 
-  it("the card's tap-to-mark-present ignores taps inside the action area (stopPropagation kept)", () => {
-    const area = src.indexOf('onClick={(e) => e.stopPropagation()}');
-    const button = src.indexOf('button-dropoff-');
-    expect(area).toBeGreaterThan(-1);
-    expect(button).toBeGreaterThan(area);
+  it("the Off the bus, Present and Absent buttons sit inside the one stopPropagation wrapper (Q73)", () => {
+    const marker = "onClick={(e) => e.stopPropagation()}";
+    expect(src.split(marker), "exactly one wrapper").toHaveLength(2);
+    const open = src.indexOf(marker);
+    const start = src.lastIndexOf("<div", open);
+    // Count tags with /<div[\s>]/: the opening tag contains "=>", so a [^>]* match would stop early.
+    const re = /<div[\s>]|<\/div>/g;
+    re.lastIndex = start;
+    let depth = 0;
+    let end = -1;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src))) {
+      depth += m[0] === "</div>" ? -1 : 1;
+      if (depth === 0) {
+        end = m.index;
+        break;
+      }
+    }
+    expect(end).toBeGreaterThan(start);
+    for (const id of ["button-dropoff-", "button-mark-present-", "button-mark-absent-"]) {
+      const i = src.indexOf(id);
+      expect(i, id).toBeGreaterThan(start);
+      expect(i, id).toBeLessThan(end);
+    }
+  });
+
+  it("after a drop-off the attendance query is invalidated, not refetched directly (Q73)", () => {
+    const block = src.slice(src.indexOf("const dropoffMutation = useMutation({"), src.indexOf("onError:", src.indexOf("const dropoffMutation = useMutation({")));
+    expect(block).toContain('queryClient.invalidateQueries({ queryKey: ["/api/student-attendance"] })');
+    expect(src).not.toMatch(/refetchAttendance\(\)/);
   });
 });
