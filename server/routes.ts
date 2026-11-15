@@ -53,6 +53,13 @@ async function isSchoolInCompany(schoolId: string, companyId: string | null | un
   return !!school && school.companyId === companyId;
 }
 
+// POST /api/messages body (Q65).
+const sendMessageBodySchema = z.object({
+  recipientId: z.string().min(1),
+  content: z.string().min(1).max(5000),
+  studentId: z.string().min(1).max(64).nullish(),
+});
+
 async function isRouteInCompany(routeId: string, companyId: string | null | undefined): Promise<boolean> {
   if (!companyId) return false;
   const route = await storage.getRouteById(routeId);
@@ -3889,6 +3896,27 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Title, message, and recipientRole are required" });
       }
 
+      // Q65: body ids, when sent, must be non-empty strings in the caller's
+      // company (getCaller's companyId, so an impersonating master is scoped).
+      // An unscoped master (companyId null) can't target any id.
+      if ((recipientId !== undefined && recipientId !== null && !hasId(recipientId))
+        || (routeId !== undefined && routeId !== null && !hasId(routeId))) {
+        return res.status(400).json({ message: "Invalid recipientId or routeId" });
+      }
+      if (hasId(recipientId)) {
+        const recipient = await storage.getUser(recipientId);
+        let inCompany = !!recipient && !!user.companyId && recipient.companyId === user.companyId;
+        if (recipient && !inCompany && user.companyId && recipient.role === 'parent' && !recipient.companyId) {
+          inCompany = (await storage.getLinkedStudentsByParentId(recipient.id)).some(s => s.companyId === user.companyId);
+        }
+        if (!inCompany) {
+          return res.status(404).json({ message: "Recipient not found" });
+        }
+      }
+      if (hasId(routeId) && !(await isRouteInCompany(routeId, user.companyId))) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
       const notification = await storage.createSystemNotification({
         companyId: user.companyId,
         senderId: userId,
@@ -3927,6 +3955,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Title and message are required" });
       }
 
+      // Q65: the route that gets stored (body or the assignedRouteId fallback)
+      // must be in the driver's company and be one they drive or are assigned.
+      if (routeId !== undefined && routeId !== null && !hasId(routeId)) {
+        return res.status(400).json({ message: "Invalid routeId" });
+      }
+      const storedRouteId: string | null = (hasId(routeId) ? routeId : null) || user.assignedRouteId || null;
+      if (storedRouteId) {
+        let allowed = await isRouteInCompany(storedRouteId, user.companyId);
+        if (allowed && storedRouteId !== user.assignedRouteId) {
+          allowed = (await storage.getRoutesByDriverId(userId)).some(r => r.id === storedRouteId);
+        }
+        if (!allowed) {
+          return res.status(404).json({ message: "Route not found" });
+        }
+      }
+
       // Drivers can only send to route_parents
       const notification = await storage.createSystemNotification({
         companyId: user.companyId,
@@ -3934,7 +3978,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         senderRole: 'driver',
         recipientRole: 'route_parents',
         recipientId: null,
-        routeId: routeId || user.assignedRouteId || null,
+        routeId: storedRouteId,
         title,
         message,
         type,
@@ -4407,14 +4451,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const drivers = await storage.getDriversForParent(userId, effectiveCompanyId || undefined);
         contacts = drivers.map(d => ({
           id: d.id,
-          name: `${d.firstName || ''} ${d.lastName || ''}`.trim() || d.email || 'Driver',
+          name: `${d.firstName || ''} ${d.lastName || ''}`.trim() || 'Driver', // never an email (Q65)
           role: 'driver'
         }));
       } else if (user.role === 'driver') {
         const parents = user.companyId ? await storage.getParentsForDriver(userId, user.companyId) : [];
         contacts = parents.map(p => ({
           id: p.id,
-          name: `${p.firstName || ''} ${p.lastName || ''}`.trim() || p.email || 'Parent',
+          name: `${p.firstName || ''} ${p.lastName || ''}`.trim() || 'Parent', // never an email (Q65)
           role: 'parent'
         }));
       }
@@ -4525,19 +4569,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only parents and drivers can send messages" });
       }
 
+      // Body shape (Q65). Never echo the body back.
+      const parsed = sendMessageBodySchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        const missing = parsed.error.issues.some(i => i.path[0] === 'recipientId' || i.path[0] === 'content');
+        return res.status(400).json({ message: missing ? "Recipient and content are required" : "Invalid message" });
+      }
+      const { recipientId, content } = parsed.data;
+      const studentId = parsed.data.studentId ?? null;
+
       // Infer company from linked children for parents without direct companyId
       let effectiveCompanyId = user.companyId;
+      let senderLinkedStudents: Awaited<ReturnType<typeof storage.getLinkedStudentsByParentId>> | undefined;
       if (user.role === 'parent' && !effectiveCompanyId) {
-        const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
-        if (linkedStudents.length > 0 && linkedStudents[0].companyId) {
-          effectiveCompanyId = linkedStudents[0].companyId;
+        senderLinkedStudents = await storage.getLinkedStudentsByParentId(userId);
+        if (senderLinkedStudents.length > 0 && senderLinkedStudents[0].companyId) {
+          effectiveCompanyId = senderLinkedStudents[0].companyId;
         }
-      }
-
-      const { recipientId, content, studentId } = req.body;
-
-      if (!recipientId || !content) {
-        return res.status(400).json({ message: "Recipient and content are required" });
       }
 
       // Verify recipient is in the same company
@@ -4561,11 +4609,32 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Recipient not found" });
       }
 
+      // Q65: a studentId must be a student of this company that the sender is
+      // tied to (a parent's linked child, or on one of the driver's routes).
+      // Every failure is the same 404, so nothing leaks about other schools.
+      if (studentId) {
+        const student = await storage.getStudentById(studentId);
+        if (!student || student.companyId !== effectiveCompanyId) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+        let related = false;
+        if (user.role === 'parent') {
+          senderLinkedStudents ??= await storage.getLinkedStudentsByParentId(userId);
+          related = senderLinkedStudents.some(s => s.id === student.id);
+        } else if (user.role === 'driver') {
+          const driverRoutes = await storage.getRoutesByDriverId(userId);
+          related = !!student.routeId && driverRoutes.some(r => r.companyId === effectiveCompanyId && r.id === student.routeId);
+        }
+        if (!related) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+      }
+
       const message = await storage.sendDirectMessage({
         senderId: userId,
         recipientId,
         content,
-        studentId: studentId || null,
+        studentId,
         companyId: effectiveCompanyId,
       });
 
