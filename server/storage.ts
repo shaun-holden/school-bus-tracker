@@ -101,7 +101,7 @@ import {
 } from "@shared/schema";
 import { db } from "./db";
 import { isDbQueryError, pgError } from "./dbErrors";
-import { eq, ne, and, desc, asc, sql, or, inArray, isNull, exists, notExists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
+import { eq, ne, not, and, desc, asc, sql, or, inArray, isNull, isNotNull, exists, notExists, getTableColumns, type SQL, type SQLWrapper, type AnyColumn } from "drizzle-orm";
 
 // Tenant calendar-day predicate. Day columns are `timestamp without time zone`
 // holding UTC wall time (drizzle writes toISOString()). The inner
@@ -251,7 +251,9 @@ export interface IStorage {
   createParentNotification(notification: InsertParentNotification): Promise<ParentNotification>;
   getAllNotifications(companyId?: string): Promise<ParentNotification[]>;
   getNotificationsByRouteId(routeId: string): Promise<ParentNotification[]>;
-  getNotificationsForParent(parentId: string): Promise<ParentNotification[]>;
+  getNotificationsForParent(parentId: string, limit?: number): Promise<ParentNotification[]>;
+  isParentNotificationVisibleToParent(id: string, parentId: string): Promise<boolean>;
+  getReadParentNotificationIds(parentId: string, notificationIds: string[]): Promise<Set<string>>;
   markNotificationRead(notificationId: string, parentId: string): Promise<NotificationRead>;
   markAllNotificationsRead(parentId: string): Promise<void>;
   getUnreadCountForParent(parentId: string): Promise<number>;
@@ -337,13 +339,16 @@ export interface IStorage {
   getParentRecipientsForRouteEvent(companyId: string, routeId: string, opts: { schoolId?: string; stopId?: string; studentIds?: string[] }): Promise<Array<{ parentId: string; studentId: string; firstName: string }>>;
   getSystemNotificationsForAdmin(companyId: string): Promise<SystemNotification[]>;
   getSystemNotificationsForDriver(driverId: string, companyId: string): Promise<SystemNotification[]>;
-  getSystemNotificationsForParent(parentId: string, companyId: string): Promise<SystemNotification[]>;
+  getSystemNotificationsForParent(parentId: string, companyId: string | null, limit?: number): Promise<SystemNotification[]>;
+  isSystemNotificationVisibleToParent(id: string, parentId: string, companyId: string | null): Promise<boolean>;
+  markParentOwnSystemNotificationsRead(parentId: string, companyId: string | null): Promise<number>;
+  isParentLinkedToCompany(parentId: string, companyId: string): Promise<boolean>;
   getSystemNotificationById(id: string): Promise<SystemNotification | undefined>;
   markSystemNotificationAsRead(notificationId: string): Promise<SystemNotification | undefined>;
   deleteSystemNotification(id: string): Promise<boolean>;
   getUnreadNotificationCountForAdmin(companyId: string): Promise<number>;
   getUnreadNotificationCountForDriver(driverId: string, companyId: string): Promise<number>;
-  getUnreadNotificationCountForParent(parentId: string, companyId: string): Promise<number>;
+  getUnreadNotificationCountForParent(parentId: string, companyId: string | null): Promise<number>;
 
   // Bus journey tracking operations
   createBusJourney(busId: string, driverId: string, routeId: string, companyId: string, homebaseAddress?: string): Promise<BusJourney>;
@@ -367,6 +372,23 @@ export interface IStorage {
   getDeviceTokensForUser(userId: string): Promise<DeviceToken[]>;
   getDeviceTokensForUsers(userIds: string[]): Promise<DeviceToken[]>;
 }
+
+// Per-parent copy (Q88): a system notice addressed to ONE parent, i.e. the
+// per-parent bus-event rows (recipient_role 'parent' AND recipient_id set).
+// Admins never see, mark read or delete these. The SQL fragment and the JS
+// check below are the same rule; change both together.
+const perParentCopySql = and(eq(systemNotifications.recipientRole, 'parent'), isNotNull(systemNotifications.recipientId))!;
+export function isPerParentCopy(row: { recipientRole: string | null; recipientId: string | null }): boolean {
+  return row.recipientRole === 'parent' && row.recipientId != null;
+}
+
+// The parent's children (direct via students.parentId + linked via
+// parentChildLinks), deduped by student id, with their routes and companies.
+type ParentChildScope = {
+  children: Array<{ routeId: string | null; companyId: string | null }>;
+  routeIds: string[];
+  companyIds: string[];
+};
 
 export class DatabaseStorage implements IStorage {
   // User operations
@@ -1768,29 +1790,34 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(parentNotifications.createdAt));
   }
 
-  async getNotificationsForParent(parentId: string): Promise<ParentNotification[]> {
+  // Q88: the parent's children from both sources, one query each, deduped.
+  private async getParentChildScope(parentId: string): Promise<ParentChildScope> {
+    const cols = { id: students.id, routeId: students.routeId, companyId: students.companyId };
+    const [direct, linked] = await Promise.all([
+      db.select(cols).from(students).where(eq(students.parentId, parentId)),
+      db
+        .select(cols)
+        .from(parentChildLinks)
+        .innerJoin(students, eq(students.id, parentChildLinks.studentId))
+        .where(eq(parentChildLinks.parentId, parentId)),
+    ]);
+    const byId = new Map<string, { routeId: string | null; companyId: string | null }>();
+    for (const c of [...direct, ...linked]) {
+      if (!byId.has(c.id)) byId.set(c.id, { routeId: c.routeId, companyId: c.companyId });
+    }
+    const children = Array.from(byId.values());
+    const routeIds = Array.from(new Set(children.map(c => c.routeId).filter((x): x is string => !!x)));
+    const companyIds = Array.from(new Set(children.map(c => c.companyId).filter((x): x is string => !!x)));
+    return { children, routeIds, companyIds };
+  }
+
+  // Where-clause for the parent_notifications rows a parent may see. Shared by
+  // the list and the by-id visibility check so they can't drift. null = none.
+  private async parentNotificationWhere(parentId: string): Promise<SQL | null> {
     // Get the parent's companyId for multi-tenancy filtering
     const parent = await this.getUser(parentId);
     const parentCompanyId = parent?.companyId;
-    
-    // Get parent's children's routes (direct children via parentId)
-    const directStudents = await db
-      .select({ routeId: students.routeId, companyId: students.companyId })
-      .from(students)
-      .where(eq(students.parentId, parentId));
-    
-    // Get linked children's routes (via parentChildLinks table - link code system)
-    const linkedStudents = await this.getLinkedStudentsByParentId(parentId);
-    
-    // Combine and deduplicate route IDs from both sources
-    const routeIdsSet = new Set<string>();
-    for (const s of directStudents) {
-      if (s.routeId) routeIdsSet.add(s.routeId);
-    }
-    for (const s of linkedStudents) {
-      if (s.routeId) routeIdsSet.add(s.routeId);
-    }
-    const routeIds = Array.from(routeIdsSet);
+    const { routeIds, companyIds: childCompanyIds } = await this.getParentChildScope(parentId);
 
     // Visibility rule (all branches): a targeted row (targetParentId set) is
     // visible only to that parent, whatever its isGlobal / routeId. Global and
@@ -1801,84 +1828,89 @@ export class DatabaseStorage implements IStorage {
     // and linked children; route rows are already bounded by the children's
     // route ids.
     if (!parentCompanyId) {
-      const companyIdsSet = new Set<string>();
-      for (const s of directStudents) {
-        if (s.companyId) companyIdsSet.add(s.companyId);
-      }
-      for (const s of linkedStudents) {
-        if (s.companyId) companyIdsSet.add(s.companyId);
-      }
-      const childCompanyIds = Array.from(companyIdsSet);
-
-      const conditions = [];
+      const conditions: SQL[] = [];
       if (childCompanyIds.length > 0) {
         conditions.push(and(
           eq(parentNotifications.isGlobal, true),
           isNull(parentNotifications.targetParentId),
           inArray(parentNotifications.companyId, childCompanyIds)
-        ));
+        )!);
         conditions.push(and(
           eq(parentNotifications.targetParentId, parentId),
           inArray(parentNotifications.companyId, childCompanyIds)
-        ));
+        )!);
       }
       if (routeIds.length > 0) {
         conditions.push(and(
           inArray(parentNotifications.routeId, routeIds),
           isNull(parentNotifications.targetParentId)
-        ));
+        )!);
       }
-      if (conditions.length === 0) {
-        return [];
-      }
-      return await db
-        .select()
-        .from(parentNotifications)
-        .where(or(...conditions))
-        .orderBy(desc(parentNotifications.createdAt));
+      if (conditions.length === 0) return null;
+      return or(...conditions)!;
     }
-    
+
     if (routeIds.length === 0) {
       // Untargeted global notifications for this company, plus rows targeted at this parent
-      return await db
-        .select()
-        .from(parentNotifications)
-        .where(
+      return and(
+        eq(parentNotifications.companyId, parentCompanyId),
+        or(
           and(
-            eq(parentNotifications.companyId, parentCompanyId),
-            or(
-              and(
-                eq(parentNotifications.isGlobal, true),
-                isNull(parentNotifications.targetParentId)
-              ),
-              eq(parentNotifications.targetParentId, parentId)
-            )
-          )
+            eq(parentNotifications.isGlobal, true),
+            isNull(parentNotifications.targetParentId)
+          ),
+          eq(parentNotifications.targetParentId, parentId)
         )
-        .orderBy(desc(parentNotifications.createdAt));
+      )!;
     }
-    
+
     // Untargeted global or children's-route notifications for this company,
     // plus rows targeted at this parent
-    return await db
+    return and(
+      eq(parentNotifications.companyId, parentCompanyId),
+      or(
+        and(
+          or(
+            eq(parentNotifications.isGlobal, true),
+            inArray(parentNotifications.routeId, routeIds)
+          ),
+          isNull(parentNotifications.targetParentId)
+        ),
+        eq(parentNotifications.targetParentId, parentId)
+      )
+    )!;
+  }
+
+  async getNotificationsForParent(parentId: string, limit?: number): Promise<ParentNotification[]> {
+    const where = await this.parentNotificationWhere(parentId);
+    if (!where) return [];
+    const query = db
       .select()
       .from(parentNotifications)
-      .where(
-        and(
-          eq(parentNotifications.companyId, parentCompanyId),
-          or(
-            and(
-              or(
-                eq(parentNotifications.isGlobal, true),
-                inArray(parentNotifications.routeId, routeIds)
-              ),
-              isNull(parentNotifications.targetParentId)
-            ),
-            eq(parentNotifications.targetParentId, parentId)
-          )
-        )
-      )
+      .where(where)
       .orderBy(desc(parentNotifications.createdAt));
+    return limit ? await query.limit(limit) : await query;
+  }
+
+  async isParentNotificationVisibleToParent(id: string, parentId: string): Promise<boolean> {
+    const where = await this.parentNotificationWhere(parentId);
+    if (!where) return false;
+    const rows = await db
+      .select({ id: parentNotifications.id })
+      .from(parentNotifications)
+      .where(and(where, eq(parentNotifications.id, id)))
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  // One query: which of these parent_notifications ids this parent has read.
+  async getReadParentNotificationIds(parentId: string, notificationIds: string[]): Promise<Set<string>> {
+    if (notificationIds.length === 0) return new Set();
+    const rows = await db
+      .select({ notificationId: notificationReads.notificationId })
+      .from(notificationReads)
+      .where(and(eq(notificationReads.parentId, parentId), inArray(notificationReads.notificationId, notificationIds)));
+    return new Set(rows.map(r => r.notificationId));
   }
 
   async markNotificationRead(notificationId: string, parentId: string): Promise<NotificationRead> {
@@ -1895,15 +1927,15 @@ export class DatabaseStorage implements IStorage {
 
   async markAllNotificationsRead(parentId: string): Promise<void> {
     const notifications = await this.getNotificationsForParent(parentId);
-    for (const notification of notifications) {
-      await db
-        .insert(notificationReads)
-        .values({ notificationId: notification.id, parentId })
-        .onConflictDoUpdate({
-          target: [notificationReads.notificationId, notificationReads.parentId],
-          set: { readAt: new Date() }
-        });
-    }
+    if (notifications.length === 0) return;
+    // One bulk upsert instead of one insert per row.
+    await db
+      .insert(notificationReads)
+      .values(notifications.map(n => ({ notificationId: n.id, parentId })))
+      .onConflictDoUpdate({
+        target: [notificationReads.notificationId, notificationReads.parentId],
+        set: { readAt: new Date() }
+      });
   }
 
   async getUnreadCountForParent(parentId: string): Promise<number> {
@@ -2448,13 +2480,14 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDriversForParent(parentId: string, companyId?: string): Promise<User[]> {
-    const linkedStudents = await this.getLinkedStudentsByParentId(parentId);
-    if (linkedStudents.length === 0) return [];
+    // Q89: direct (students.parentId) and linked children, via the shared scope.
+    const { children } = await this.getParentChildScope(parentId);
+    if (children.length === 0) return [];
 
     // Filter students by company if specified
     const filteredStudents = companyId 
-      ? linkedStudents.filter(s => s.companyId === companyId)
-      : linkedStudents;
+      ? children.filter(s => s.companyId === companyId)
+      : children;
     if (filteredStudents.length === 0) return [];
 
     const routeIds = [...new Set(filteredStudents.map(s => s.routeId).filter(Boolean))];
@@ -2597,38 +2630,14 @@ export class DatabaseStorage implements IStorage {
     // companyId is required and always applied (no fail-open branch).
     if (!companyId) return [];
     const driverRoutes = await this.getRoutesByDriverId(driverId);
-    if (driverRoutes.length === 0) return [];
+    const routeIds = driverRoutes.filter(r => r.companyId === companyId).map(r => r.id);
+    if (routeIds.length === 0) return [];
 
-    const filteredRoutes = driverRoutes.filter(r => r.companyId === companyId);
-    if (filteredRoutes.length === 0) return [];
-
-    const routeIds = filteredRoutes.map(r => r.id);
-
-    const studentsOnRoutes = await db
-      .select()
-      .from(students)
-      .where(sql`${students.routeId} IN (${sql.join(routeIds.map(id => sql`${id}`), sql`, `)})`);
-
-    const filteredStudents = studentsOnRoutes.filter(s => s.companyId === companyId);
-    if (filteredStudents.length === 0) return [];
-
-    const studentIds = filteredStudents.map(s => s.id);
-
-    const parentLinks = await db
-      .select()
-      .from(parentChildLinks)
-      .where(sql`${parentChildLinks.studentId} IN (${sql.join(studentIds.map(id => sql`${id}`), sql`, `)})`);
-
-    if (parentLinks.length === 0) return [];
-
-    const parentIds = [...new Set(parentLinks.map(l => l.parentId))];
-
-    const parents = await db
-      .select()
-      .from(users)
-      .where(sql`${users.id} IN (${sql.join(parentIds.map(id => sql`${id}`), sql`, `)})`);
-
-    return parents.filter(p => p.companyId === companyId);
+    // Q89: the same parent fence as getParentRecipientsForRouteEvent.
+    const rows = await this.routeParentRows(companyId, routeIds);
+    const parentIds = Array.from(new Set(rows.map(r => r.parentId)));
+    if (parentIds.length === 0) return [];
+    return await db.select().from(users).where(inArray(users.id, parentIds));
   }
 
   // Student check-in operations (Bluetooth boarding)
@@ -2846,35 +2855,24 @@ export class DatabaseStorage implements IStorage {
     return await db.insert(systemNotifications).values(rows).returning();
   }
 
-  // Parent recipients for a driver route event (school arrival/departure, stop
-  // completed). Students must be in `companyId` and on `routeId` (optionally
-  // narrowed by schoolId / stopId / studentIds). Parents come from two sources:
-  //  1. parentChildLinks (link-code flow): users.role = 'parent' AND
-  //     (users.companyId = companyId OR users.companyId IS NULL). A null-company
-  //     parent is reachable only via a link to a student of this company; a
-  //     parent of another company is dropped.
-  //  2. students.parentId shortcut: users.role = 'parent' AND users.companyId =
-  //     companyId (strict; parentId may point at a non-parent such as an admin).
-  // Results are merged and deduped by parentId:studentId. Two queries, no
-  // per-student loop. Native push (plans/native-push.md T4) reuses this helper
-  // and adds its own device-token isActive fence.
-  async getParentRecipientsForRouteEvent(
+  // Q89: the two-source parent fence shared by getParentRecipientsForRouteEvent
+  // and getParentsForDriver (so they can't drift). Students must be in
+  // `companyId` and on one of `routeIds`; `extra` narrows them further.
+  //  1. parentChildLinks: role 'parent' AND (companyId = companyId OR NULL).
+  //  2. students.parentId: role 'parent' AND companyId = companyId (strict).
+  // Two queries, rows not deduped (callers dedupe by their own key).
+  private async routeParentRows(
     companyId: string,
-    routeId: string,
-    opts: { schoolId?: string; stopId?: string; studentIds?: string[] },
+    routeIds: string[],
+    extra?: SQL,
   ): Promise<Array<{ parentId: string; studentId: string; firstName: string }>> {
-    if (!companyId || !routeId) return [];
-    if (opts.studentIds && opts.studentIds.length === 0) return [];
-
+    if (!companyId || routeIds.length === 0) return [];
     const studentFilter = and(
       eq(students.companyId, companyId),
-      eq(students.routeId, routeId),
-      opts.schoolId ? eq(students.schoolId, opts.schoolId) : undefined,
-      opts.stopId ? eq(students.stopId, opts.stopId) : undefined,
-      opts.studentIds ? inArray(students.id, opts.studentIds) : undefined,
+      inArray(students.routeId, routeIds),
+      extra,
     );
     const cols = { parentId: users.id, studentId: students.id, firstName: students.firstName };
-
     const [linked, direct] = await Promise.all([
       db
         .select(cols)
@@ -2896,10 +2894,58 @@ export class DatabaseStorage implements IStorage {
           eq(users.companyId, companyId),
         )),
     ]);
+    return [...linked, ...direct];
+  }
+
+  // Q89 messaging: a linked parent (role 'parent', company = companyId or
+  // NULL) with ANY linked child in `companyId`. Same clause as the linked
+  // branch of routeParentRows. One EXISTS-style query, LIMIT 1.
+  async isParentLinkedToCompany(parentId: string, companyId: string): Promise<boolean> {
+    if (!parentId || !companyId) return false;
+    const rows = await db
+      .select({ one: sql`1` })
+      .from(parentChildLinks)
+      .innerJoin(students, eq(students.id, parentChildLinks.studentId))
+      .innerJoin(users, eq(users.id, parentChildLinks.parentId))
+      .where(and(
+        eq(parentChildLinks.parentId, parentId),
+        eq(students.companyId, companyId),
+        eq(users.role, 'parent'),
+        or(eq(users.companyId, companyId), isNull(users.companyId)),
+      ))
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  // Parent recipients for a driver route event (school arrival/departure, stop
+  // completed). Students must be in `companyId` and on `routeId` (optionally
+  // narrowed by schoolId / stopId / studentIds). Parents come from two sources:
+  //  1. parentChildLinks (link-code flow): users.role = 'parent' AND
+  //     (users.companyId = companyId OR users.companyId IS NULL). A null-company
+  //     parent is reachable only via a link to a student of this company; a
+  //     parent of another company is dropped.
+  //  2. students.parentId shortcut: users.role = 'parent' AND users.companyId =
+  //     companyId (strict; parentId may point at a non-parent such as an admin).
+  // Results are merged and deduped by parentId:studentId. Two queries, no
+  // per-student loop. Native push (plans/native-push.md T4) reuses this helper
+  // and adds its own device-token isActive fence.
+  async getParentRecipientsForRouteEvent(
+    companyId: string,
+    routeId: string,
+    opts: { schoolId?: string; stopId?: string; studentIds?: string[] },
+  ): Promise<Array<{ parentId: string; studentId: string; firstName: string }>> {
+    if (!companyId || !routeId) return [];
+    if (opts.studentIds && opts.studentIds.length === 0) return [];
+
+    const rows = await this.routeParentRows(companyId, [routeId], and(
+      opts.schoolId ? eq(students.schoolId, opts.schoolId) : undefined,
+      opts.stopId ? eq(students.stopId, opts.stopId) : undefined,
+      opts.studentIds ? inArray(students.id, opts.studentIds) : undefined,
+    ));
 
     const seen = new Set<string>();
     const out: Array<{ parentId: string; studentId: string; firstName: string }> = [];
-    for (const r of [...linked, ...direct]) {
+    for (const r of rows) {
       const key = `${r.parentId}:${r.studentId}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -2909,10 +2955,11 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getSystemNotificationsForAdmin(companyId: string): Promise<SystemNotification[]> {
+    // Q88: admins never see the per-parent bus-event copies.
     return await db
       .select()
       .from(systemNotifications)
-      .where(eq(systemNotifications.companyId, companyId))
+      .where(and(eq(systemNotifications.companyId, companyId), not(perParentCopySql)))
       .orderBy(desc(systemNotifications.createdAt));
   }
 
@@ -2938,47 +2985,84 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(systemNotifications.createdAt));
   }
 
-  async getSystemNotificationsForParent(parentId: string, companyId: string): Promise<SystemNotification[]> {
-    const parent = await this.getUser(parentId);
-    const routeIds: string[] = [];
-    
-    if (parent) {
-      const linkedStudents = await this.getLinkedStudentsByParentId(parentId);
-      for (const student of linkedStudents) {
-        if (student.routeId) {
-          routeIds.push(student.routeId);
-        }
-      }
+  // Q88: the ONE where-clause for the system notices a parent may see. The
+  // list, the count and the by-id check all build on it, so they can't drift.
+  // null = the parent can see nothing (never an unfiltered query).
+  //  - company: companyId if the parent has one; otherwise the companies of
+  //    their direct + linked children (SEC-20 fence; none → null).
+  //  - a row addressed to a recipient (recipientId set) is visible only to that
+  //    recipient. Broadcast rows (recipientId IS NULL) match by role
+  //    ('parent'/'all_parents') or by route ('route_parents' on one of the
+  //    parent's direct or linked children's routes).
+  private async parentSystemNoticeWhere(parentId: string, companyId: string | null): Promise<SQL | null> {
+    const scope = await this.getParentChildScope(parentId);
+    let companyCond: SQL;
+    // != null on purpose: a company string (even a bad '') is matched as is
+    // and never widened to the child-company fence.
+    if (companyId != null) {
+      companyCond = eq(systemNotifications.companyId, companyId);
+    } else if (scope.companyIds.length > 0) {
+      companyCond = inArray(systemNotifications.companyId, scope.companyIds);
+    } else {
+      return null;
     }
-
-    // Visibility rule: a row addressed to a specific recipient (recipientId set)
-    // is visible only to that recipient. Broadcast rows (recipientId IS NULL)
-    // match by role ('parent'/'all_parents') or by route ('route_parents' on one
-    // of the parent's linked children's routes).
-    return await db
-      .select()
-      .from(systemNotifications)
-      .where(
+    return and(
+      companyCond,
+      or(
+        eq(systemNotifications.recipientId, parentId),
         and(
-          eq(systemNotifications.companyId, companyId),
+          isNull(systemNotifications.recipientId),
           or(
-            eq(systemNotifications.recipientId, parentId),
-            and(
-              isNull(systemNotifications.recipientId),
-              or(
-                inArray(systemNotifications.recipientRole, ['parent', 'all_parents']),
-                routeIds.length > 0
-                  ? and(
-                      eq(systemNotifications.recipientRole, 'route_parents'),
-                      inArray(systemNotifications.routeId, routeIds)
-                    )
-                  : sql`false`
-              )
-            )
+            inArray(systemNotifications.recipientRole, ['parent', 'all_parents']),
+            scope.routeIds.length > 0
+              ? and(
+                  eq(systemNotifications.recipientRole, 'route_parents'),
+                  inArray(systemNotifications.routeId, scope.routeIds)
+                )
+              : sql`false`
           )
         )
       )
+    )!;
+  }
+
+  async getSystemNotificationsForParent(parentId: string, companyId: string | null, limit?: number): Promise<SystemNotification[]> {
+    const where = await this.parentSystemNoticeWhere(parentId, companyId);
+    if (!where) return [];
+    const query = db
+      .select()
+      .from(systemNotifications)
+      .where(where)
       .orderBy(desc(systemNotifications.createdAt));
+    return limit ? await query.limit(limit) : await query;
+  }
+
+  async isSystemNotificationVisibleToParent(id: string, parentId: string, companyId: string | null): Promise<boolean> {
+    const where = await this.parentSystemNoticeWhere(parentId, companyId);
+    if (!where) return false;
+    const rows = await db
+      .select({ id: systemNotifications.id })
+      .from(systemNotifications)
+      .where(and(where, eq(systemNotifications.id, id)))
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  // Q88 mark-all: only the parent's OWN per-parent rows, never broadcasts
+  // (their is_read is shared by every parent), only in the allowed companies.
+  async markParentOwnSystemNotificationsRead(parentId: string, companyId: string | null): Promise<number> {
+    const allowed = companyId != null ? [companyId] : (await this.getParentChildScope(parentId)).companyIds;
+    if (allowed.length === 0) return 0;
+    const result = await db
+      .update(systemNotifications)
+      .set({ isRead: true, readAt: new Date() })
+      .where(and(
+        eq(systemNotifications.recipientId, parentId),
+        eq(systemNotifications.recipientRole, 'parent'),
+        or(eq(systemNotifications.isRead, false), isNull(systemNotifications.isRead)),
+        inArray(systemNotifications.companyId, allowed),
+      ));
+    return result.rowCount ?? 0;
   }
 
   async getSystemNotificationById(id: string): Promise<SystemNotification | undefined> {
@@ -3007,7 +3091,8 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(systemNotifications.companyId, companyId),
-          eq(systemNotifications.isRead, false)
+          eq(systemNotifications.isRead, false),
+          not(perParentCopySql)
         )
       );
     return result[0]?.count ?? 0;
@@ -3036,40 +3121,14 @@ export class DatabaseStorage implements IStorage {
     return result[0]?.count ?? 0;
   }
 
-  async getUnreadNotificationCountForParent(parentId: string, companyId: string): Promise<number> {
-    const linkedStudents = await this.getLinkedStudentsByParentId(parentId);
-    const routeIds = linkedStudents
-      .filter(s => s.routeId)
-      .map(s => s.routeId as string);
-
-    // Visibility rule: a row addressed to a specific recipient (recipientId set)
-    // is visible only to that recipient. Broadcast rows (recipientId IS NULL)
-    // match by role ('parent'/'all_parents') or by route ('route_parents' on one
-    // of the parent's linked children's routes).
+  async getUnreadNotificationCountForParent(parentId: string, companyId: string | null): Promise<number> {
+    const where = await this.parentSystemNoticeWhere(parentId, companyId);
+    if (!where) return 0;
+    // is_read is nullable: NULL counts as unread.
     const result = await db
       .select({ count: sql<number>`count(*)::int` })
       .from(systemNotifications)
-      .where(
-        and(
-          eq(systemNotifications.companyId, companyId),
-          eq(systemNotifications.isRead, false),
-          or(
-            eq(systemNotifications.recipientId, parentId),
-            and(
-              isNull(systemNotifications.recipientId),
-              or(
-                inArray(systemNotifications.recipientRole, ['parent', 'all_parents']),
-                routeIds.length > 0
-                  ? and(
-                      eq(systemNotifications.recipientRole, 'route_parents'),
-                      inArray(systemNotifications.routeId, routeIds)
-                    )
-                  : sql`false`
-              )
-            )
-          )
-        )
-      );
+      .where(and(where, or(eq(systemNotifications.isRead, false), isNull(systemNotifications.isRead))));
     return result[0]?.count ?? 0;
   }
 
