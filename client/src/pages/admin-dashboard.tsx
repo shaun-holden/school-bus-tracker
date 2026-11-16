@@ -1615,32 +1615,24 @@ export default function AdminDashboard() {
   const editRouteMutation = useMutation({
     mutationFn: async (data: z.infer<typeof routeSchema> & { id: string }) => {
       const { id, ...updateData } = data;
-      
-      // Get the current route data to preserve estimatedDuration
-      const currentRoute = Array.isArray(routes) ? routes.find((r: any) => r.id === id) : null;
-      
-      // Transform the data to match the database schema
+      // Send only what the edit dialog edits (Q89). No driverId / isActive /
+      // estimatedDuration / schoolId: those would clear the driver, reactivate
+      // an inactive route, overwrite a fresher duration or touch the school.
       const routeData = {
         name: updateData.name,
         description: updateData.description || null,
-        busNumber: updateData.busNumber || null,
-        schoolId: updateData.schoolId || null,
-        driverId: null, // Will be assigned later
-        isActive: true,
-        estimatedDuration: currentRoute?.estimatedDuration || null, // Preserve existing duration
+        busNumber: !updateData.busNumber || updateData.busNumber === "unassigned" ? null : updateData.busNumber,
       };
-      console.log('Updating route:', id, routeData);
       return await apiRequest(`/api/routes/${id}`, "PATCH", routeData);
     },
-    onSuccess: (data, variables) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/routes"] });
       editRouteForm.reset();
       setIsEditRouteDialogOpen(false);
       setEditingRoute(null);
-      const action = variables.schoolId === "" ? "School removed from route" : "Route updated";
       toast({
         title: "Success",
-        description: `${action} successfully`,
+        description: "Route updated successfully",
       });
     },
     onError: (error) => {
@@ -5942,7 +5934,7 @@ export default function AdminDashboard() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Assigned Bus</FormLabel>
-                      <Select onValueChange={field.onChange} value={field.value}>
+                      <Select onValueChange={field.onChange} value={field.value || 'unassigned'}>
                         <FormControl>
                           <SelectTrigger data-testid="edit-select-bus-number">
                             <SelectValue placeholder="Select a bus" />

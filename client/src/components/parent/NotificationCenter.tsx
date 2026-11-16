@@ -26,6 +26,7 @@ interface Notification {
   isRead: boolean;
   createdAt: string;
   estimatedDelay?: number;
+  source?: 'parent' | 'system';
 }
 
 export function NotificationCenter() {
@@ -157,7 +158,7 @@ export function NotificationCenter() {
                 <div className="divide-y">
                   {displayNotifications.map((notification) => (
                     <div 
-                      key={notification.id}
+                      key={`${notification.source ?? 'parent'}:${notification.id}`}
                       className={`p-4 border-l-4 transition-all hover:shadow-sm ${getNotificationStyle(notification.type, notification.isRead)}`}
                     >
                       <div className="flex items-start justify-between gap-3">
