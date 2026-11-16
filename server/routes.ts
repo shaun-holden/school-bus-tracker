@@ -2214,12 +2214,30 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
+      // A master reports issues only while impersonating a school (Q77, Q-3).
+      if (isUnscopedMaster(user)) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
       const validatedData = insertVehicleIssueSchema.parse({ ...req.body, driverId: userId });
+      if (!hasId(validatedData.busId)) {
+        return res.status(400).json({ message: "busId is required" });
+      }
+      // Tenant check on body FK before any write (CLAUDE.md cross-tenant IDs; Q77)
+      const bus = await storage.getBusById(validatedData.busId);
+      if (!bus || isOutsideCallerTenant(user, bus.companyId)) {
+        return res.status(404).json({ message: "Bus not found" });
+      }
       // Force tenant scope from session; never trust client-supplied companyId.
       validatedData.companyId = user.companyId ?? null;
+      // A new issue is never saved as already resolved.
+      validatedData.isResolved = false;
       const issue = await storage.createVehicleIssue(validatedData);
       res.json(issue);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        return res.status(400).json({ message: "Invalid vehicle issue", errors: error.errors });
+      }
       console.error("Error creating vehicle issue:", error);
       res.status(500).json({ message: "Failed to create vehicle issue" });
     }
