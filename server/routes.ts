@@ -4643,6 +4643,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only parents and drivers can access messaging" });
       }
 
+      // Q20: a master (impersonating or not) has no messaging contacts; sending is
+      // refused (Q62). Empty on purpose, not a fall-through of the role branches below.
+      if (isMasterAdminUser(user)) {
+        return res.json([]);
+      }
+
       // Check if parent portal is enabled for parent users
       let effectiveCompanyId = user.companyId;
       if (user.role === 'parent') {
