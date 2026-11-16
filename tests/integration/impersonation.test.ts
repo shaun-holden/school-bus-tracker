@@ -10,6 +10,8 @@
 // Each title names the clause whose removal (or revert) turns it red.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { and, eq } from 'drizzle-orm';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { users, students, buses, routes, schools, parentChildLinks, linkCodes, directMessages } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 
@@ -196,6 +198,7 @@ describe('B2. POST /api/link-child refuses any master admin', () => {
 
 describe('6. messaging (Q19): master only while impersonating', () => {
   const MSG_CLAUSE = 'canAccessMessaging allows master_admin without the impersonation flag';
+  const Q20_CLAUSE = 'the `if (isMasterAdminUser(user)) { return res.json([]); }` early return';
 
   describe('non-impersonating master → 403 on all 4 gated endpoints', () => {
     it(`GET /api/messages/contacts → 403 (red if ${MSG_CLAUSE})`, async () => {
@@ -228,6 +231,23 @@ describe('6. messaging (Q19): master only while impersonating', () => {
       const res = await impersonator.get('/api/messages/contacts');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
+    });
+
+    it(`GET /api/messages/contacts → 200 [] (Q20; red if ${Q20_CLAUSE} is removed from GET /api/messages/contacts)`, async () => {
+      // Without the clause a master_admin happens to fall through the
+      // parent/driver branches to [] too, so the HTTP check alone can't tell.
+      // The source check pins the deliberate early return ahead of those branches.
+      const res = await impersonator.get('/api/messages/contacts');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([]);
+
+      const src = readFileSync(resolve(__dirname, '..', '..', 'server/routes.ts'), 'utf8');
+      const start = src.indexOf("app.get('/api/messages/contacts'");
+      expect(start).toBeGreaterThanOrEqual(0);
+      const handler = src.slice(start, src.indexOf('app.get(', start + 1));
+      const clause = handler.search(/if \(isMasterAdminUser\(user\)\) \{\s*return res\.json\(\[\]\);\s*\}/);
+      expect(clause, `${Q20_CLAUSE} not found in the contacts handler`).toBeGreaterThan(handler.indexOf('canAccessMessaging(user)'));
+      expect(clause).toBeLessThan(handler.indexOf("user.role === 'parent'"));
     });
 
     it('GET /api/messages/conversations → 200', async () => {
