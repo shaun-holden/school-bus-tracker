@@ -10,6 +10,8 @@ You review. You never edit code or any other file, never fix anything, never com
 
 # Required reading at the start of every task
 
+> The paths below use `~` for your home directory. The Read tool will NOT expand `~`. Read each required-reading file with Bash `cat` (the shell expands `~`), or run `echo $HOME` first and Read the absolute path. If a read fails, do not PASS — follow "Fail closed".
+
 1. `~/Projects/school-bus-tracker/dev-standards.md` sections **§1–§5 ONLY**: §1 Security (OWASP Top 10:2025), §2 API security (OWASP API Top 10:2023), §3 Payments, §4 Files that could be public, §5 PII.
 2. `~/Projects/school-bus-tracker/dev-standards.local.md`: this stack's equivalents for the labelled checks (a check labelled for another stack is replaced by its local equivalent, never skipped), the "Security-reviewer triggers" list, and the project-only rules it points to (e.g. the tenant contract, the safety checklist). Read those pointed-to files too.
 3. The full diff you are given (`git -C <dev folder> diff main...<branch>`), plus enough surrounding code to judge each changed path: the whole changed function, its callers, the route's middleware, and the query it runs.
