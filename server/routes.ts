@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
+import { storage, isPerParentCopy } from "./storage";
 import { setupCustomAuth, isAuthenticated, authLimiter, registerLimiter } from "./customAuth";
 import { 
   insertStudentSchema,
@@ -76,6 +76,10 @@ const reorderRouteSchoolBodySchema = z.object({
 });
 
 // POST /api/messages body (Q65).
+// Q88: the most items GET /api/parent-notifications returns (each source is
+// also capped at this before the merge). Counts and mark-all are uncapped.
+const PARENT_NOTICE_LIST_CAP = 200;
+
 const sendMessageBodySchema = z.object({
   recipientId: z.string().min(1),
   content: z.string().min(1).max(5000),
@@ -1658,6 +1662,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       try {
         // Partial update; companyId is not accepted (updateRouteSchema omits it)
         const validatedData = updateRouteSchema.parse(req.body);
+        // Q89: old app builds send driverId: null on every edit; "" is the explicit unassign.
+        if (req.body?.driverId === null) delete validatedData.driverId;
 
         // FK ids must belong to the route's company. Checked BEFORE any school
         // data is copied into a stop. schoolId === "" still means "remove".
@@ -3726,8 +3732,29 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
-      const notifications = await storage.getNotificationsForParent(userId);
-      res.json(notifications);
+      // Q88: parent_notifications plus the parent's system notices (bus
+      // events), newest first, capped. System rows only for role 'parent'.
+      const [parentRows, systemRows] = await Promise.all([
+        storage.getNotificationsForParent(userId, PARENT_NOTICE_LIST_CAP),
+        user.role === 'parent'
+          ? storage.getSystemNotificationsForParent(userId, user.companyId ?? null, PARENT_NOTICE_LIST_CAP)
+          : Promise.resolve([]),
+      ]);
+      const ts = (x: { createdAt: Date | string | null }) => (x.createdAt ? new Date(x.createdAt).getTime() : 0);
+      const merged: Array<Record<string, any> & { id: string; source: 'parent' | 'system'; isRead: boolean; createdAt: Date | string | null }> = [
+        ...parentRows.map(n => ({ ...n, source: 'parent' as const, isRead: false })),
+        ...systemRows.map(n => ({ ...n, source: 'system' as const, isRead: n.isRead === true })),
+      ];
+      merged.sort((a, b) => ts(b) - ts(a));
+      const page = merged.slice(0, PARENT_NOTICE_LIST_CAP);
+      const readIds = await storage.getReadParentNotificationIds(
+        userId,
+        page.filter(n => n.source === 'parent').map(n => n.id),
+      );
+      for (const n of page) {
+        if (n.source === 'parent') n.isRead = readIds.has(n.id);
+      }
+      res.json(page);
     } catch (error) {
       console.error("Error fetching parent notifications:", error);
       res.status(500).json({ message: "Failed to fetch notifications" });
@@ -3747,8 +3774,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
-      const unreadCount = await storage.getUnreadCountForParent(userId);
-      res.json({ unreadCount });
+      // Q88: parent_notifications unread + system notices unread (role 'parent' only).
+      const [parentUnread, systemUnread] = await Promise.all([
+        storage.getUnreadCountForParent(userId),
+        user.role === 'parent'
+          ? storage.getUnreadNotificationCountForParent(userId, user.companyId ?? null)
+          : Promise.resolve(0),
+      ]);
+      res.json({ unreadCount: parentUnread + systemUnread });
     } catch (error) {
       console.error("Error fetching unread count:", error);
       res.status(500).json({ message: "Failed to fetch unread count" });
@@ -3935,8 +3968,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
-      const read = await storage.markNotificationRead(id, userId);
-      res.json(read);
+      // Q88: either kind of notice, only if the caller can see it; else 404.
+      if (await storage.isParentNotificationVisibleToParent(id, userId)) {
+        const read = await storage.markNotificationRead(id, userId);
+        return res.json(read);
+      }
+      if (user.role === 'parent' && await storage.isSystemNotificationVisibleToParent(id, userId, user.companyId ?? null)) {
+        const updated = await storage.markSystemNotificationAsRead(id);
+        return res.json(updated);
+      }
+      return res.status(404).json({ message: "Notification not found" });
     } catch (error) {
       console.error("Error marking notification as read:", error);
       res.status(500).json({ message: "Failed to mark notification as read" });
@@ -3957,6 +3998,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       await storage.markAllNotificationsRead(userId);
+      // Q88: the parent's own per-parent system rows too; never broadcasts.
+      if (user.role === 'parent') {
+        await storage.markParentOwnSystemNotificationsRead(userId, user.companyId ?? null);
+      }
       res.json({ success: true });
     } catch (error) {
       console.error("Error marking all notifications as read:", error);
@@ -4147,7 +4192,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (user.role === 'driver') {
         notifications = await storage.getSystemNotificationsForDriver(userId, companyId);
       } else if (user.role === 'parent') {
-        notifications = await storage.getSystemNotificationsForParent(userId, companyId);
+        notifications = await storage.getSystemNotificationsForParent(userId, user.companyId ?? null);
       }
 
       res.json(notifications);
@@ -4170,21 +4215,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Notification not found" });
       }
       const { id } = req.params;
-      // CD-2 / T-1 (Q74): the row must be in the caller's company and visible
-      // to them by the same rules as GET /api/system-notifications (the list
-      // reads are reused, so the rules can't drift). Everything else is 404.
+      // CD-2 / T-1 (Q74, Q88): everything not visible is the same 404.
+      //  - parent: the parent visibility where-clause decides (it carries its
+      //    own company fence, so a NULL-company parent isn't refused by the
+      //    tenant check before it).
+      //  - admin roles: in the caller's company, and not a per-parent copy.
+      //  - driver: in the caller's company, and in the driver list.
       const row = await storage.getSystemNotificationById(id);
-      if (!row || isOutsideCallerTenant(user, row.companyId)) {
+      if (!row) {
         return res.status(404).json({ message: "Notification not found" });
       }
-      const companyId = user.companyId || '';
       let visible = false;
-      if (isAdminRole(user.role)) {
-        visible = true;
+      if (user.role === 'parent') {
+        visible = await storage.isSystemNotificationVisibleToParent(id, userId, user.companyId ?? null);
+      } else if (isOutsideCallerTenant(user, row.companyId)) {
+        visible = false;
+      } else if (isAdminRole(user.role)) {
+        visible = !isPerParentCopy(row);
       } else if (user.role === 'driver') {
+        const companyId = user.companyId || '';
         visible = (await storage.getSystemNotificationsForDriver(userId, companyId)).some(n => n.id === id);
-      } else if (user.role === 'parent') {
-        visible = (await storage.getSystemNotificationsForParent(userId, companyId)).some(n => n.id === id);
       }
       if (!visible) {
         return res.status(404).json({ message: "Notification not found" });
@@ -4214,9 +4264,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized" });
       }
       const { id } = req.params;
-      // CD-2 / T-1 (Q74): record-by-id tenant check.
+      // CD-2 / T-1 (Q74): record-by-id tenant check. Q88: admins can't delete
+      // a per-parent copy (same 404; the row stays).
       const row = await storage.getSystemNotificationById(id);
       if (!row || isOutsideCallerTenant(user, row.companyId)) {
+        return res.status(404).json({ message: "Notification not found" });
+      }
+      if (isPerParentCopy(row)) {
         return res.status(404).json({ message: "Notification not found" });
       }
       const deleted = await storage.deleteSystemNotification(id);
@@ -4251,7 +4305,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else if (user.role === 'driver') {
         count = await storage.getUnreadNotificationCountForDriver(userId, companyId);
       } else if (user.role === 'parent') {
-        count = await storage.getUnreadNotificationCountForParent(userId, companyId);
+        count = await storage.getUnreadNotificationCountForParent(userId, user.companyId ?? null);
       }
 
       res.json({ count });
@@ -4762,18 +4816,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Recipient not found" });
       }
       
-      // Infer recipient's effective company if they're a parent without direct companyId
-      let recipientEffectiveCompanyId = recipient.companyId;
-      if (recipient.role === 'parent' && !recipientEffectiveCompanyId) {
-        const recipientLinkedStudents = await storage.getLinkedStudentsByParentId(recipientId);
-        if (recipientLinkedStudents.length > 0 && recipientLinkedStudents[0].companyId) {
-          recipientEffectiveCompanyId = recipientLinkedStudents[0].companyId;
-        }
-      }
-      
       // Same response as a missing recipient: never leak that the user exists
       // in another tenant. A null effective company matches nothing.
-      if (!effectiveCompanyId || recipientEffectiveCompanyId !== effectiveCompanyId) {
+      if (!effectiveCompanyId) {
+        return res.status(404).json({ message: "Recipient not found" });
+      }
+      // Q89: a NULL-company parent recipient is in the sender's company when ANY
+      // linked child is a student of it (same clause as the contact list);
+      // everyone else must have the sender's company.
+      const recipientInCompany = recipient.role === 'parent' && !recipient.companyId
+        ? await storage.isParentLinkedToCompany(recipientId, effectiveCompanyId)
+        : recipient.companyId === effectiveCompanyId;
+      if (!recipientInCompany) {
         return res.status(404).json({ message: "Recipient not found" });
       }
 
