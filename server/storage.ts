@@ -210,7 +210,8 @@ export interface IStorage {
   countTodaysVehicleIssuesForDriver(driverId: string, companyId: string, timezone?: string): Promise<number>;
   
   // Driver task operations
-  getTasksByDriverId(driverId: string): Promise<DriverTask[]>;
+  getTasksByDriverId(driverId: string, companyId: string): Promise<DriverTask[]>;
+  getDriverTaskById(id: string): Promise<DriverTask | undefined>;
   getAllActiveTasks(companyId?: string): Promise<DriverTask[]>;
   createDriverTask(task: InsertDriverTask): Promise<DriverTask>;
   updateTaskCompletion(id: string, isCompleted: boolean): Promise<DriverTask | undefined>;
@@ -1246,12 +1247,17 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Driver task operations
-  async getTasksByDriverId(driverId: string): Promise<DriverTask[]> {
+  async getTasksByDriverId(driverId: string, companyId: string): Promise<DriverTask[]> {
     return await db
       .select()
       .from(driverTasks)
-      .where(eq(driverTasks.assignedToId, driverId))
+      .where(and(eq(driverTasks.assignedToId, driverId), eq(driverTasks.companyId, companyId)))
       .orderBy(desc(driverTasks.createdAt));
+  }
+
+  async getDriverTaskById(id: string): Promise<DriverTask | undefined> {
+    const [task] = await db.select().from(driverTasks).where(eq(driverTasks.id, id));
+    return task;
   }
 
   async getAllActiveTasks(companyId?: string): Promise<DriverTask[]> {
