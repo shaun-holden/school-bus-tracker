@@ -16,11 +16,14 @@ build/
 
 # Android signing secrets (never commit)
 android/keystore.properties
+**/keystore.properties
 *.jks
 *.keystore
 # Firebase client config (push T3): local only, never commit
 android/app/google-services.json
 ios/App/App/GoogleService-Info.plist
+**/google-services.json
+**/GoogleService-Info.plist
 # Google Play service account key
 fastlane/play-store-*.json
 *.aab
