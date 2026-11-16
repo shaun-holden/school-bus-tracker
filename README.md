@@ -11,7 +11,7 @@ A React + Express + Postgres app. Each school or camp is a tenant (a "company"),
 2. Settings: create a `.env` file in the repo root (gitignored; the server loads it with `dotenv`) and set the variables listed under "Configuration". Locally you need at least `DATABASE_URL` and `PORT=5001` (the server defaults to 5000). `SESSION_SECRET` may be left out only when `NODE_ENV` is `development` or `test`. Never commit real values.
 3. Install and create the schema: `npm install`, then `npm run db:push` (applies `shared/schema.ts` through Drizzle Kit; needs `DATABASE_URL`).
 4. Start: `npm run dev` → http://localhost:5001. Vite is mounted inside the Express server in dev, so there is one process and one port.
-5. Optional, first login: `npx tsx scripts/seed-master-admin.ts` creates a master admin from `MASTER_ADMIN_EMAIL` / `MASTER_ADMIN_PASSWORD` (export them, with `DATABASE_URL`, in your shell).
+5. Optional, first login: when `MASTER_ADMIN_EMAIL` and `MASTER_ADMIN_PASSWORD` are set, the server runs the master-admin seed at boot; it creates that account if it's missing and never promotes an existing one.
 
 Production build: `npm run build` (client to `dist/public`, server bundled to `dist/index.js`), then `npm start`.
 
