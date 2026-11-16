@@ -2689,16 +2689,7 @@ export default function AdminDashboard() {
   const maintenanceBuses = Array.isArray(buses) ? buses.filter((bus: any) => bus.status === 'maintenance') : [];
   const availableBuses = idleBuses.length;
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="text-lg">Loading...</div>
-      </div>
-    );
-  }
-
-  console.log('Admin Dashboard - Buses data:', buses?.length || 0, 'buses loaded');
-  
+  // Hooks must run on every render, so they stay above the loading return (Q32).
   const isImpersonating = !!(user as any)?._masterAdminImpersonating;
 
   const stopImpersonatingMutation = useMutation({
@@ -2709,8 +2700,17 @@ export default function AdminDashboard() {
     },
   });
 
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-lg">Loading...</div>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-background safe-area-page-below-nav">
+      <Navigation />
       {isImpersonating && (
         <div className="bg-orange-500 text-white px-4 py-2 flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -2731,7 +2731,6 @@ export default function AdminDashboard() {
           </Button>
         </div>
       )}
-      <Navigation />
       
       {/* Header */}
       <div className="bg-primary text-white py-6">

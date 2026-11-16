@@ -89,3 +89,23 @@ describe('role labels use formatRole (Q31)', () => {
     expect(src).not.toMatch(/capitalize">\{\(user as any\)\.role\}/);
   });
 });
+
+describe('impersonation banner sits below Navigation (Q32)', () => {
+  const src = page('admin-dashboard');
+
+  it('renders <Navigation /> before the single "Master Admin View" banner (red if the banner moves back above the nav)', () => {
+    expect(src.split('Master Admin View').length - 1).toBe(1);
+    const nav = src.indexOf('<Navigation />');
+    const banner = src.indexOf('Master Admin View');
+    expect(nav).toBeGreaterThan(-1);
+    expect(nav).toBeLessThan(banner);
+  });
+
+  it('runs the stop-impersonating useMutation before the loading early return (hook order)', () => {
+    const mutation = src.indexOf('const stopImpersonatingMutation = useMutation(');
+    const loadingReturn = src.indexOf('if (isLoading) {');
+    expect(mutation).toBeGreaterThan(-1);
+    expect(loadingReturn).toBeGreaterThan(-1);
+    expect(mutation).toBeLessThan(loadingReturn);
+  });
+});
