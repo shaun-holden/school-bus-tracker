@@ -8,7 +8,6 @@ import {
   updateRouteSchema,
   insertRouteStopSchema,
   insertSchoolSchema,
-  insertAttendanceSchema,
   insertBusSchema,
   insertVehicleIssueSchema,
   insertDriverTaskSchema,
@@ -1908,26 +1907,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  app.post('/api/attendance', isAuthenticated, async (req: any, res) => {
-    try {
-      const userId = req.user?.id;
-      const user = await getCaller(req);
-      
-      if (!user || !isDriverRole(user.role)) {
-        return res.status(403).json({ message: "Unauthorized" });
-      }
-
-      const validatedData = insertAttendanceSchema.parse(req.body);
-      // Force tenant scope from session; never trust client-supplied companyId.
-      validatedData.companyId = user.companyId ?? null;
-      const attendance = await storage.createAttendance(validatedData);
-      res.json(attendance);
-    } catch (error) {
-      console.error("Error creating attendance:", error);
-      res.status(500).json({ message: "Failed to create attendance" });
-    }
-  });
-
   // Buses
   app.get('/api/buses', isAuthenticated, async (req: any, res) => {
     try {
@@ -1991,7 +1970,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Validate with Zod schema
       let validatedData;
       try {
-        validatedData = insertBusSchema.parse(req.body);
+        // A new bus never takes a route from the body; it gets one at driver check-in.
+        validatedData = insertBusSchema.omit({ currentRouteId: true }).parse(req.body);
         // Force tenant scope from session; never trust client-supplied companyId.
         validatedData.companyId = user.companyId ?? null;
         console.log('Validated data:', JSON.stringify(validatedData, null, 2));
@@ -2002,6 +1982,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
           errors: zodError.errors,
           receivedData: req.body 
         });
+      }
+
+      // A new bus must never point at another school's driver (Q78 SC-3).
+      // Company check first, so the duplicate 400 can't reveal another school's bus number.
+      if (hasId(validatedData.driverId)) {
+        if (!(await isDriverInCompany(validatedData.driverId, validatedData.companyId))) {
+          return res.status(404).json({ message: "Driver not found" });
+        }
+        const driverExistingBus = await storage.getBusByDriverId(validatedData.driverId);
+        if (driverExistingBus) {
+          return res.status(400).json({
+            message: `Driver is already assigned to Bus #${driverExistingBus.busNumber}. Please unassign from that bus first.`,
+            conflictingBus: {
+              id: driverExistingBus.id,
+              busNumber: driverExistingBus.busNumber
+            }
+          });
+        }
       }
       
       // Create the bus with comprehensive error handling
@@ -2255,7 +2253,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let tasks;
       if (user.role === 'driver') {
-        tasks = await storage.getTasksByDriverId(userId);
+        if (!user.companyId) return res.json([]);
+        tasks = await storage.getTasksByDriverId(userId, user.companyId);
       } else if (isAdminRole(user.role)) {
         const scope = companyScope(user);
         if (scope === null) return res.json([]);
@@ -2288,9 +2287,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const validatedData = insertDriverTaskSchema.parse(body);
       // Force tenant scope from session; never trust client-supplied companyId.
       validatedData.companyId = user.companyId ?? null;
+      // A new task is never saved as already completed.
+      validatedData.isCompleted = false;
+      // Tenant check on body FK before any write (Q78 SC-1).
+      if (!(await isDriverInCompany(validatedData.assignedToId, validatedData.companyId))) {
+        return res.status(404).json({ message: "Driver not found" });
+      }
       const task = await storage.createDriverTask(validatedData);
       res.json(task);
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        // Log only the issue paths, never the submitted values
+        console.error("Invalid driver task, fields:", error.errors.map(e => e.path.join('.')));
+        return res.status(400).json({ message: "Invalid driver task", errors: error.errors });
+      }
       console.error("Error creating driver task:", error);
       res.status(500).json({ message: "Failed to create driver task" });
     }
@@ -2301,15 +2311,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const userId = req.user?.id;
       const user = await getCaller(req);
       
-      if (!user || !isDriverRole(user.role)) {
+      if (!user || !(isDriverRole(user.role) || isAdminRole(user.role))) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+      // Masters act on tasks only while impersonating a school (Q78, DeShaun).
+      if (isUnscopedMaster(user)) {
         return res.status(403).json({ message: "Unauthorized" });
       }
 
-      const { taskId } = req.params;
-      const { isCompleted } = req.body;
+      // The live "Complete" button sends {}: a missing isCompleted means true.
+      const raw = req.body?.isCompleted;
+      if (raw !== undefined && typeof raw !== 'boolean') {
+        return res.status(400).json({ message: "isCompleted must be true or false" });
+      }
+      const isCompleted: boolean = raw ?? true;
 
-      const task = await storage.updateTaskCompletion(taskId, isCompleted);
-      res.json(task);
+      // Tenant + owner check before the write (Q78 SC-2)
+      const task = await storage.getDriverTaskById(req.params.taskId);
+      const isAssignee = !!task && task.assignedToId === user.id;
+      const isSchoolAdmin = !!task && isAdminRole(user.role) && !isOutsideCallerTenant(user, task.companyId);
+      if (!task || (!isAssignee && !isSchoolAdmin)) {
+        return res.status(404).json({ message: "Task not found" });
+      }
+
+      const updated = await storage.updateTaskCompletion(task.id, isCompleted);
+      res.json(updated);
     } catch (error) {
       console.error("Error updating task completion:", error);
       res.status(500).json({ message: "Failed to update task completion" });
