@@ -4,12 +4,13 @@ import path from "path";
 import { createApp } from "./app";
 import { setupVite, serveStatic, log } from "./vite";
 import { seedMasterAdmin } from '../scripts/seed-master-admin';
+import { pgError } from './dbErrors';
 
 // Re-exported for compatibility; the list lives in ./origins.
 export { ALLOWED_ORIGINS } from './origins';
 
 (async () => {
-  await seedMasterAdmin().catch(err => console.error('Master admin seed error:', err));
+  await seedMasterAdmin().catch(err => console.error('Master admin seed error:', pgError(err)?.code, err instanceof Error ? err.name : typeof err));
 
   // Middleware, routes, the /api 404 and the error handler, in production order.
   const { app, server } = await createApp();

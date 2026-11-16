@@ -14,6 +14,7 @@ import { User, users, companies } from "@shared/schema";
 import { sessionDecision, isCompanyGateAllowed } from "./authGate";
 import { sendPasswordResetEmail } from "./emailService";
 import { pgError } from "./dbErrors";
+import { appBaseUrl } from "./appUrl";
 
 // Rate limiters for auth endpoints
 
@@ -495,7 +496,7 @@ export async function setupCustomAuth(app: Express) {
 
       await storage.setPasswordResetToken(user.id, hashedToken, expiresAt);
 
-      const baseUrl = `${req.protocol}://${req.get('host')}`;
+      const baseUrl = appBaseUrl();
       const resetUrl = `${baseUrl}/reset-password?token=${resetToken}`;
 
       const result = await sendPasswordResetEmail(email, resetToken, resetUrl);
