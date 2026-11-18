@@ -7,7 +7,7 @@
 # One-time prerequisites on the Mac:
 #   - CocoaPods installed (`brew install cocoapods`) — Capacitor's `cap sync` needs it
 #   - The "App" scheme shared in Xcode (Product > Scheme > Manage Schemes > check "Shared")
-#   - Signed in to Xcode / distribution cert in the keychain (automatic signing)
+#   - ASC_KEY_* env set (below); xcodebuild uses the key for signing — no Xcode sign-in needed
 #
 # Usage:
 #   npm run build && npx cap sync ios      # build the web bundle + sync it into iOS
@@ -19,6 +19,8 @@
 #   - PLAY_STORE_JSON_KEY env → path to the Google Play service-account JSON
 #   - the app's FIRST .aab must be uploaded manually in the Play Console; after
 #     that this lane automates internal-testing releases.
+
+require "shellwords"
 
 default_platform(:ios)
 
@@ -125,11 +127,21 @@ platform :ios do
       )
     end
 
+    # Let xcodebuild authenticate to App Store Connect with the same ASC key the lane
+    # already uses, so -allowProvisioningUpdates can fetch/create the distribution cert
+    # and app-store profile headlessly (no signed-in Xcode account). Only the .p8 PATH
+    # and the key/issuer IDs reach the command line — never the key bytes.
+    asc_xcodebuild_auth =
+      "-authenticationKeyPath #{ENV.fetch("ASC_KEY_FILEPATH").shellescape} " \
+      "-authenticationKeyID #{ENV.fetch("ASC_KEY_ID").shellescape} " \
+      "-authenticationKeyIssuerID #{ENV.fetch("ASC_ISSUER_ID").shellescape}"
+
     build_app(
       workspace: WORKSPACE,
       scheme: SCHEME,
       export_method: "app-store",
-      xcargs: "-allowProvisioningUpdates",
+      xcargs: "-allowProvisioningUpdates #{asc_xcodebuild_auth}",
+      export_xcargs: "-allowProvisioningUpdates #{asc_xcodebuild_auth}",
       output_directory: "build",
       clean: true
     )
