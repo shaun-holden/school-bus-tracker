@@ -185,14 +185,15 @@ platform :android do
         )
         existing_codes.concat(Array(codes))
       rescue => e
-        msg = e.message.to_s
-        if msg =~ /track/i && msg =~ /(not found|does not exist|no .*release|empty|no releases)/i
-          UI.message("Play track '#{t}' has no releases yet — skipping.")
-        else
-          UI.user_error!("Failed to read Play track '#{t}' versionCodes: #{msg}. " \
-            "Refusing to guess a versionCode. Check PLAY_STORE_JSON_KEY has read access " \
-            "and the Google Play Android Developer API is enabled.")
-        end
+        # supply returns [] for a missing/empty track (no raise), so any exception
+        # here is a real failure (auth, permission, network, bad key). Never skip it
+        # and never guess a versionCode. Print the class, not the raw message, which
+        # could echo key-file bytes from a JSON parse error.
+        UI.user_error!(
+          "Failed to read Play track '#{t}' versionCodes (#{e.class}). " \
+          "Refusing to guess a versionCode. Check PLAY_STORE_JSON_KEY has read access " \
+          "and the Google Play Android Developer API is enabled."
+        )
       end
     end
     if existing_codes.empty?
