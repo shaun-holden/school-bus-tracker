@@ -141,7 +141,6 @@ platform :ios do
       scheme: SCHEME,
       export_method: "app-store",
       xcargs: "-allowProvisioningUpdates #{asc_xcodebuild_auth}",
-      export_xcargs: "-allowProvisioningUpdates #{asc_xcodebuild_auth}",
       output_directory: "build",
       clean: true
     )
