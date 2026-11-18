@@ -221,6 +221,7 @@ platform :android do
     # The very first upload for a brand-new app must be done manually in the Play
     # Console; this lane automates every internal-testing release after that.
     upload_to_play_store(
+      package_name: APP_ID,
       track: "internal",
       aab: "android/app/build/outputs/bundle/release/app-release.aab",
       json_key: ENV.fetch("PLAY_STORE_JSON_KEY"),
