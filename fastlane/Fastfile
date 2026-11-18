@@ -165,12 +165,55 @@ platform :android do
     # (see android/keystore.properties.example).
     #
     # NOTE: Google Play requires a unique, incrementing versionCode per upload.
-    # The first release uses versionCode 1 (android/app/build.gradle); bump it
-    # for each subsequent release until we wire auto-increment off the Play track.
+    # This lane sets it automatically: it reads the highest versionCode already on
+    # the Play tracks below and builds max + 1, passed to Gradle as
+    # -PversionCodeOverride. A plain ./gradlew build (no override) falls back to
+    # versionCode 1 in android/app/build.gradle, which Play rejects as already used,
+    # so only this lane should produce an upload.
+
+    # Resolve the next versionCode from the highest already on Google Play, so we
+    # never hand-bump android/app/build.gradle and never reuse a versionCode.
+    play_json_key = ENV.fetch("PLAY_STORE_JSON_KEY")
+    tracks_to_check = ["production", "internal", "beta", "alpha"]
+    existing_codes = []
+    tracks_to_check.each do |t|
+      begin
+        codes = google_play_track_version_codes(
+          package_name: APP_ID,
+          track: t,
+          json_key: play_json_key
+        )
+        existing_codes.concat(Array(codes))
+      rescue => e
+        msg = e.message.to_s
+        if msg =~ /track/i && msg =~ /(not found|does not exist|no .*release|empty|no releases)/i
+          UI.message("Play track '#{t}' has no releases yet — skipping.")
+        else
+          UI.user_error!("Failed to read Play track '#{t}' versionCodes: #{msg}. " \
+            "Refusing to guess a versionCode. Check PLAY_STORE_JSON_KEY has read access " \
+            "and the Google Play Android Developer API is enabled.")
+        end
+      end
+    end
+    if existing_codes.empty?
+      UI.user_error!(
+        "Could not read any existing versionCode from Google Play " \
+        "(tracks queried: #{tracks_to_check.join(', ')}). Refusing to guess a versionCode — " \
+        "an empty result usually means a permissions problem or the app has no releases on any " \
+        "track. Verify the PLAY_STORE_JSON_KEY service account can READ releases, and that at " \
+        "least one AAB has been uploaded (versionCode 1 shipped 2026-07). Do NOT fall back to " \
+        "versionCode 1."
+      )
+    end
+    max_code = existing_codes.map(&:to_i).max
+    next_version_code = max_code + 1
+    UI.message("Play tracks max versionCode = #{max_code}; building versionCode #{next_version_code}.")
+
     gradle(
       task: "bundle",
       build_type: "Release",
-      project_dir: "android/"
+      project_dir: "android/",
+      properties: { "versionCodeOverride" => next_version_code }
     )
 
     # Google Play service-account JSON, read from the environment (never committed).
