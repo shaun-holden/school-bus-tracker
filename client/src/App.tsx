@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Switch, Route, useLocation } from "wouter";
 import { Capacitor } from "@capacitor/core";
 import { App as CapacitorApp } from "@capacitor/app";
-import { PushNotifications } from "@capacitor/push-notifications";
 import { queryClient, apiRequest } from "./lib/queryClient";
 import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
@@ -11,6 +10,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useWebPush } from "@/hooks/use-web-push";
 import { useNativePush } from "@/hooks/use-native-push";
 import { pushRoutes, backButtonAction } from "@/lib/pushRoutes";
+import { initPushTap, subscribePushTap, takePendingPushTap, hasPendingPushTap } from "@/lib/pushTap";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { OfflineBanner } from "@/components/shared/OfflineBanner";
 import { SplashProvider, useSplash } from "@/lib/splash-context";
@@ -32,6 +32,9 @@ import PrivacyPolicy from "@/pages/privacy";
 import Support from "@/pages/support";
 import DeleteAccount from "@/pages/delete-account";
 import AccountPage from "@/pages/account";
+
+// Q92: attach the native push-tap listener before React mounts (native only).
+initPushTap();
 
 // HF3: admins of a company that is not approved+active get 403s from every
 // admin API, so show the pending page instead of an empty dashboard. When the
@@ -57,29 +60,25 @@ function Router() {
   const pendingRolePatchSentRef = useRef(false);
   const [, navigate] = useLocation();
 
-  // A tapped push, kept until auth has loaded. Registered first, whatever the
-  // auth state, so a tap that cold-starts the app isn't lost. Only the push
-  // `type` is kept; the route comes from the pushRoutes allow-list (S-21).
-  const pendingPushTypeRef = useRef<{ type: unknown } | null>(null);
+  // A tapped push, kept until auth has loaded. The listener itself is attached
+  // at module load (initPushTap, below the imports) so a tap that cold-starts
+  // the app isn't lost; here we only wake up and consume it once auth is known.
+  // Only the push `type` is kept; the route comes from the pushRoutes
+  // allow-list (S-21).
   const [pushTapCount, setPushTapCount] = useState(0);
-  useEffect(() => {
-    if (!Capacitor.isNativePlatform()) return;
-    const handle = PushNotifications.addListener("pushNotificationActionPerformed", (action) => {
-      pendingPushTypeRef.current = { type: action?.notification?.data?.type };
-      setPushTapCount((n) => n + 1);
-    });
-    return () => {
-      void handle.then((h) => h.remove()).catch(() => {});
-    };
-  }, []);
+  useEffect(() => subscribePushTap(() => setPushTapCount((n) => n + 1)), []);
 
   useEffect(() => {
-    if (isLoading || !pendingPushTypeRef.current) return;
-    const { type } = pendingPushTypeRef.current;
-    pendingPushTypeRef.current = null;
+    if (isLoading || !hasPendingPushTap()) return;
+    const tap = takePendingPushTap();
+    if (!tap) return;
     // Not logged in, or a role with no route for this type: just open the app.
-    const path = user ? pushRoutes(type, user.role) : null;
-    if (path) navigate(path);
+    const path = user ? pushRoutes(tap.type, user.role) : null;
+    console.log("[pushtap] consuming after auth", { type: tap.type, role: user?.role ?? null, path });
+    if (path) {
+      console.log("[pushtap] navigate", path);
+      navigate(path);
+    }
   }, [pushTapCount, isLoading, user, navigate]);
 
   // Q46: Android back button / back swipe goes back in the app, else minimises.
