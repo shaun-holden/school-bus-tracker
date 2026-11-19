@@ -4143,10 +4143,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const storedRouteId: string | null = (hasId(routeId) ? routeId : null) || user.assignedRouteId || null;
       if (storedRouteId) {
-        let allowed = await isRouteInCompany(storedRouteId, user.companyId);
-        if (allowed && storedRouteId !== user.assignedRouteId) {
-          allowed = (await storage.getRoutesByDriverId(userId)).some(r => r.id === storedRouteId);
-        }
+        // Q91 r2: only the active shift route (assignedRouteId, cleared on clock-off),
+        // not a route the driver merely still holds (routes.driverId) or any route off duty.
+        const allowed = storedRouteId === user.assignedRouteId
+          && await isRouteInCompany(storedRouteId, user.companyId);
         if (!allowed) {
           return res.status(404).json({ message: "Route not found" });
         }
@@ -5490,10 +5490,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // indistinguishable from a missing one. All checks are required: a null
       // routeId / companyId on the check-in fails, a null-company caller fails.
 
-      // Driver must be assigned to this route
-      const driverRoutes = await storage.getRoutesByDriverId(userId);
-      const isAssignedToRoute = driverRoutes.some(r => r.id === routeId);
-      if (!isAssignedToRoute) {
+      // Q91 r2: the driver must be ACTIVELY on this route this shift. assignedRouteId
+      // is cleared on clock-off, so an off-duty driver (routes.driverId still set) can't
+      // confirm boarding or fire the parent "boarded safely" notice.
+      if (!user.assignedRouteId || routeId !== user.assignedRouteId) {
         return res.status(404).json({ message: "Check-in not found" });
       }
 

@@ -9,8 +9,8 @@
 //
 // Each title names the clause whose change turns it red.
 import { describe, it, expect, beforeAll } from 'vitest';
-import { eq } from 'drizzle-orm';
-import { buses, parentChildLinks, routes, students, users } from '@shared/schema';
+import { and, eq } from 'drizzle-orm';
+import { buses, parentChildLinks, parentNotifications, routes, studentCheckIns, students, systemNotifications, users } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 
 const h = useIntegrationHarness();
@@ -90,5 +90,87 @@ describe('Q91 clock-off still ends the shift', () => {
   it('busA is unassigned from driverA (red if the off-reset stops calling storage.unassignDriverFromBus)', async () => {
     const [bus] = await h.db.select().from(buses).where(eq(buses.id, h.ids.busA));
     expect(bus.driverId).toBeNull();
+  });
+});
+
+// Q91 r2 (reader-check-q91, Q91-2): the two handlers that authorized on
+// routes.driverId now authorize on the active shift route (assignedRouteId).
+// Runs after the clock-off above: driverA still holds routeA via routes.driverId
+// but has assignedRouteId null.
+const BOARDED = '/api/check-in/confirm-boarded';
+const NOTICE = '/api/driver/system-notifications';
+const R2_CLAUSE = '`!user.assignedRouteId || routeId !== user.assignedRouteId` 404 in POST /api/check-in/confirm-boarded';
+const R2_NOTICE_CLAUSE = '`storedRouteId === user.assignedRouteId` in POST /api/driver/system-notifications';
+
+async function waitingCheckIn(routeId: string = h.ids.routeA): Promise<string> {
+  const [row] = await h.db
+    .insert(studentCheckIns)
+    .values({ companyId: h.ids.companyA, studentId: h.ids.studentA, parentId: h.ids.parentA, routeId, status: 'waiting' })
+    .returning({ id: studentCheckIns.id });
+  return row.id;
+}
+const checkInRow = async (id: string) => (await h.db.select().from(studentCheckIns).where(eq(studentCheckIns.id, id)))[0];
+const boardedNotices = async () =>
+  h.db.select().from(parentNotifications).where(and(eq(parentNotifications.targetParentId, h.ids.parentA), eq(parentNotifications.title, 'Child Boarded Bus')));
+const driverNotices = async () =>
+  h.db.select().from(systemNotifications).where(and(eq(systemNotifications.senderId, h.ids.driverA), eq(systemNotifications.recipientRole, 'route_parents')));
+const notice = (routeId: string) => ({ title: 'Q91 r2 notice', message: 'Running late', type: 'info', routeId });
+
+describe('Q91 r2 off duty: a route the driver still holds is not their shift route', () => {
+  it(`confirm-boarded on routeA → 404, check-in still waiting, no "boarded" parent notice (red if ${R2_CLAUSE} reverts to getRoutesByDriverId)`, async () => {
+    expect((await routeRow(h.ids.routeA)).driverId).toBe(h.ids.driverA);
+    expect((await userRow(h.ids.driverA)).assignedRouteId).toBeNull();
+    const id = await waitingCheckIn();
+    const before = (await boardedNotices()).length;
+    const res = await driverA.post(BOARDED).send({ checkInId: id, busId: h.ids.busA, routeId: h.ids.routeA });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Check-in not found' });
+    const row = await checkInRow(id);
+    expect(row.status).toBe('waiting');
+    expect(row.boardedAt).toBeNull();
+    expect((await boardedNotices()).length).toBe(before);
+  });
+
+  it(`route-parents notice with routeId routeA → 404 and nothing stored (red if ${R2_NOTICE_CLAUSE} is replaced by the getRoutesByDriverId fallback)`, async () => {
+    const before = (await driverNotices()).length;
+    const res = await driverA.post(NOTICE).send(notice(h.ids.routeA));
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Route not found' });
+    expect((await driverNotices()).length).toBe(before);
+  });
+});
+
+describe('Q91 r2 on duty: the active shift route still works', () => {
+  beforeAll(async () => {
+    // As POST /api/driver-check-in leaves it: on duty with routeA as the shift route.
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: h.ids.routeA }).where(eq(users.id, h.ids.driverA));
+  });
+
+  it(`confirm-boarded on the shift route routeA → 200 and a "boarded" parent notice (positive control for ${R2_CLAUSE})`, async () => {
+    const id = await waitingCheckIn();
+    const before = (await boardedNotices()).length;
+    const res = await driverA.post(BOARDED).send({ checkInId: id, busId: h.ids.busA, routeId: h.ids.routeA });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id, status: 'boarded', driverId: h.ids.driverA });
+    expect((await boardedNotices()).length).toBe(before + 1);
+  });
+
+  it(`confirm-boarded on the held second route (not the shift route) → 404 (red if ${R2_CLAUSE} reverts to getRoutesByDriverId)`, async () => {
+    const res = await driverA.post(BOARDED).send({ checkInId: await waitingCheckIn(secondRouteId), busId: h.ids.busA, routeId: secondRouteId });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Check-in not found' });
+  });
+
+  it(`route-parents notice for the shift route routeA → 200, stored on routeA (positive control for ${R2_NOTICE_CLAUSE})`, async () => {
+    const res = await driverA.post(NOTICE).send(notice(h.ids.routeA));
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ routeId: h.ids.routeA, recipientRole: 'route_parents', senderId: h.ids.driverA });
+  });
+
+  it(`route-parents notice for the held second route → 404 (red if ${R2_NOTICE_CLAUSE} is replaced by the getRoutesByDriverId fallback)`, async () => {
+    const before = (await driverNotices()).length;
+    const res = await driverA.post(NOTICE).send(notice(secondRouteId));
+    expect(res.status).toBe(404);
+    expect((await driverNotices()).length).toBe(before);
   });
 });
