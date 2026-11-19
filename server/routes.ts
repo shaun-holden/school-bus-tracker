@@ -2550,11 +2550,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log(`Unassigned driver ${userId} from bus ${currentBus.busNumber}`);
           }
 
-          // Unassign driver from route
-          if (user.assignedRouteId) {
-            await storage.unassignDriverFromRoute(userId);
-            console.log(`Unassigned driver ${userId} from route ${user.assignedRouteId}`);
-          }
+          // Q91: clocking off does NOT unassign routes. routes.driverId is a
+          // standing assignment (a driver may hold more than one route) that
+          // only an admin or another check-in changes, so the driver keeps their
+          // parent contacts while off duty. The current shift route
+          // (assignedRouteId) is still cleared below, so off-duty drivers can't
+          // mark attendance or complete stops.
 
           // Clear all check-in data
           const resetData = {
