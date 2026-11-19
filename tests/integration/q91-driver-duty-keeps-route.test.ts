@@ -174,3 +174,35 @@ describe('Q91 r2 on duty: the active shift route still works', () => {
     expect((await driverNotices()).length).toBe(before);
   });
 });
+
+// Q91 r3: isOnDuty is the authoritative duty flag. The clock-off reset of
+// assignedRouteId runs inside a swallowed try/catch, so simulate it failing:
+// off duty with assignedRouteId still routeA. Both gates must still refuse.
+describe('Q91 r3 off duty with a stale shift route (failed clock-off reset)', () => {
+  beforeAll(async () => {
+    await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null, assignedRouteId: h.ids.routeA }).where(eq(users.id, h.ids.driverA));
+  });
+
+  it('confirm-boarded on routeA → 404, still waiting, no "boarded" parent notice (red if `!user.isOnDuty ||` is dropped from the confirm-boarded gate)', async () => {
+    const row = await userRow(h.ids.driverA);
+    expect(row.isOnDuty).toBe(false);
+    expect(row.assignedRouteId).toBe(h.ids.routeA);
+    const id = await waitingCheckIn();
+    const before = (await boardedNotices()).length;
+    const res = await driverA.post(BOARDED).send({ checkInId: id, busId: h.ids.busA, routeId: h.ids.routeA });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Check-in not found' });
+    expect((await checkInRow(id)).status).toBe('waiting');
+    expect((await boardedNotices()).length).toBe(before);
+  });
+
+  it('route-parents notice on routeA (and with no routeId, the assignedRouteId fallback) → 404, nothing stored (red if `user.isOnDuty &&` is dropped from the notice gate)', async () => {
+    const before = (await driverNotices()).length;
+    const body = await driverA.post(NOTICE).send(notice(h.ids.routeA));
+    expect(body.status).toBe(404);
+    expect(body.body).toEqual({ message: 'Route not found' });
+    const fallback = await driverA.post(NOTICE).send({ title: 'Q91 r3 notice', message: 'Running late', type: 'info' });
+    expect(fallback.status).toBe(404);
+    expect((await driverNotices()).length).toBe(before);
+  });
+});

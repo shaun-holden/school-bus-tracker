@@ -225,10 +225,20 @@ describe('Q65 POST /api/system-notifications (admin) body ids', () => {
   });
 });
 
+// Q91 r3: the driver notice requires an on-duty driver (isOnDuty) whose shift
+// route (assignedRouteId) is the stored route, so the drivers below are on duty
+// and each 404 reaches the clause its title names.
+async function onDuty(...ids: string[]) {
+  for (const id of ids) {
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, id));
+  }
+}
+
 describe('Q65 POST /api/driver/system-notifications routeId', () => {
   const note = (extra: Record<string, unknown>) => ({ title: 'Q65', message: 'route note', ...extra });
+  beforeAll(async () => { await onDuty(h.ids.driverA, q8.driverX); });
 
-  it('9a. driverA with company B\'s routeB → 404 "Route not found", nothing stored (stopped by both isRouteInCompany and the drives check; red only if the whole route check is removed — 9b and 9e pin each half)', async () => {
+  it('9a. driverA with company B\'s routeB → 404 "Route not found", nothing stored (stopped by both isRouteInCompany and the assignedRouteId gate; red only if the whole route check is removed — 9b and 9e pin each half)', async () => {
     const before = await notesBy(h.ids.driverA);
     const res = await driverA.post('/api/driver/system-notifications').send(note({ routeId: h.ids.routeB }));
     expect(res.status).toBe(404);
@@ -236,7 +246,7 @@ describe('Q65 POST /api/driver/system-notifications routeId', () => {
     expect(await notesBy(h.ids.driverA)).toBe(before);
   });
 
-  it('9b. driverA with routeA2 (company A, not driven or assigned to driverA) → 404 (red if the "drives this route" check is removed)', async () => {
+  it('9b. driverA with routeA2 (company A, not driverA\'s assignedRouteId) → 404 (red if the storedRouteId === user.assignedRouteId gate is removed)', async () => {
     const res = await driverA.post('/api/driver/system-notifications').send(note({ routeId: q8.routeA2 }));
     expect(res.status).toBe(404);
     expect(res.body).toEqual({ message: 'Route not found' });
@@ -268,6 +278,7 @@ describe('Q65 POST /api/driver/system-notifications routeId', () => {
 });
 
 describe('Q69 system-notification enum and length checks', () => {
+  beforeAll(async () => { await onDuty(h.ids.driverA); });
   const TYPES = ['delay', 'emergency', 'info', 'route_change'] as const;
   const admin = (extra: Record<string, unknown>) => ({ title: 'Q69', message: 'note', recipientRole: 'all_drivers', ...extra });
   const driver = (extra: Record<string, unknown>) => ({ title: 'Q69', message: 'route note', ...extra });
