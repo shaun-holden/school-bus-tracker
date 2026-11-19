@@ -156,10 +156,12 @@ platform :ios do
       )
     rescue => e
       first_line = e.message.to_s.lines.first&.strip
-      known_resume_noise = e.message.to_s.include?("CDUploaderStateInfoResumeFilePath")
 
+      # upload_to_testflight can raise after altool already logged "UPLOAD SUCCEEDED"
+      # (a non-fatal CDUploaderStateInfoResumeFilePath line). Proof of success is the
+      # build appearing on TestFlight — verify that, and fail closed otherwise.
       landed = false
-      5.times do
+      8.times do
         current = latest_testflight_build_number(
           api_key: api_key,
           app_identifier: APP_ID,
@@ -174,10 +176,8 @@ platform :ios do
 
       if landed
         UI.important("Q111: upload_to_testflight raised (#{first_line}) but build #{next_build} is on TestFlight — treating it as the known false alarm and continuing.")
-      elsif known_resume_noise
-        UI.important("Q111: upload_to_testflight raised the known CDUploaderStateInfoResumeFilePath noise and the build hasn't registered yet (Apple processing lag). altool reported UPLOAD SUCCEEDED; continuing — confirm in App Store Connect.")
       else
-        raise e
+        UI.user_error!("upload_to_testflight failed and build #{next_build} is NOT on TestFlight after ~4 min — #{e.message}")
       end
     end
 
