@@ -5,9 +5,9 @@
 // the next storage call never happens (a spy on the shared storage instance),
 // so the first guard is pinned by itself. Each title names the clause whose
 // removal turns it red.
-import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { routes, buses, students, parentChildLinks, studentCheckIns, parentNotifications } from '@shared/schema';
+import { routes, buses, students, parentChildLinks, studentCheckIns, parentNotifications, users } from '@shared/schema';
 import { storage } from '../../server/storage';
 import { useIntegrationHarness, type Agent } from './harness';
 import { insertUser, SEED_PASSWORD } from './seed';
@@ -95,6 +95,18 @@ describe('confirm-dropoff tenant check, each skip alone', () => {
 });
 
 describe('confirm-boarded tenant checks, each alone', () => {
+  // Q91 r3: confirm-boarded first requires an on-duty driver whose shift route
+  // (assignedRouteId) is the body routeId. Seed that here so each pin below
+  // reaches the bus / check-in check it names; put both drivers back after.
+  beforeAll(async () => {
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, h.ids.driverA));
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: routeANull }).where(eq(users.id, driverNullId));
+  });
+  afterAll(async () => {
+    await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null }).where(eq(users.id, h.ids.driverA));
+    await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null, assignedRouteId: null }).where(eq(users.id, driverNullId));
+  });
+
   it('2c/2e: driverA on busA and routeA boards a waiting check-in whose companyId is NULL → 404, still waiting (red if the existingCheckIn.companyId && skip comes back)', async () => {
     const id = await insertCheckIn({ companyId: null });
     const res = await driverA.post('/api/check-in/confirm-boarded').send({ checkInId: id, busId: h.ids.busA, routeId: h.ids.routeA });

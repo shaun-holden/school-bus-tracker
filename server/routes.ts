@@ -2550,11 +2550,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
             console.log(`Unassigned driver ${userId} from bus ${currentBus.busNumber}`);
           }
 
-          // Unassign driver from route
-          if (user.assignedRouteId) {
-            await storage.unassignDriverFromRoute(userId);
-            console.log(`Unassigned driver ${userId} from route ${user.assignedRouteId}`);
-          }
+          // Q91: clocking off does NOT unassign routes. routes.driverId is a
+          // standing assignment (a driver may hold more than one route) that
+          // only an admin or another check-in changes, so the driver keeps their
+          // parent contacts while off duty. The current shift route
+          // (assignedRouteId) is still cleared below, so off-duty drivers can't
+          // mark attendance or complete stops.
 
           // Clear all check-in data
           const resetData = {
@@ -4142,10 +4143,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const storedRouteId: string | null = (hasId(routeId) ? routeId : null) || user.assignedRouteId || null;
       if (storedRouteId) {
-        let allowed = await isRouteInCompany(storedRouteId, user.companyId);
-        if (allowed && storedRouteId !== user.assignedRouteId) {
-          allowed = (await storage.getRoutesByDriverId(userId)).some(r => r.id === storedRouteId);
-        }
+        // Q91 r3: on-duty + active shift route only (assignedRouteId is cleared on
+        // clock-off; isOnDuty guards the swallowed-reset edge). No getRoutesByDriverId.
+        const allowed = user.isOnDuty
+          && storedRouteId === user.assignedRouteId
+          && await isRouteInCompany(storedRouteId, user.companyId);
         if (!allowed) {
           return res.status(404).json({ message: "Route not found" });
         }
@@ -5489,10 +5491,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // indistinguishable from a missing one. All checks are required: a null
       // routeId / companyId on the check-in fails, a null-company caller fails.
 
-      // Driver must be assigned to this route
-      const driverRoutes = await storage.getRoutesByDriverId(userId);
-      const isAssignedToRoute = driverRoutes.some(r => r.id === routeId);
-      if (!isAssignedToRoute) {
+      // Q91 r3: the driver must be ACTIVELY on duty on this route. assignedRouteId is
+      // cleared on clock-off, but that reset is in a swallowed try/catch — isOnDuty is
+      // the authoritative duty flag, so an off-duty driver (routes.driverId still set,
+      // or assignedRouteId left stale by a failed reset) is blocked either way.
+      if (!user.isOnDuty || !user.assignedRouteId || routeId !== user.assignedRouteId) {
         return res.status(404).json({ message: "Check-in not found" });
       }
 

@@ -5,7 +5,7 @@
 // red; foreign and null-company rows are seeded so they are reachable.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { routes, buses, studentCheckIns, parentNotifications } from '@shared/schema';
+import { routes, buses, studentCheckIns, parentNotifications, users } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 import { insertUser, SEED_PASSWORD } from './seed';
 
@@ -61,6 +61,12 @@ beforeAll(async () => {
   routeNull = rn.id;
   const [bn] = await h.db.insert(buses).values({ companyId: null, busNumber: 'Null-100', driverId: driverNullId }).returning({ id: buses.id });
   busNull = bn.id;
+
+  // Q91 r3: confirm-boarded first requires an on-duty driver whose shift route
+  // (assignedRouteId) is the route in the body, so every refusal below reaches
+  // the bus / check-in check it pins. driverA's shift route is routeA (seed).
+  await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, h.ids.driverA));
+  await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: routeNull }).where(eq(users.id, driverNullId));
 
   // 3 logins (MAX_LOGINS_PER_FILE is 8).
   driverA = await h.loginAs('driverA');

@@ -133,17 +133,18 @@ export function NotificationCenter() {
       </CardHeader>
       <CardContent className="p-0">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="w-full rounded-none border-b">
-            <TabsTrigger value="unread" className="flex-1">
+          {/* Q100: equal thirds in portrait; min-w-0 lets a trigger shrink instead of clipping the row. */}
+          <TabsList className="grid w-full grid-cols-3 rounded-none border-b">
+            <TabsTrigger value="unread" className="min-w-0 px-1">
               Unread
               {unreadNotifications.length > 0 && (
-                <Badge className="ml-2 bg-red-500 text-white text-xs">
+                <Badge className="ml-1 shrink-0 px-1.5 bg-red-500 text-white text-xs">
                   {unreadNotifications.length}
                 </Badge>
               )}
             </TabsTrigger>
-            <TabsTrigger value="read" className="flex-1">Read</TabsTrigger>
-            <TabsTrigger value="all" className="flex-1">All</TabsTrigger>
+            <TabsTrigger value="read" className="min-w-0 px-1">Read</TabsTrigger>
+            <TabsTrigger value="all" className="min-w-0 px-1">All</TabsTrigger>
           </TabsList>
 
           <TabsContent value={activeTab} className="m-0">
