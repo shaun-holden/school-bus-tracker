@@ -4,8 +4,6 @@ import Capacitor
 @UIApplicationMain
 class AppDelegate: UIResponder, UIApplicationDelegate {
 
-    var window: UIWindow?
-
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
         // Override point for customization after application launch.
         return true
@@ -55,4 +53,30 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         NotificationCenter.default.post(name: .capacitorDidFailToRegisterForRemoteNotifications, object: error)
     }
 
+}
+
+// Scene lifecycle (required by the iOS 26+ SDK). Creates and retains the window
+// from Main.storyboard, and forwards URL / universal-link callbacks to Capacitor's
+// SceneDelegateProxy so deep-link handling still works under scenes.
+class SceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        guard let windowScene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: windowScene)
+        let storyboard = UIStoryboard(name: "Main", bundle: nil)
+        window.rootViewController = storyboard.instantiateInitialViewController()
+        self.window = window
+        window.makeKeyAndVisible()
+
+        SceneDelegateProxy.shared.scene(scene, willConnectTo: session, options: connectionOptions)
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        SceneDelegateProxy.shared.scene(scene, openURLContexts: URLContexts)
+    }
+
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        SceneDelegateProxy.shared.scene(scene, continue: userActivity)
+    }
 }
