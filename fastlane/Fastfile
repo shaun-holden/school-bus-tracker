@@ -103,7 +103,8 @@ platform :ios do
       key_id: ENV.fetch("ASC_KEY_ID"),
       issuer_id: ENV.fetch("ASC_ISSUER_ID"),
       key_filepath: ENV.fetch("ASC_KEY_FILEPATH"),
-      duration: 1200
+      duration: 1200,
+      set_spaceship_token: true
     )
 
     # Bump the build number to one above the latest build already on TestFlight.
@@ -157,27 +158,33 @@ platform :ios do
     rescue => e
       first_line = e.message.to_s.lines.first&.strip
 
-      # upload_to_testflight can raise after altool already logged "UPLOAD SUCCEEDED"
-      # (a non-fatal CDUploaderStateInfoResumeFilePath line). Proof of success is the
-      # build appearing on TestFlight — verify that, and fail closed otherwise.
-      landed = false
-      8.times do
-        current = latest_testflight_build_number(
-          api_key: api_key,
-          app_identifier: APP_ID,
-          initial_build_number: 0
-        )
-        if current.to_i >= next_build.to_i
-          landed = true
-          break
+      # Only the known non-fatal altool line is a candidate for "succeeded anyway".
+      # Any other error is a real upload failure — re-raise it untouched.
+      raise e unless e.message.to_s.include?("CDUploaderStateInfoResumeFilePath")
+
+      # Proof of success: the EXACT next_build is on TestFlight in a non-failed
+      # processing state. (latest_testflight_build_number is too loose — it reports
+      # the newest upload incl. FAILED, and any other upload would match.)
+      verified = false
+      8.times do |i|
+        begin
+          app = Spaceship::ConnectAPI::App.find(APP_ID)
+          builds = Spaceship::ConnectAPI::Build.all(app_id: app.id, build_number: next_build.to_s)
+          verified = builds.any? do |b|
+            b.version.to_s == next_build.to_s &&
+              !%w[FAILED INVALID].include?(b.processing_state.to_s.upcase)
+          end
+          break if verified
+        rescue => poll_err
+          UI.important("Q111: verify poll #{i + 1} errored (#{poll_err.class}) — retrying.")
         end
-        sleep(30)
+        sleep(30) unless i == 7
       end
 
-      if landed
-        UI.important("Q111: upload_to_testflight raised (#{first_line}) but build #{next_build} is on TestFlight — treating it as the known false alarm and continuing.")
+      if verified
+        UI.important("Q111: upload_to_testflight raised the known altool resume-file noise (#{first_line}), but build #{next_build} is on TestFlight in a non-failed state — continuing.")
       else
-        UI.user_error!("upload_to_testflight failed and build #{next_build} is NOT on TestFlight after ~4 min — #{e.message}")
+        UI.user_error!("upload_to_testflight failed: build #{next_build} is not verified on TestFlight after ~4 min (#{e.class}: #{first_line}) — see the altool output above.")
       end
     end
 
