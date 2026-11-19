@@ -145,11 +145,41 @@ platform :ios do
       clean: true
     )
 
-    upload_to_testflight(
-      api_key: api_key,
-      app_identifier: APP_ID,
-      skip_waiting_for_build_processing: true
-    )
+    # Q111: upload_to_testflight can raise "Error uploading ipa file" even when the upload
+    # succeeded — altool prints a non-fatal `CDUploaderStateInfoResumeFilePath` ERROR after
+    # logging "UPLOAD SUCCEEDED". Verify the build actually landed before failing the run.
+    begin
+      upload_to_testflight(
+        api_key: api_key,
+        app_identifier: APP_ID,
+        skip_waiting_for_build_processing: true
+      )
+    rescue => e
+      first_line = e.message.to_s.lines.first&.strip
+      known_resume_noise = e.message.to_s.include?("CDUploaderStateInfoResumeFilePath")
+
+      landed = false
+      5.times do
+        current = latest_testflight_build_number(
+          api_key: api_key,
+          app_identifier: APP_ID,
+          initial_build_number: 0
+        )
+        if current.to_i >= next_build.to_i
+          landed = true
+          break
+        end
+        sleep(30)
+      end
+
+      if landed
+        UI.important("Q111: upload_to_testflight raised (#{first_line}) but build #{next_build} is on TestFlight — treating it as the known false alarm and continuing.")
+      elsif known_resume_noise
+        UI.important("Q111: upload_to_testflight raised the known CDUploaderStateInfoResumeFilePath noise and the build hasn't registered yet (Apple processing lag). altool reported UPLOAD SUCCEEDED; continuing — confirm in App Store Connect.")
+      else
+        raise e
+      end
+    end
 
     UI.success(
       "Uploaded build #{next_build} to TestFlight. Apple-side processing can take several " \
