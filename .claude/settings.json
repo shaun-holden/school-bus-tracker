@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(!.env.example)",
+      "Read(./.migration-*-rollback.json)",
+      "Read(./.vercel/**)",
+      "Bash(cat .env*)",
+      "Bash(head .env*)",
+      "Bash(tail .env*)",
+      "Bash(less .env*)",
+      "Bash(cat .migration-*)",
+      "Bash(head .migration-*)",
+      "Bash(tail .migration-*)",
+      "Bash(less .migration-*)",
+      "Bash(cat .vercel/*)",
+      "Bash(head .vercel/*)",
+      "Bash(tail .vercel/*)",
+      "Bash(less .vercel/*)"
+    ]
+  }
+}
