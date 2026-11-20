@@ -4985,6 +4985,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ============ DRIVER LOCATION UPDATE ROUTES ============
 
+  // Q129a: numbers, finite (plain z.number() lets NaN through). 0 is a real
+  // coordinate (equator / prime meridian), so no truthiness check.
+  const updateLocationBodySchema = z.object({
+    latitude: z.number().finite(),
+    longitude: z.number().finite(),
+    speed: z.number().finite().optional(),
+  });
+
   // Driver updates their bus location (GPS coordinates)
   app.post('/api/driver/update-location', isAuthenticated, async (req: any, res) => {
     try {
@@ -5005,10 +5013,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Not on duty" });
       }
 
-      const { latitude, longitude, speed } = req.body;
-      if (!latitude || !longitude) {
+      const parsedBody = updateLocationBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
         return res.status(400).json({ message: "Latitude and longitude are required" });
       }
+      const { latitude, longitude, speed } = parsedBody.data;
 
       // Find the bus assigned to this driver (scoped to their company).
       const scope = companyScope(user);
@@ -5683,6 +5692,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Q125: a driver reads the waiting list only for their OWN assigned route, on duty.
       // Same 404 as a foreign/missing route (don't leak that the route exists).
+      // `!user.assignedRouteId` is redundant (`:routeId` is never empty, so the
+      // `!==` term already refuses a null shift route); kept on purpose to mirror
+      // confirm-boarded's gate. Don't "simplify" one without the other.
       if (!user.isOnDuty || !user.assignedRouteId || routeId !== user.assignedRouteId) {
         return res.status(404).json({ message: "Route not found" });
       }

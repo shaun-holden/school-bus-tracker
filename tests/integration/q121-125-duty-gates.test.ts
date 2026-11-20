@@ -12,11 +12,14 @@ import { and, eq } from 'drizzle-orm';
 import {
   buses,
   parentNotifications,
+  routeSchools,
   routeStopCompletions,
+  routeStops,
   routes,
   schoolVisits,
   studentAttendance,
   studentCheckIns,
+  students,
   users,
 } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
@@ -80,6 +83,42 @@ describe('Q121b POST /api/driver/update-location', () => {
     const bus = await busRow();
     expect(Number(bus.currentLatitude)).toBeCloseTo(40.1234, 3);
     expect(bus.status).toBe('on_route');
+  });
+});
+
+describe('Q129a update-location body: zod, 0 is a real coordinate, 400 not 500', () => {
+  const LOC = '/api/driver/update-location';
+  const REQUIRED = { message: 'Latitude and longitude are required' };
+
+  it('on duty, latitude 0 / longitude 0 → 200 and 0,0 is stored (red if the old `!latitude || !longitude` check is restored)', async () => {
+    await resetBus();
+    await onDuty();
+    const res = await driverA.post(LOC).send({ latitude: 0, longitude: 0, speed: 0 });
+    expect(res.status).toBe(200);
+    const bus = await busRow();
+    expect(bus.currentLatitude).not.toBeNull();
+    expect(Number(bus.currentLatitude)).toBe(0);
+    expect(Number(bus.currentLongitude)).toBe(0);
+  });
+
+  it('on duty, a missing / null / string coordinate → 400 "Latitude and longitude are required", bus untouched (red if updateLocationBodySchema.safeParse is dropped: string coords were stored)', async () => {
+    await resetBus();
+    await onDuty();
+    for (const body of [{}, { latitude: 40.1 }, { longitude: -75.1 }, { latitude: null, longitude: -75.1 }, { latitude: '40.1', longitude: '-75.1' }, { latitude: 40.1, longitude: -75.1, speed: 'fast' }]) {
+      const res = await driverA.post(LOC).send(body);
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body, JSON.stringify(body)).toEqual(REQUIRED);
+    }
+    const bus = await busRow();
+    expect(bus.currentLatitude).toBeNull();
+    expect(bus.status).toBe('idle');
+  });
+
+  it('off duty with a bad body → still 403 "Not on duty" (red if the body parse is moved before the Q121 `if (!user.isOnDuty)` guard)', async () => {
+    await offDuty();
+    const res = await driverA.post(LOC).send({});
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ message: 'Not on duty' });
   });
 });
 
@@ -220,18 +259,34 @@ describe('Q125e impersonating master admin hits the off-duty refusals', () => {
     await h.db.update(users).set({ isOnDuty: false, assignedRouteId: null }).where(eq(users.id, h.ids.master));
   });
 
-  it('route reads, school visits and the waiting list → [] / 404 (red if `!user.isOnDuty ||` is dropped from any of those guards)', async () => {
-    for (const path of ['/api/driver-route-students', '/api/driver-route-stops', '/api/driver-route-schools', '/api/driver-school-visits']) {
-      const res = await master.get(path);
-      expect(res.status, path).toBe(200);
-      expect(res.body, path).toEqual([]);
+  it('route reads, school visits and the waiting list → [] / 404 though routeA has students, stops, schools, a waiting check-in and the master has a visit today (red if `!user.isOnDuty ||` is dropped from any of those guards)', async () => {
+    // Preconditions: every read would return a row if its duty term were gone.
+    expect((await h.db.select().from(students).where(eq(students.routeId, h.ids.routeA))).length).toBeGreaterThan(0);
+    expect((await h.db.select().from(routeStops).where(eq(routeStops.routeId, h.ids.routeA))).length).toBeGreaterThan(0);
+    expect((await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.routeId, h.ids.routeA), eq(studentCheckIns.status, 'waiting')))).length).toBeGreaterThan(0);
+    // The base seed has no routeSchools link for routeA, so add one; and
+    // getTodaysSchoolVisits keys on the caller's id, so seed the master's own visit today.
+    const [link] = await h.db.insert(routeSchools).values({ routeId: h.ids.routeA, schoolId: h.ids.schoolA, order: 0 }).returning({ id: routeSchools.id });
+    const [visit] = await h.db
+      .insert(schoolVisits)
+      .values({ companyId: h.ids.companyA, driverId: h.ids.master, schoolId: h.ids.schoolA, routeId: h.ids.routeA, arrivedAt: new Date(), visitDate: new Date() })
+      .returning({ id: schoolVisits.id });
+    try {
+      for (const path of ['/api/driver-route-students', '/api/driver-route-stops', '/api/driver-route-schools', '/api/driver-school-visits']) {
+        const res = await master.get(path);
+        expect(res.status, path).toBe(200);
+        expect(res.body, path).toEqual([]);
+      }
+      const waiting = await master.get(`/api/check-in/waiting/${h.ids.routeA}`);
+      expect(waiting.status).toBe(404);
+      expect(waiting.body).toEqual({ message: 'Route not found' });
+    } finally {
+      await h.db.delete(schoolVisits).where(eq(schoolVisits.id, visit.id));
+      await h.db.delete(routeSchools).where(eq(routeSchools.id, link.id));
     }
-    const waiting = await master.get(`/api/check-in/waiting/${h.ids.routeA}`);
-    expect(waiting.status).toBe(404);
-    expect(waiting.body).toEqual({ message: 'Route not found' });
   });
 
-  it('update-location and activate-route → 403 "Not on duty", bus untouched (red if the Q121/Q125 `if (!user.isOnDuty)` guards are removed)', async () => {
+  it('update-location and activate-route → 403 "Not on duty" before the bus lookup (red if the Q121/Q125 `if (!user.isOnDuty)` guards are removed: the master, who drives no bus, then gets the no-bus 400/404); busA stays idle with no location', async () => {
     for (const path of ['/api/driver/update-location', '/api/driver/activate-route']) {
       const res = await master.post(path).send({ latitude: 40.1, longitude: -75.1 });
       expect(res.status, path).toBe(403);
@@ -240,6 +295,7 @@ describe('Q125e impersonating master admin hits the off-duty refusals', () => {
     const bus = await busRow();
     expect(bus.status).toBe('idle');
     expect(bus.currentLatitude).toBeNull();
+    expect(bus.currentLongitude).toBeNull();
   });
 
   it('attendance, drop-off, stop completed and school arrival → the handlers\' own 400/404, nothing written (red if `!user.isOnDuty ||` is dropped from any Q114 write guard)', async () => {

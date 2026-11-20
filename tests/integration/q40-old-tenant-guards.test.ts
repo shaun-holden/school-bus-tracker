@@ -20,6 +20,8 @@ let adminNull: Agent;
 let adminA: Agent;
 let driverNull: Agent;
 let driverA: Agent;
+let master: Agent;
+let routeA2: string;
 
 const N = {} as { driver: string; bus: string; route: string; stop: string; school: string; student: string };
 
@@ -50,11 +52,18 @@ beforeAll(async () => {
     .returning({ id: students.id });
   N.student = student.id;
 
-  // 4 logins (MAX_LOGINS_PER_FILE is 8).
+  // Q128: on duty on its own (no-company) route, so the waiting-list own-route
+  // gate passes and only the tenant check can refuse the null case.
+  await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: N.route }).where(eq(users.id, N.driver));
+  const [rA2] = await h.db.insert(routes).values({ companyId: h.ids.companyA, name: 'Q128-RouteA2', schoolId: h.ids.schoolA }).returning({ id: routes.id });
+  routeA2 = rA2.id;
+
+  // 5 logins (MAX_LOGINS_PER_FILE is 8).
   adminNull = await h.loginAs('adminNull');
   adminA = await h.loginAs('adminA');
   driverNull = await login(DRIVER_NULL_EMAIL);
   driverA = await h.loginAs('driverA');
+  master = await h.loginAs('master');
 });
 
 type Case = {
@@ -151,6 +160,12 @@ const cases = (): Case[] => [
     nullCall: () => adminNull.get(`/api/routes/${N.route}/completed-stops`),
     foreignCall: () => adminA.get(`/api/routes/${h.ids.routeB}/completed-stops`),
   },
+  // Q128: since Q125 the waiting list also requires `routeId === user.assignedRouteId`.
+  // The no-company driver is seeded on duty on N.route (below), so the null case
+  // still reaches and pins isOutsideCallerTenant. The A-vs-B case can no longer
+  // isolate it for a normal driver (their shift route is always own-tenant, so
+  // the own-route gate refuses first): it stays as a regression guard; the
+  // isolated tenant pin is the impersonating-master case in the Q128 describe.
   {
     name: 'GET /api/check-in/waiting/:routeId (driver)',
     body: { message: 'Route not found' },
@@ -237,6 +252,37 @@ describe('Q40 step 2: POST /api/routes/:routeId/stops checks the body schoolId',
   it('adminA adding a stop on routeA with its own schoolA still works', async () => {
     const res = await adminA.post(`/api/routes/${h.ids.routeA}/stops`).send({ name: 'Q40 A school stop', address: 'Q40 Rd', order: 9, schoolId: h.ids.schoolA });
     expect([200, 201]).toContain(res.status);
+  });
+});
+
+describe('Q128 GET /api/check-in/waiting/:routeId: which clause refuses', () => {
+  it('on-duty driverA (shift route routeA) reading routeA2, a second company-A route → 404 "Route not found" (red if `routeId !== user.assignedRouteId` is dropped from the Q125 waiting-list gate)', async () => {
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: h.ids.routeA }).where(eq(users.id, h.ids.driverA));
+    try {
+      const own = await driverA.get(`/api/check-in/waiting/${h.ids.routeA}`);
+      expect(own.status).toBe(200); // control: the shift route itself is readable
+      const res = await driverA.get(`/api/check-in/waiting/${routeA2}`);
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ message: 'Route not found' });
+    } finally {
+      await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null }).where(eq(users.id, h.ids.driverA));
+    }
+  });
+
+  it('a master impersonating company A, on duty with a stale company-B shift route (routeB), reading routeB → 404 "Route not found" (red if `isOutsideCallerTenant(user, route.companyId)` is removed from the waiting list)', async () => {
+    // The master's own row has no company, so a shift route checked in while
+    // impersonating B survives switching to A: the own-route gate passes and
+    // only the tenant check refuses.
+    const imp = await master.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({});
+    expect(imp.status).toBe(200);
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: h.ids.routeB }).where(eq(users.id, h.ids.master));
+    try {
+      const res = await master.get(`/api/check-in/waiting/${h.ids.routeB}`);
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ message: 'Route not found' });
+    } finally {
+      await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null, assignedRouteId: null }).where(eq(users.id, h.ids.master));
+    }
   });
 });
 
