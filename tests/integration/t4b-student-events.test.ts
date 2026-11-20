@@ -11,6 +11,7 @@ import { eq } from 'drizzle-orm';
 import { routes, students, studentAttendance, systemNotifications, users } from '@shared/schema';
 import { pushService } from '../../server/pushService';
 import { useIntegrationHarness, type Agent } from './harness';
+import { inArray } from 'drizzle-orm';
 import { insertUser, SEED_PASSWORD } from './seed';
 
 const h = useIntegrationHarness();
@@ -51,6 +52,13 @@ beforeAll(async () => {
   master = await h.loginAs('master');
   driverA = await h.loginAs('driverA');
   parentA = await h.loginAs('parentA');
+});
+
+// Q114: shift writes and route reads require isOnDuty, so this file's drivers
+// are mid-shift (seeded off duty). Otherwise the success paths and the guard
+// tests below would stop at the duty check.
+beforeAll(async () => {
+  await h.db.update(users).set({ isOnDuty: true }).where(inArray(users.role, ['driver', 'driver_admin']));
 });
 
 beforeEach(async () => {
@@ -165,7 +173,8 @@ describe('T4b follow-ups (SHELL merge)', () => {
       .insert(studentAttendance)
       .values({ companyId: null, studentId: kid.id, driverId: h.ids.master, routeId: r.id, status: 'present', attendanceDate: new Date() })
       .returning({ id: studentAttendance.id });
-    await h.db.update(users).set({ assignedRouteId: r.id }).where(eq(users.id, h.ids.master));
+    // Q114: on duty, so the request reaches the !route.companyId clause.
+    await h.db.update(users).set({ assignedRouteId: r.id, isOnDuty: true }).where(eq(users.id, h.ids.master));
     try {
       const res = await master.post(DROP).send({ studentId: kid.id });
       expect(res.status).toBe(404);
@@ -174,7 +183,7 @@ describe('T4b follow-ups (SHELL merge)', () => {
       expect(row.droppedOffAt).toBeNull();
       expect(send()).not.toHaveBeenCalled();
     } finally {
-      await h.db.update(users).set({ assignedRouteId: null }).where(eq(users.id, h.ids.master));
+      await h.db.update(users).set({ assignedRouteId: null, isOnDuty: false }).where(eq(users.id, h.ids.master));
     }
   });
 });

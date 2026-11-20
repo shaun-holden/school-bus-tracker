@@ -1511,7 +1511,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
-      if (!user.assignedRouteId) {
+      // Q114: off duty (even with a stale assignedRouteId) reads nothing.
+      if (!user.isOnDuty || !user.assignedRouteId) {
         return res.json([]);
       }
 
@@ -1535,7 +1536,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
-      if (!user.assignedRouteId) {
+      // Q114: off duty (even with a stale assignedRouteId) reads nothing.
+      if (!user.isOnDuty || !user.assignedRouteId) {
         return res.json([]);
       }
 
@@ -1557,7 +1559,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - drivers only" });
       }
 
-      if (!user.assignedRouteId) {
+      // Q114: off duty (even with a stale assignedRouteId) reads nothing.
+      if (!user.isOnDuty || !user.assignedRouteId) {
         return res.json([]);
       }
 
@@ -3243,7 +3246,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const routeId = user.assignedRouteId;
 
-      if (!routeId) {
+      // Q114: isOnDuty is the authoritative off-duty block (the clock-off
+      // assignedRouteId reset can be skipped or swallowed).
+      if (!user.isOnDuty || !routeId) {
         return res.status(400).json({ message: "No route assigned to driver" });
       }
 
@@ -3343,9 +3348,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const { visitId } = parsedBody.data;
 
-      // The visit must belong to the calling driver.
+      // The visit must belong to the calling driver, who must be on duty
+      // (Q114; same 404 as a missing visit).
       const existing = await storage.getSchoolVisitById(visitId);
-      if (!existing || existing.driverId !== user.id) {
+      if (!user.isOnDuty || !existing || existing.driverId !== user.id) {
         return res.status(404).json({ message: "Visit not found" });
       }
 
@@ -3452,8 +3458,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
+      // Q114: off duty there is no active journey to stamp (clock-off stamps
+      // arrive_homebase itself). Same 404 as a missing journey.
       const todayJourney = await storage.getTodayBusJourney(assignedBus.id, tz);
-      if (!todayJourney) {
+      if (!user.isOnDuty || !todayJourney) {
         return res.status(404).json({ message: "No active journey for today" });
       }
 
@@ -3516,8 +3524,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { studentId, status } = req.body;
       const routeId = user.assignedRouteId;
-      
-      if (!routeId) {
+
+      // Q114: off duty (even with a stale assignedRouteId) marks nothing.
+      if (!user.isOnDuty || !routeId) {
         return res.status(400).json({ message: "No route assigned to driver" });
       }
 
@@ -3598,7 +3607,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const student = await storage.getStudentById(studentId);
       const routeId = user.assignedRouteId;
-      if (!student || !routeId || student.routeId !== routeId) {
+      // Q114: on duty only; same 404 as a student off the shift route.
+      if (!user.isOnDuty || !student || !routeId || student.routeId !== routeId) {
         return res.status(404).json({ message: "Student not found" });
       }
 
@@ -4136,8 +4146,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       const { title, message, type } = parsedNote.data;
 
-      // Q65: the route that gets stored (body or the assignedRouteId fallback)
-      // must be in the driver's company and be one they drive or are assigned.
+      // Q65/Q91 r3: the route that gets stored (body, or the assignedRouteId
+      // fallback) must be the driver's active shift route while on duty, and in
+      // the driver's company.
       if (routeId !== undefined && routeId !== null && !hasId(routeId)) {
         return res.status(400).json({ message: "Invalid routeId" });
       }
@@ -5064,8 +5075,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Before anything else: the route must be the driver's assigned route and
       // in the caller's tenant, and the stop must belong to that route. Any
-      // failure is a 404 with nothing written.
-      if (routeId !== user.assignedRouteId) {
+      // failure is a 404 with nothing written. Q114: on duty only (isOnDuty is
+      // authoritative; a stale assignedRouteId after a failed reset is refused).
+      if (!user.isOnDuty || routeId !== user.assignedRouteId) {
         return res.status(404).json({ message: "Route not found" });
       }
       const route = await storage.getRouteById(routeId);
@@ -5558,6 +5570,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const user = await getCaller(req);
       if (!user || !isDriverRole(user.role)) {
         return res.status(403).json({ message: "Only drivers can confirm drop-off" });
+      }
+
+      // Q102: an off-duty driver can't confirm drop-off or fire the "arrived
+      // safely" notice. Same 404 as a missing check-in (mirrors confirm-boarded).
+      if (!user.isOnDuty) {
+        return res.status(404).json({ message: "Check-in not found" });
       }
 
       const { checkInId } = req.body;

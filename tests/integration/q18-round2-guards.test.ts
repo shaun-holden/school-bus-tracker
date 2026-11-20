@@ -73,6 +73,17 @@ afterEach(() => {
 });
 
 describe('confirm-dropoff tenant check, each skip alone', () => {
+  // Q102: confirm-dropoff first requires an on-duty driver. Seed both drivers
+  // on duty so each pin below reaches the tenant check it names; put them back after.
+  beforeAll(async () => {
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, h.ids.driverA));
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, driverNullId));
+  });
+  afterAll(async () => {
+    await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null }).where(eq(users.id, h.ids.driverA));
+    await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null }).where(eq(users.id, driverNullId));
+  });
+
   it('2g: driverA drops off a boarded check-in whose companyId is NULL and whose driverId is driverA → 404, still boarded (red if the existingCheckIn.companyId && skip comes back)', async () => {
     const id = await insertCheckIn({ companyId: null, status: 'boarded', driverId: h.ids.driverA });
     const res = await driverA.post('/api/check-in/confirm-dropoff').send({ checkInId: id });
