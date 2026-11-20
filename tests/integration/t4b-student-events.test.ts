@@ -155,10 +155,15 @@ describe('T4b E5 drop-off endpoint', () => {
 });
 
 describe('T4b follow-ups (SHELL merge)', () => {
-  it('E4b: a company-A driver whose assignedRouteId is (bad data) company B\'s route marks B\'s child present → the mark is saved but there is no B parent notice and no push (red if the E4b isOutsideCallerTenant check is removed)', async () => {
+  // Q134: the attendance write now refuses a foreign shift route before
+  // marking, so the E4b notify check (routeInCallerTenant) is defence in depth:
+  // this request no longer reaches it, and the no-notice / no-push assertions
+  // below stay as a regression guard.
+  it('E4b: a company-A driver whose assignedRouteId is (bad data) company B\'s route marks B\'s child present → 404 "Route not found", no mark, no B parent notice and no push (red if isOutsideCallerTenant(user, route.companyId) is removed from the student-attendance route check)', async () => {
     const res = await driverOnB.post(MARK).send({ studentId: h.ids.studentB, status: 'present' });
-    expect(res.status).toBe(200);
-    expect(await h.db.select().from(studentAttendance).where(eq(studentAttendance.studentId, h.ids.studentB))).toHaveLength(1);
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ message: 'Route not found' });
+    expect(await h.db.select().from(studentAttendance).where(eq(studentAttendance.studentId, h.ids.studentB))).toHaveLength(0);
     expect(await h.db.select().from(systemNotifications).where(eq(systemNotifications.recipientId, h.ids.parentB))).toHaveLength(0);
     expect(send()).not.toHaveBeenCalled();
   });

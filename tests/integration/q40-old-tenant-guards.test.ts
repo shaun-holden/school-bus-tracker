@@ -9,7 +9,7 @@
 // Postgres; the no-company rows are seeded so each guard is reachable.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { and, eq } from 'drizzle-orm';
-import { users, buses, routes, routeStops, schools, students, routeSchools } from '@shared/schema';
+import { users, buses, routes, routeStops, schools, students, routeSchools, studentAttendance } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 import { insertUser, SEED_PASSWORD } from './seed';
 
@@ -282,6 +282,74 @@ describe('Q128 GET /api/check-in/waiting/:routeId: which clause refuses', () => 
       expect(res.body).toEqual({ message: 'Route not found' });
     } finally {
       await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null, assignedRouteId: null }).where(eq(users.id, h.ids.master));
+    }
+  });
+});
+
+// Q134: the three driver-route reads and POST student-attendance check that the
+// caller's shift route (assignedRouteId) is in the caller's tenant. A foreign
+// route answers like "no route": [] on the reads, 404 "Route not found" on the
+// write. Each case seeds the foreign rows and asserts them present first.
+const ROUTE_READS = ['/api/driver-route-students', '/api/driver-route-stops', '/api/driver-route-schools'] as const;
+const READ_CLAUSE = 'isOutsideCallerTenant(user, shiftRoute.companyId)';
+
+describe('Q134 no-company driver on duty on a no-company shift route', () => {
+  it(`driver-route-students|stops|schools → 200 [] though N.route has a student, a stop and a school link (red if ${READ_CLAUSE} is removed from driver-route-students|stops|schools)`, async () => {
+    expect((await h.db.select().from(users).where(eq(users.id, N.driver)))[0]).toMatchObject({ isOnDuty: true, assignedRouteId: N.route, companyId: null });
+    expect((await h.db.select().from(students).where(eq(students.id, N.student)))[0].routeId).toBe(N.route);
+    expect((await h.db.select().from(routeStops).where(eq(routeStops.id, N.stop)))[0].routeId).toBe(N.route);
+    expect(await h.db.select().from(routeSchools).where(eq(routeSchools.routeId, N.route))).toHaveLength(1);
+    for (const path of ROUTE_READS) {
+      const res = await driverNull.get(path);
+      expect(res.status, path).toBe(200);
+      expect(res.body, path).toEqual([]);
+    }
+  });
+
+  it('POST student-attendance for N.student → 404 "Route not found", no row written (red if isOutsideCallerTenant(user, route.companyId) is removed from the student-attendance route check)', async () => {
+    try {
+      const res = await driverNull.post('/api/student-attendance').send({ studentId: N.student, status: 'present' });
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ message: 'Route not found' });
+      expect(await h.db.select().from(studentAttendance).where(eq(studentAttendance.studentId, N.student))).toHaveLength(0);
+    } finally {
+      await h.db.delete(studentAttendance).where(eq(studentAttendance.studentId, N.student));
+    }
+  });
+});
+
+describe('Q134 master impersonating company A, on duty with a stale company-B shift route (routeB)', () => {
+  it(`reads → 200 [] and POST student-attendance for studentB → 404 "Route not found", no row (red if ${READ_CLAUSE} is removed from driver-route-students|stops|schools, or isOutsideCallerTenant(user, route.companyId) from the student-attendance route check)`, async () => {
+    // The base harness seeds no routeSchools rows, so link routeB → schoolB.
+    const [link] = await h.db.insert(routeSchools).values({ routeId: h.ids.routeB, schoolId: h.ids.schoolB, order: 0 }).returning({ id: routeSchools.id });
+    try {
+      const imp = await master.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({});
+      expect(imp.status).toBe(200);
+      await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: h.ids.routeB }).where(eq(users.id, h.ids.master));
+
+      // Preconditions: each read would return a company-B row without the check.
+      expect((await h.db.select().from(routes).where(eq(routes.id, h.ids.routeB)))[0].companyId).toBe(h.ids.companyB);
+      expect((await h.db.select().from(students).where(eq(students.id, h.ids.studentB)))[0].routeId).toBe(h.ids.routeB);
+      expect((await h.db.select().from(routeStops).where(eq(routeStops.id, h.ids.stopB1)))[0].routeId).toBe(h.ids.routeB);
+      expect(await h.db.select().from(routeSchools).where(eq(routeSchools.id, link.id))).toHaveLength(1);
+
+      for (const path of ROUTE_READS) {
+        const res = await master.get(path);
+        expect(res.status, path).toBe(200);
+        expect(res.body, path).toEqual([]);
+      }
+
+      // studentB is on routeB, so "Student not found on your route" passes and
+      // only the new route-tenant clause can refuse.
+      const mark = await master.post('/api/student-attendance').send({ studentId: h.ids.studentB, status: 'present' });
+      expect(mark.status).toBe(404);
+      expect(mark.body).toEqual({ message: 'Route not found' });
+      expect(await h.db.select().from(studentAttendance).where(eq(studentAttendance.studentId, h.ids.studentB))).toHaveLength(0);
+    } finally {
+      await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null, assignedRouteId: null }).where(eq(users.id, h.ids.master));
+      await master.post('/api/master-admin/stop-impersonating').send({});
+      await h.db.delete(routeSchools).where(eq(routeSchools.id, link.id));
+      await h.db.delete(studentAttendance).where(eq(studentAttendance.studentId, h.ids.studentB));
     }
   });
 });

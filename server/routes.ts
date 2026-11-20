@@ -86,6 +86,15 @@ const sendMessageBodySchema = z.object({
   studentId: z.string().min(1).max(64).nullish(),
 });
 
+// Q134: true only when the caller's shift route exists and is in the caller's
+// tenant (isOutsideCallerTenant, so an impersonating master or a no-company
+// driver with a stale route from another company gets false). One indexed read.
+async function shiftRouteInTenant(user: any): Promise<boolean> {
+  if (!user?.assignedRouteId) return false;
+  const shiftRoute = await storage.getRouteById(user.assignedRouteId);
+  return !!shiftRoute && !isOutsideCallerTenant(user, shiftRoute.companyId);
+}
+
 async function isRouteInCompany(routeId: string, companyId: string | null | undefined): Promise<boolean> {
   if (!companyId) return false;
   const route = await storage.getRouteById(routeId);
@@ -1516,6 +1525,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json([]);
       }
 
+      // Q134: the shift route must be in the caller's tenant (a stale route
+      // from another company reads nothing, same as no route).
+      if (!(await shiftRouteInTenant(user))) {
+        return res.json([]);
+      }
+
       const students = await storage.getStudentsByRouteId(user.assignedRouteId);
       const enrichedStudents = await enrichStudentsWithSchoolAndRoute(students);
 
@@ -1541,6 +1556,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.json([]);
       }
 
+      // Q134: the shift route must be in the caller's tenant (a stale route
+      // from another company reads nothing, same as no route).
+      if (!(await shiftRouteInTenant(user))) {
+        return res.json([]);
+      }
+
       const stops = await storage.getStopsByRouteId(user.assignedRouteId);
       res.json(stops);
     } catch (error) {
@@ -1561,6 +1582,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Q114: off duty (even with a stale assignedRouteId) reads nothing.
       if (!user.isOnDuty || !user.assignedRouteId) {
+        return res.json([]);
+      }
+
+      // Q134: the shift route must be in the caller's tenant (a stale route
+      // from another company reads nothing, same as no route).
+      if (!(await shiftRouteInTenant(user))) {
         return res.json([]);
       }
 
@@ -3560,14 +3587,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Verify the student is actually on this driver's route. Without this,
       // a driver could write bogus attendance for any student in the system
-      // by POSTing an arbitrary studentId. Also subsumes a tenant check,
-      // since the driver's assignedRouteId is already scoped to their company.
+      // by POSTing an arbitrary studentId.
       const student = await storage.getStudentById(studentId);
       if (!student || student.routeId !== routeId) {
         return res.status(404).json({ message: "Student not found on your route" });
       }
+      // Q134: the shift route is NOT implicitly in the caller's company (an
+      // impersonating master or a no-company driver can hold a stale foreign
+      // route), so check its tenant here: a foreign route is "Route not found".
       const route = await storage.getRouteById(routeId);
-      if (!route) return res.status(404).json({ message: "Route not found" });
+      if (!route || isOutsideCallerTenant(user, route.companyId)) return res.status(404).json({ message: "Route not found" });
 
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
       const tz = company?.timezone || 'UTC';
