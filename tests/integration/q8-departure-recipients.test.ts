@@ -55,7 +55,7 @@ beforeAll(async () => {
 // are mid-shift (seeded off duty). Otherwise the success paths and the guard
 // tests below would stop at the duty check.
 beforeAll(async () => {
-  await h.db.update(users).set({ isOnDuty: true }).where(inArray(users.role, ['driver', 'driver_admin']));
+  await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(inArray(users.role, ['driver', 'driver_admin']));
 });
 
 describe('Q8 A3 refusals (departedAt unchanged, no notices)', () => {

@@ -58,7 +58,7 @@ beforeAll(async () => {
 // are mid-shift (seeded off duty). Otherwise the success paths and the guard
 // tests below would stop at the duty check.
 beforeAll(async () => {
-  await h.db.update(users).set({ isOnDuty: true }).where(inArray(users.role, ['driver', 'driver_admin']));
+  await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(inArray(users.role, ['driver', 'driver_admin']));
 });
 
 beforeEach(async () => {
@@ -174,7 +174,7 @@ describe('T4b follow-ups (SHELL merge)', () => {
       .values({ companyId: null, studentId: kid.id, driverId: h.ids.master, routeId: r.id, status: 'present', attendanceDate: new Date() })
       .returning({ id: studentAttendance.id });
     // Q114: on duty, so the request reaches the !route.companyId clause.
-    await h.db.update(users).set({ assignedRouteId: r.id, isOnDuty: true }).where(eq(users.id, h.ids.master));
+    await h.db.update(users).set({ assignedRouteId: r.id, isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, h.ids.master));
     try {
       const res = await master.post(DROP).send({ studentId: kid.id });
       expect(res.status).toBe(404);
@@ -183,7 +183,7 @@ describe('T4b follow-ups (SHELL merge)', () => {
       expect(row.droppedOffAt).toBeNull();
       expect(send()).not.toHaveBeenCalled();
     } finally {
-      await h.db.update(users).set({ assignedRouteId: null, isOnDuty: false }).where(eq(users.id, h.ids.master));
+      await h.db.update(users).set({ assignedRouteId: null, isOnDuty: false, dutyStartTime: null }).where(eq(users.id, h.ids.master));
     }
   });
 });

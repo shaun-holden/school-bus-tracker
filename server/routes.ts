@@ -2083,6 +2083,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - driver access required" });
       }
 
+      // Q125: only an on-duty driver may flip the bus to on_route (a broadcast).
+      if (!user.isOnDuty) {
+        return res.status(403).json({ message: "Not on duty" });
+      }
+
       // Find the bus assigned to this driver
       const driverBus = await storage.getBusByDriverId(userId);
       if (!driverBus) {
@@ -2116,7 +2121,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // Driver deactivates their route (updates bus to idle status)  
+  // Driver deactivates their route (updates bus to idle status)
+  // Q125: deliberately NOT gated on isOnDuty. Idle is the safe direction, so a
+  // driver can always stop a stale on_route broadcast, and the dashboard calls
+  // this right AFTER toggling duty off (a gate would break going off duty).
   app.post('/api/driver/deactivate-route', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -2595,6 +2603,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
   });
 
   // Driver check-in endpoint
+  // Q121: deliberately NOT gated on isOnDuty. Checking in is part of GOING on
+  // duty (it precedes the duty toggle and sets isOnDuty itself), so a duty gate
+  // here would be circular.
   app.post('/api/driver-check-in', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -3216,7 +3227,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const routeId = user.assignedRouteId;
-      if (!routeId) {
+      // Q123: off duty (even with a stale assignedRouteId) reads nothing.
+      if (!user.isOnDuty || !routeId) {
         return res.json([]);
       }
 
@@ -3488,7 +3500,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       if (user.role === 'driver') {
         const routeId = user.assignedRouteId;
-        if (!routeId) {
+        // Q123: off duty (even with a stale assignedRouteId) reads nothing.
+        if (!user.isOnDuty || !routeId) {
           return res.json([]);
         }
         const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
@@ -3510,6 +3523,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const studentAttendanceBodySchema = z.object({
+    studentId: z.string().min(1),
+    status: z.enum(['present', 'absent']),
+  });
+
   app.post('/api/student-attendance', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
@@ -3522,7 +3540,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - driver required" });
       }
 
-      const { studentId, status } = req.body;
       const routeId = user.assignedRouteId;
 
       // Q114: off duty (even with a stale assignedRouteId) marks nothing.
@@ -3530,13 +3547,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "No route assigned to driver" });
       }
 
-      if (!studentId || !status) {
-        return res.status(400).json({ message: "Student ID and status are required" });
+      // Q125c: zod, same 400 messages as the old manual checks (never a 500).
+      const parsedBody = studentAttendanceBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
+        const raw = req.body ?? {};
+        const message = raw.studentId && raw.status && typeof raw.studentId === 'string'
+          ? "Status must be 'present' or 'absent'"
+          : "Student ID and status are required";
+        return res.status(400).json({ message });
       }
-
-      if (!['present', 'absent'].includes(status)) {
-        return res.status(400).json({ message: "Status must be 'present' or 'absent'" });
-      }
+      const { studentId, status } = parsedBody.data;
 
       // Verify the student is actually on this driver's route. Without this,
       // a driver could write bogus attendance for any student in the system
@@ -4978,6 +4998,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only drivers can update location" });
       }
 
+      // Q121: an off-duty driver must not broadcast GPS or flip the bus to on_route.
+      // Defence-in-depth — the client already stops polling off duty. Own duty state,
+      // so a plain refusal (no tenant-existence masking needed).
+      if (!user.isOnDuty) {
+        return res.status(403).json({ message: "Not on duty" });
+      }
+
       const { latitude, longitude, speed } = req.body;
       if (!latitude || !longitude) {
         return res.status(400).json({ message: "Latitude and longitude are required" });
@@ -5559,6 +5586,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  const confirmDropoffBodySchema = z.object({ checkInId: z.string().min(1) });
+
   // Driver confirms student dropped off
   app.post('/api/check-in/confirm-dropoff', isAuthenticated, async (req: any, res) => {
     try {
@@ -5578,10 +5607,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Check-in not found" });
       }
 
-      const { checkInId } = req.body;
-      if (!checkInId) {
+      // Q125c: zod, same 400 as the old manual check (never a 500).
+      const parsedBody = confirmDropoffBodySchema.safeParse(req.body);
+      if (!parsedBody.success) {
         return res.status(400).json({ message: "Check-in ID is required" });
       }
+      const { checkInId } = parsedBody.data;
 
       // Verify the check-in belongs to a route the driver is assigned to
       const existingCheckIn = await storage.getCheckInById(checkInId);
@@ -5647,6 +5678,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "Route not found" });
       }
       if (isOutsideCallerTenant(user, route.companyId)) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+
+      // Q125: a driver reads the waiting list only for their OWN assigned route, on duty.
+      // Same 404 as a foreign/missing route (don't leak that the route exists).
+      if (!user.isOnDuty || !user.assignedRouteId || routeId !== user.assignedRouteId) {
         return res.status(404).json({ message: "Route not found" });
       }
 
