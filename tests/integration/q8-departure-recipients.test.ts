@@ -7,6 +7,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { systemNotifications, schoolVisits } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
+import { inArray } from 'drizzle-orm';
+import { users } from '@shared/schema';
 import { seedQ8Extras, seedQ8Round2, Q8_EMAILS, SEED_PASSWORD, type Q8Ids } from './seed';
 
 const h = useIntegrationHarness();
@@ -47,6 +49,13 @@ beforeAll(async () => {
   parentA3 = await login(Q8_EMAILS.parentA3);
   parentB = await h.loginAs('parentB');
   parentNull = await h.loginAs('parentNull');
+});
+
+// Q114: shift writes and route reads require isOnDuty, so this file's drivers
+// are mid-shift (seeded off duty). Otherwise the success paths and the guard
+// tests below would stop at the duty check.
+beforeAll(async () => {
+  await h.db.update(users).set({ isOnDuty: true }).where(inArray(users.role, ['driver', 'driver_admin']));
 });
 
 describe('Q8 A3 refusals (departedAt unchanged, no notices)', () => {

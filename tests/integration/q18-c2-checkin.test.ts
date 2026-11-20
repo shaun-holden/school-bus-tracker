@@ -66,6 +66,9 @@ beforeAll(async () => {
   // (assignedRouteId) is the route in the body, so every refusal below reaches
   // the bus / check-in check it pins. driverA's shift route is routeA (seed).
   await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, h.ids.driverA));
+  // Q102: confirm-dropoff also requires isOnDuty, so driverAdminA is on duty and
+  // its refusal reaches the existingCheckIn.driverId check.
+  await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, h.ids.driverAdminA));
   await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: routeNull }).where(eq(users.id, driverNullId));
 
   // 3 logins (MAX_LOGINS_PER_FILE is 8).
@@ -107,7 +110,7 @@ describe('C2 confirm-boarded refusals (404, check-in still waiting)', () => {
     expect((await getCheckIn(id)).status).toBe('waiting');
   });
 
-  it('a route the driver is not assigned to gives 404, not 403', async () => {
+  it('a route that is not the driver\'s shift route (routeA2) gives 404, not 403 (red if `routeId !== user.assignedRouteId` is dropped from the confirm-boarded `!user.isOnDuty || !user.assignedRouteId || routeId !== user.assignedRouteId` gate)', async () => {
     const id = await insertCheckIn({ routeId: routeA2 });
     const res = await board(driverA, id, { routeId: routeA2 });
     expect(res.status).toBe(404);

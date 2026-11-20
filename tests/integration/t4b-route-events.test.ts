@@ -9,6 +9,8 @@ import { eq } from 'drizzle-orm';
 import { students, parentChildLinks, schoolVisits, routeStopCompletions, systemNotifications, companies } from '@shared/schema';
 import { pushService } from '../../server/pushService';
 import { useIntegrationHarness, type Agent } from './harness';
+import { inArray } from 'drizzle-orm';
+import { users } from '@shared/schema';
 import { insertUser } from './seed';
 
 const h = useIntegrationHarness();
@@ -40,6 +42,13 @@ beforeAll(async () => {
   await h.db.insert(parentChildLinks).values({ parentId: parentP2, studentId: kid.id });
   // 1 login (MAX_LOGINS_PER_FILE is 8).
   driverA = await h.loginAs('driverA');
+});
+
+// Q114: shift writes and route reads require isOnDuty, so this file's drivers
+// are mid-shift (seeded off duty). Otherwise the success paths and the guard
+// tests below would stop at the duty check.
+beforeAll(async () => {
+  await h.db.update(users).set({ isOnDuty: true }).where(inArray(users.role, ['driver', 'driver_admin']));
 });
 
 beforeEach(async () => {

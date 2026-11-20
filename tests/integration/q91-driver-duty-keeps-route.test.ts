@@ -81,7 +81,7 @@ describe('Q91 clock-off still ends the shift', () => {
     expect(row.lastCheckInTime).toBeNull();
   });
 
-  it('GET /api/driver-route-students → [] while off duty (red if the shift route survives clock-off: route actions read assignedRouteId)', async () => {
+  it('GET /api/driver-route-students → [] while off duty (red only if the shift route survives clock-off AND the Q114 `!user.isOnDuty ||` term is dropped; the reset itself is pinned by the assignedRouteId-null test above)', async () => {
     const res = await driverA.get('/api/driver-route-students');
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);

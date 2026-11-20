@@ -8,6 +8,8 @@ import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { studentAttendance } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
+import { inArray } from 'drizzle-orm';
+import { users } from '@shared/schema';
 
 const h = useIntegrationHarness();
 
@@ -23,6 +25,13 @@ beforeAll(async () => {
   driverA = await h.loginAs('driverA');
   adminA = await h.loginAs('adminA');
   adminB = await h.loginAs('adminB');
+});
+
+// Q114: shift writes and route reads require isOnDuty, so this file's drivers
+// are mid-shift (seeded off duty). Otherwise the success paths and the guard
+// tests below would stop at the duty check.
+beforeAll(async () => {
+  await h.db.update(users).set({ isOnDuty: true }).where(inArray(users.role, ['driver', 'driver_admin']));
 });
 
 beforeEach(async () => {
