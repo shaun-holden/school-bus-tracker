@@ -2218,7 +2218,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const locationSchema = z.object({
         latitude: z.coerce.number().min(-90).max(90),
         longitude: z.coerce.number().min(-180).max(180),
-        speed: z.coerce.number().min(0).optional(),
+        speed: z.coerce.number().min(0).max(999).optional(), // Q133: numeric(5,2) ceiling
       });
       const parsed = locationSchema.safeParse(req.body);
       if (!parsed.success) {
@@ -5016,10 +5016,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // Q129a: numbers, finite (plain z.number() lets NaN through). 0 is a real
   // coordinate (equator / prime meridian), so no truthiness check.
+  // Q133: ranges. Coordinates are real-world bounds; speed ±999 keeps it inside
+  // the numeric(5,2) column (±1000 overflowed and gave a 500).
   const updateLocationBodySchema = z.object({
-    latitude: z.number().finite(),
-    longitude: z.number().finite(),
-    speed: z.number().finite().optional(),
+    latitude: z.number().finite().min(-90).max(90),
+    longitude: z.number().finite().min(-180).max(180),
+    speed: z.number().finite().min(-999).max(999).optional(),
   });
 
   // Driver updates their bus location (GPS coordinates)
@@ -5065,7 +5067,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         driverBus.id,
         latitude.toString(),
         longitude.toString(),
-        speed ? speed.toString() : undefined
+        // Q133: omitted → keep the stored speed; negative (iOS sends -2 for an
+        // invalid GPS speed) → null, "unknown"; otherwise, 0 included, save it.
+        speed === undefined ? undefined : speed < 0 ? null : speed.toString()
       );
 
       if (!updatedBus) {

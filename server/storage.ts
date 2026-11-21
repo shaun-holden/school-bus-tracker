@@ -200,7 +200,7 @@ export interface IStorage {
   assignDriverToRoute(driverId: string, routeId: string): Promise<boolean>;
   unassignDriverFromBus(driverId: string): Promise<boolean>;
   unassignDriverFromRoute(driverId: string): Promise<boolean>;
-  updateBusLocation(id: string, latitude: string, longitude: string, speed?: string): Promise<Bus | undefined>;
+  updateBusLocation(id: string, latitude: string, longitude: string, speed?: string | null): Promise<Bus | undefined>;
   updateBusStatus(id: string, status: string): Promise<Bus | undefined>;
   
   // Vehicle issue operations
@@ -1132,13 +1132,14 @@ export class DatabaseStorage implements IStorage {
     return result.rowCount !== null && result.rowCount > 0;
   }
 
-  async updateBusLocation(id: string, latitude: string, longitude: string, speed?: string): Promise<Bus | undefined> {
+  async updateBusLocation(id: string, latitude: string, longitude: string, speed?: string | null): Promise<Bus | undefined> {
     const updates: any = {
       currentLatitude: latitude,
       currentLongitude: longitude,
       lastUpdated: new Date(),
     };
-    if (speed) updates.speed = speed;
+    // Q133: undefined keeps the stored speed; null clears it ("unknown").
+    if (speed !== undefined) updates.speed = speed;
 
     const [updatedBus] = await db
       .update(buses)
