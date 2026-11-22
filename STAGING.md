@@ -40,6 +40,7 @@ Railway settings live in the dashboard only. There is no `railway.json` and no `
 | `RESEND_API_KEY`, `RESEND_FROM_EMAIL` | set | **unset** (email off: sends fail softly and are logged) |
 | `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_PRIVATE_KEY`, `APNS_BUNDLE_ID`, `APNS_ENVIRONMENT` (`sandbox` or `production`), `FIREBASE_SERVICE_ACCOUNT`, `VITE_FIREBASE_*` | set, except `APNS_ENVIRONMENT`: **to be set** to `production` in push T5 (not set yet) | **unset** (push off). **To be set** in push T5, with `APNS_ENVIRONMENT` = `sandbox` |
 | `PRODUCTION_SERVER_URL`, `REPL_ID` | unset | unset |
+| `GPS_SIMULATOR_ENABLED` | **unset** (simulator off) | `true` (admin "Test: Simulate Bus Location" card + `PUT /api/buses/:busId/location`) |
 
 **On staging, Stripe is in test mode, and email and push are off.** No real person gets mail or a push from staging.
 

@@ -2548,6 +2548,14 @@ export default function AdminDashboard() {
     retry: false,
   });
 
+  // Q149: the "Test: Simulate Bus Location" card shows only where the server
+  // switches the simulator on (staging). A deploy flag: no polling.
+  const { data: gpsSim } = useQuery<{ enabled: boolean }>({
+    queryKey: ['/api/gps-simulator'],
+    enabled: !!user,
+    retry: false,
+  });
+
   const { data: drivers } = useQuery({
     queryKey: ["/api/drivers"],
     enabled: !!user,
@@ -3659,7 +3667,8 @@ export default function AdminDashboard() {
                   </Card>
                 </div>
                 
-                {/* Test Location Simulation */}
+                {/* Test Location Simulation (Q149: staging only) */}
+                {gpsSim?.enabled === true && (
                 <Card className="mt-4 border-dashed border-gray-300">
                   <CardHeader className="pb-2">
                     <CardTitle className="text-sm flex items-center gap-2">
@@ -3709,6 +3718,7 @@ export default function AdminDashboard() {
                     </div>
                   </CardContent>
                 </Card>
+                )}
               </CardContent>
             </Card>
           </TabsContent>

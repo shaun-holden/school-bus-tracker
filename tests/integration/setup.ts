@@ -18,6 +18,8 @@ assertTestDatabaseUrl(process.env.TEST_DATABASE_URL);
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
 process.env.NODE_ENV = 'test';
 process.env.SESSION_SECRET = 'integration-only-session-secret';
+// Q149: integration default ON so existing PUT bus-location tests keep their meaning; q149 test stubs it off
+process.env.GPS_SIMULATOR_ENABLED = 'true';
 
 assertTestDatabaseUrl(process.env.DATABASE_URL);
 

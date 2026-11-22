@@ -23,6 +23,7 @@ import { sendDriverInvitationEmail, sendEmployeeInvitationEmail } from "./emailS
 import { pushToRecipients, targetsPerParent, stopArrivalPayload, schoolArrivalPayload, schoolDeparturePayload, boardedPayload, droppedOffPayload, messagePayload, alertPayload } from "./pushEvents";
 import { isMasterAdminUser, isUnscopedMaster, companyScope, isOutsideCallerTenant, hasId, isAdminRole, isDriverRole, isParentRole, canAccessMessaging } from "./tenant";
 import { isDbQueryError, pgError } from "./dbErrors";
+import { gpsSimulatorEnabled } from "./gpsSimulator";
 
 // Re-fetch the CALLER (never another user). Keeps the fresh DB row (current
 // role and isActive) and re-applies the impersonation overlay for a master
@@ -2205,12 +2206,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // Q149: whether the admin GPS simulator is switched on here (staging only).
+  // Admin-only; a boolean, no tenant data.
+  app.get('/api/gps-simulator', isAuthenticated, async (req: any, res) => {
+    try {
+      const user = await getCaller(req);
+      if (!user || !isAdminRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized - admin required" });
+      }
+      res.json({ enabled: gpsSimulatorEnabled() });
+    } catch (error) {
+      console.error("Error reading GPS simulator flag:", error);
+      res.status(500).json({ message: "Failed to read GPS simulator flag" });
+    }
+  });
+
   // Bus location updates (for GPS simulation)
   app.put('/api/buses/:busId/location', isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user?.id;
       if (!userId) {
         return res.status(401).json({ message: "Unauthorized" });
+      }
+
+      // Q149: off unless GPS_SIMULATOR_ENABLED=true (staging). First, before any
+      // DB read; "Not found" (not "Bus not found") so the route looks absent.
+      if (!gpsSimulatorEnabled()) {
+        return res.status(404).json({ message: "Not found" });
       }
       
       const user = await getCaller(req);
