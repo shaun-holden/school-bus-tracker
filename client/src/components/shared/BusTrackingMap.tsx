@@ -72,22 +72,25 @@ interface BusTrackingMapProps {
 
 function MapBoundsUpdater({ buses }: { buses: BusData[] }) {
   const map = useMap();
-  
+
+  // Q141: callers rebuild the buses array on every render (every poll), so key
+  // the refit on the located buses' ids and positions instead. fitBounds then
+  // runs only when a bus moves or the set of buses changes.
+  const boundsKey = buses
+    .filter(bus => bus.currentLatitude && bus.currentLongitude)
+    .map(bus => `${bus.id}:${bus.currentLatitude}:${bus.currentLongitude}`)
+    .join('|');
+
   useEffect(() => {
-    const busesWithLocation = buses.filter(
-      bus => bus.currentLatitude && bus.currentLongitude
-    );
-    
-    if (busesWithLocation.length > 0) {
-      const bounds = L.latLngBounds(
-        busesWithLocation.map(bus => [
-          parseFloat(bus.currentLatitude!),
-          parseFloat(bus.currentLongitude!)
-        ])
-      );
-      map.fitBounds(bounds, { padding: [50, 50] });
-    }
-  }, [buses, map]);
+    if (!boundsKey) return;
+    const points = boundsKey.split('|').map(entry => {
+      const parts = entry.split(':');
+      const lng = parseFloat(parts[parts.length - 1]);
+      const lat = parseFloat(parts[parts.length - 2]);
+      return [lat, lng] as [number, number];
+    });
+    map.fitBounds(L.latLngBounds(points), { padding: [50, 50] });
+  }, [boundsKey, map]);
   
   return null;
 }
@@ -161,12 +164,13 @@ export function BusTrackingMap({
   };
 
   return (
-    <div style={{ height, width: '100%' }} className="rounded-lg overflow-hidden border">
+    <div style={{ height, width: '100%' }} className="relative isolate z-0 rounded-lg overflow-hidden border">
       <MapContainer
         center={center}
         zoom={zoom}
         style={{ height: '100%', width: '100%' }}
-        scrollWheelZoom={true}
+        dragging={!L.Browser.mobile}
+        scrollWheelZoom={false}
       >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
