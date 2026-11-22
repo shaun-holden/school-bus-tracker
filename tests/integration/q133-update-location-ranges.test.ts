@@ -6,7 +6,7 @@
 // simulator's PUT /api/buses/:busId/location speed ceiling.
 // Real HTTP + real Postgres. Each title names the clause whose deletion turns
 // it red.
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { buses, users } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
@@ -17,6 +17,9 @@ const REQUIRED = { message: 'Latitude and longitude are required' };
 
 let driverA: Agent;
 let adminA: Agent;
+// What this file changes, captured before it changes anything (restored in afterAll).
+let savedDriver: { isOnDuty: boolean | null; dutyStartTime: Date | null; assignedRouteId: string | null };
+let savedBus: { status: string | null; currentLatitude: string | null; currentLongitude: string | null; speed: string | null };
 
 // Copied from q121-125 (file-local there), plus speed in resetBus.
 const onDuty = () =>
@@ -28,11 +31,20 @@ const seedSpeed = () =>
   h.db.update(buses).set({ currentLatitude: '40.00000000', currentLongitude: '-75.00000000', speed: '25.00' }).where(eq(buses.id, h.ids.busA));
 
 beforeAll(async () => {
-  expect((await busRow()).driverId).toBe(h.ids.driverA);
+  const bus = await busRow();
+  expect(bus.driverId).toBe(h.ids.driverA);
+  const [driver] = await h.db.select().from(users).where(eq(users.id, h.ids.driverA));
+  savedDriver = { isOnDuty: driver.isOnDuty, dutyStartTime: driver.dutyStartTime, assignedRouteId: driver.assignedRouteId };
+  savedBus = { status: bus.status, currentLatitude: bus.currentLatitude, currentLongitude: bus.currentLongitude, speed: bus.speed };
   await onDuty();
   // 2 logins (MAX_LOGINS_PER_FILE is 8).
   driverA = await h.loginAs('driverA');
   adminA = await h.loginAs('adminA');
+});
+
+afterAll(async () => {
+  await h.db.update(users).set(savedDriver).where(eq(users.id, h.ids.driverA));
+  await h.db.update(buses).set(savedBus).where(eq(buses.id, h.ids.busA));
 });
 
 describe('Q133 update-location ranges', () => {
@@ -79,11 +91,15 @@ describe('Q133 update-location ranges', () => {
     ['speed .min(-999)', { latitude: 40, longitude: -75, speed: -1000 }],
   ];
   for (const [clause, body] of overflow) {
-    it(`a column-overflowing value ${JSON.stringify(body)} → 400, not a 500 (red if ${clause} is removed from updateLocationBodySchema)`, async () => {
+    it(`a column-overflowing value ${JSON.stringify(body)} → 400, not a 500, bus unchanged (red if ${clause} is removed from updateLocationBodySchema)`, async () => {
       await resetBus();
       const res = await driverA.post(LOC).send(body);
       expect(res.status).toBe(400);
       expect(res.body).toEqual(REQUIRED);
+      const bus = await busRow();
+      expect(bus.currentLatitude).toBeNull();
+      expect(bus.speed).toBeNull();
+      expect(bus.status).toBe('idle');
     });
   }
 });
@@ -120,7 +136,10 @@ describe('Q133 PUT /api/buses/:busId/location speed ceiling (admin GPS simulator
     await seedSpeed();
     const res = await adminA.put(`/api/buses/${h.ids.busA}/location`).send({ latitude: 40.2, longitude: -75.2, speed: 1000 });
     expect(res.status).toBe(400);
-    expect((await busRow()).speed).toBe('25.00');
+    const bus = await busRow();
+    expect(bus.speed).toBe('25.00');
+    expect(Number(bus.currentLatitude)).toBe(40);
+    expect(Number(bus.currentLongitude)).toBe(-75);
   });
 
   it('adminA speed 50 → 200 and 50 is stored (positive control)', async () => {
