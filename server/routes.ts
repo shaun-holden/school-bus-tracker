@@ -2121,10 +2121,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "No bus assigned to driver" });
       }
 
+      // Q152a: link the bus to the shift route so the parent card finds it.
+      // Fail closed: a missing or foreign shift route (or a foreign bus) writes null.
+      const routeOk = await shiftRouteInTenant(user);
+      const busOk = !isOutsideCallerTenant(user, driverBus.companyId);
+
       // Update bus status to on_route
       const updatedBus = await storage.updateBus(driverBus.id, {
         status: 'on_route',
         lastUpdated: new Date(),
+        currentRouteId: routeOk && busOk ? user.assignedRouteId : null,
       });
 
       if (!updatedBus) {
@@ -2171,10 +2177,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "No bus assigned to driver" });
       }
 
-      // Update bus status to idle
+      // Update bus status to idle (Q152a: and drop the route link)
       const updatedBus = await storage.updateBus(driverBus.id, {
         status: 'idle',
         lastUpdated: new Date(),
+        currentRouteId: null,
       });
 
       if (!updatedBus) {
@@ -2737,8 +2744,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Continue with check-in even if bus update fails
       }
       
-      // Set the bus's currentRouteId so parent tracking can find it
+      // Set the bus's currentRouteId so parent tracking can find it.
+      // Q152a: first clear this route from any other bus of the company.
       try {
+        await storage.clearRouteFromOtherBuses(routeId, busId, checkInBus.companyId);
         await storage.updateBus(busId, { currentRouteId: routeId, status: 'on_route' });
         console.log(`Set bus ${busId} currentRouteId to ${routeId}`);
       } catch (busError) {

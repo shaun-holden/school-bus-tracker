@@ -199,6 +199,7 @@ export interface IStorage {
   assignDriverToBus(driverId: string, busId: string): Promise<boolean>;
   assignDriverToRoute(driverId: string, routeId: string): Promise<boolean>;
   unassignDriverFromBus(driverId: string): Promise<boolean>;
+  clearRouteFromOtherBuses(routeId: string, exceptBusId: string, companyId: string): Promise<void>;
   unassignDriverFromRoute(driverId: string): Promise<boolean>;
   updateBusLocation(id: string, latitude: string, longitude: string, speed?: string | null): Promise<Bus | undefined>;
   updateBusStatus(id: string, status: string): Promise<Bus | undefined>;
@@ -1169,10 +1170,11 @@ export class DatabaseStorage implements IStorage {
 
   async assignDriverToBus(driverId: string, busId: string): Promise<boolean> {
     try {
-      // First, unassign this driver from ALL other buses (enforce one bus per driver)
+      // First, unassign this driver from ALL other buses (enforce one bus per driver).
+      // Q152a: the old bus also drops its route link, so parents stop seeing it.
       await db
         .update(buses)
-        .set({ driverId: null, status: 'idle', lastUpdated: new Date() })
+        .set({ driverId: null, status: 'idle', currentRouteId: null, lastUpdated: new Date() })
         .where(eq(buses.driverId, driverId));
       
       // Now assign the driver to the new bus
@@ -1204,16 +1206,30 @@ export class DatabaseStorage implements IStorage {
 
   async unassignDriverFromBus(driverId: string): Promise<boolean> {
     try {
-      // Unassign driver from ALL buses they might be assigned to
+      // Unassign driver from ALL buses they might be assigned to.
+      // Q152a: off duty also clears the route link (parents see "No bus").
       const result = await db
         .update(buses)
-        .set({ driverId: null, status: 'idle', lastUpdated: new Date() })
+        .set({ driverId: null, status: 'idle', currentRouteId: null, lastUpdated: new Date() })
         .where(eq(buses.driverId, driverId));
       return result.rowCount !== null && result.rowCount >= 0;
     } catch (error) {
       console.error("Error unassigning driver from bus:", error);
       return false;
     }
+  }
+
+  // Q152a: at most one bus per route. Clears the link on every OTHER bus of the
+  // same company that points at this route.
+  async clearRouteFromOtherBuses(routeId: string, exceptBusId: string, companyId: string): Promise<void> {
+    await db
+      .update(buses)
+      .set({ currentRouteId: null })
+      .where(and(
+        eq(buses.currentRouteId, routeId),
+        ne(buses.id, exceptBusId),
+        eq(buses.companyId, companyId),
+      ));
   }
 
   async unassignDriverFromRoute(driverId: string): Promise<boolean> {
