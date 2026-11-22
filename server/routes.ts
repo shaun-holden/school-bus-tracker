@@ -96,6 +96,14 @@ async function shiftRouteInTenant(user: any): Promise<boolean> {
   return !!shiftRoute && !isOutsideCallerTenant(user, shiftRoute.companyId);
 }
 
+// Q155: the caller's shift route when it exists and is in the caller's tenant
+// (the same test as shiftRouteInTenant), else null. One indexed read.
+async function shiftRouteIfInTenant(user: any) {
+  if (!user?.assignedRouteId) return null;
+  const shiftRoute = await storage.getRouteById(user.assignedRouteId);
+  return shiftRoute && !isOutsideCallerTenant(user, shiftRoute.companyId) ? shiftRoute : null;
+}
+
 async function isRouteInCompany(routeId: string, companyId: string | null | undefined): Promise<boolean> {
   if (!companyId) return false;
   const route = await storage.getRouteById(routeId);
@@ -1395,13 +1403,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const schoolsById = new Map(schoolList.map(s => [s.id, s]));
         const routesById = new Map(routeList.map(r => [r.id, r]));
         const stopsById = new Map(stopList.map(s => [s.id, s]));
-        const busesByRouteId = new Map(busList.filter(b => b.currentRouteId).map(b => [b.currentRouteId as string, b]));
+        // Q155: only a bus of the route's own company counts for that route.
+        const busesByRouteId = new Map(busList
+          .filter(b => b.currentRouteId && b.companyId && routesById.get(b.currentRouteId)?.companyId === b.companyId)
+          .map(b => [b.currentRouteId as string, b]));
 
         students = linkedStudents.map((student: any) => {
           const school = student.schoolId ? schoolsById.get(student.schoolId) : undefined;
           const route = student.routeId ? routesById.get(student.routeId) : undefined;
           const stop = student.stopId ? stopsById.get(student.stopId) : undefined;
-          const bus = student.routeId ? busesByRouteId.get(student.routeId) : undefined;
+          const routeBus = student.routeId ? busesByRouteId.get(student.routeId) : undefined;
+          // Q155: and only when the bus is the child's own company's.
+          const bus = routeBus && routeBus.companyId === student.companyId ? routeBus : undefined;
 
           return {
             ...student,
@@ -2124,14 +2137,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Q152a: link the bus to the shift route so the parent card finds it.
       // Fail closed: a missing or foreign shift route (or a foreign bus) writes null.
-      const routeOk = await shiftRouteInTenant(user);
+      // Q155: the route and the bus must also share a (non-null) company, which
+      // covers an unscoped master, for whom isOutsideCallerTenant is always false.
+      const shiftRoute = await shiftRouteIfInTenant(user);
       const busOk = !isOutsideCallerTenant(user, driverBus.companyId);
+      const link =
+        shiftRoute && busOk && driverBus.companyId && shiftRoute.companyId === driverBus.companyId
+          ? { routeId: shiftRoute.id, companyId: driverBus.companyId }
+          : null;
+
+      // Q155: one bus per route. Clear this route off the company's other buses
+      // first; if that throws, activate fails (500) rather than writing a duplicate.
+      if (link) {
+        await storage.clearRouteFromOtherBuses(link.routeId, driverBus.id, link.companyId);
+      }
 
       // Update bus status to on_route
       const updatedBus = await storage.updateBus(driverBus.id, {
         status: 'on_route',
         lastUpdated: new Date(),
-        currentRouteId: routeOk && busOk ? user.assignedRouteId : null,
+        currentRouteId: link ? link.routeId : null,
       });
 
       if (!updatedBus) {
@@ -3919,11 +3944,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       ]);
       const routesById = new Map(routeList.map(r => [r.id, r]));
       const stopsById = new Map(stopList.map(s => [s.id, s]));
-      const busesByRouteId = new Map(busList.filter(b => b.currentRouteId).map(b => [b.currentRouteId as string, b]));
+      // Q155: only a bus of the route's own company counts for that route.
+      const busesByRouteId = new Map(busList
+        .filter(b => b.currentRouteId && b.companyId && routesById.get(b.currentRouteId)?.companyId === b.companyId)
+        .map(b => [b.currentRouteId as string, b]));
 
       const childrenWithBuses = children.map(child => {
         const route = child.routeId ? routesById.get(child.routeId) : undefined;
-        const bus = child.routeId ? busesByRouteId.get(child.routeId) : undefined;
+        const routeBus = child.routeId ? busesByRouteId.get(child.routeId) : undefined;
+        // Q155: and only when the bus is the child's own company's.
+        const bus = routeBus && routeBus.companyId === child.companyId ? routeBus : undefined;
         const stop = child.stopId ? stopsById.get(child.stopId) : undefined;
 
         return {
