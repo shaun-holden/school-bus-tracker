@@ -251,7 +251,11 @@ describe('Q40 step 2: POST /api/routes/:routeId/stops checks the body schoolId',
 
   it('adminA adding a stop on routeA with its own schoolA still works', async () => {
     const res = await adminA.post(`/api/routes/${h.ids.routeA}/stops`).send({ name: 'Q40 A school stop', address: 'Q40 Rd', order: 9, schoolId: h.ids.schoolA });
-    expect([200, 201]).toContain(res.status);
+    try {
+      expect([200, 201]).toContain(res.status);
+    } finally {
+      if (res.body?.id) await h.db.delete(routeStops).where(eq(routeStops.id, res.body.id));
+    }
   });
 });
 
@@ -273,15 +277,16 @@ describe('Q128 GET /api/check-in/waiting/:routeId: which clause refuses', () => 
     // The master's own row has no company, so a shift route checked in while
     // impersonating B survives switching to A: the own-route gate passes and
     // only the tenant check refuses.
-    const imp = await master.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({});
-    expect(imp.status).toBe(200);
-    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: h.ids.routeB }).where(eq(users.id, h.ids.master));
     try {
+      const imp = await master.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({});
+      expect(imp.status).toBe(200);
+      await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: h.ids.routeB }).where(eq(users.id, h.ids.master));
       const res = await master.get(`/api/check-in/waiting/${h.ids.routeB}`);
       expect(res.status).toBe(404);
       expect(res.body).toEqual({ message: 'Route not found' });
     } finally {
       await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null, assignedRouteId: null }).where(eq(users.id, h.ids.master));
+      await master.post('/api/master-admin/stop-impersonating').send({});
     }
   });
 });

@@ -37,7 +37,7 @@ const onDuty = () =>
 
 const busRow = async () => (await h.db.select().from(buses).where(eq(buses.id, h.ids.busA)))[0];
 const resetBus = () =>
-  h.db.update(buses).set({ status: 'idle', currentLatitude: null, currentLongitude: null }).where(eq(buses.id, h.ids.busA));
+  h.db.update(buses).set({ status: 'idle', currentLatitude: null, currentLongitude: null, speed: null }).where(eq(buses.id, h.ids.busA));
 
 async function waitingCheckIn(routeId: string = h.ids.routeA): Promise<string> {
   const [row] = await h.db
@@ -189,10 +189,16 @@ describe('Q123 driver reads off duty → []', () => {
 describe('Q125a GET /api/check-in/waiting/:routeId', () => {
   const NOT_FOUND = { message: 'Route not found' };
   let waitingId: string;
+  let waitingA2Id: string;
 
   beforeAll(async () => {
     waitingId = await waitingCheckIn();
-    await waitingCheckIn(routeA2);
+    waitingA2Id = await waitingCheckIn(routeA2);
+  });
+  afterAll(async () => {
+    for (const id of [waitingId, waitingA2Id]) {
+      if (id) await h.db.delete(studentCheckIns).where(eq(studentCheckIns.id, id));
+    }
   });
 
   it('off duty, routeA (the stale shift route) → 404 "Route not found" (red if `!user.isOnDuty ||` is dropped from the Q125 waiting-list gate)', async () => {
@@ -220,6 +226,9 @@ describe('Q125a GET /api/check-in/waiting/:routeId', () => {
 describe('Q125c zod bodies: invalid input is a 400, never a 500', () => {
   beforeAll(async () => {
     await onDuty();
+  });
+  afterAll(async () => {
+    await offDuty();
   });
 
   it('student-attendance: missing fields / non-string studentId → 400 "Student ID and status are required"; a bad status → 400 "Status must be ..." (red if studentAttendanceBodySchema.safeParse is dropped: a numeric studentId reached the student lookup)', async () => {
@@ -256,14 +265,18 @@ describe('Q125e impersonating master admin hits the off-duty refusals', () => {
     await resetBus();
   });
   afterAll(async () => {
-    await h.db.update(users).set({ isOnDuty: false, assignedRouteId: null }).where(eq(users.id, h.ids.master));
+    await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null, assignedRouteId: null }).where(eq(users.id, h.ids.master));
+    await master.post('/api/master-admin/stop-impersonating').send({});
   });
 
   it('route reads, school visits and the waiting list → [] / 404 though routeA has students, stops, schools, a waiting check-in and the master has a visit today (red if `!user.isOnDuty ||` is dropped from any of those guards)', async () => {
+    // This test seeds its own waiting check-in (it must pass when run alone
+    // with -t, which skips the other describes' beforeAll).
+    const waitingId = await waitingCheckIn();
     // Preconditions: every read would return a row if its duty term were gone.
     expect((await h.db.select().from(students).where(eq(students.routeId, h.ids.routeA))).length).toBeGreaterThan(0);
     expect((await h.db.select().from(routeStops).where(eq(routeStops.routeId, h.ids.routeA))).length).toBeGreaterThan(0);
-    expect((await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.routeId, h.ids.routeA), eq(studentCheckIns.status, 'waiting')))).length).toBeGreaterThan(0);
+    expect((await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.id, waitingId), eq(studentCheckIns.routeId, h.ids.routeA), eq(studentCheckIns.status, 'waiting')))).length).toBe(1);
     // The base seed has no routeSchools link for routeA, so add one; and
     // getTodaysSchoolVisits keys on the caller's id, so seed the master's own visit today.
     const [link] = await h.db.insert(routeSchools).values({ routeId: h.ids.routeA, schoolId: h.ids.schoolA, order: 0 }).returning({ id: routeSchools.id });
@@ -283,6 +296,7 @@ describe('Q125e impersonating master admin hits the off-duty refusals', () => {
     } finally {
       await h.db.delete(schoolVisits).where(eq(schoolVisits.id, visit.id));
       await h.db.delete(routeSchools).where(eq(routeSchools.id, link.id));
+      await h.db.delete(studentCheckIns).where(eq(studentCheckIns.id, waitingId));
     }
   });
 
@@ -324,18 +338,23 @@ describe('Q125e impersonating master admin hits the off-duty refusals', () => {
       .insert(studentCheckIns)
       .values({ companyId: h.ids.companyA, studentId: h.ids.studentA, parentId: h.ids.parentA, routeId: h.ids.routeA, status: 'boarded', driverId: h.ids.master, boardedAt: new Date() })
       .returning({ id: studentCheckIns.id });
-    const noticesBefore = (await h.db.select().from(parentNotifications).where(eq(parentNotifications.createdById, h.ids.master))).length;
+    try {
+      const noticesBefore = (await h.db.select().from(parentNotifications).where(eq(parentNotifications.createdById, h.ids.master))).length;
 
-    const board = await master.post('/api/check-in/confirm-boarded').send({ checkInId: boardId, busId: h.ids.busA, routeId: h.ids.routeA });
-    expect(board.status).toBe(404);
-    expect(board.body).toEqual({ message: 'Check-in not found' });
-    const drop = await master.post('/api/check-in/confirm-dropoff').send({ checkInId: dropRow.id });
-    expect(drop.status).toBe(404);
-    expect(drop.body).toEqual({ message: 'Check-in not found' });
+      const board = await master.post('/api/check-in/confirm-boarded').send({ checkInId: boardId, busId: h.ids.busA, routeId: h.ids.routeA });
+      expect(board.status).toBe(404);
+      expect(board.body).toEqual({ message: 'Check-in not found' });
+      const drop = await master.post('/api/check-in/confirm-dropoff').send({ checkInId: dropRow.id });
+      expect(drop.status).toBe(404);
+      expect(drop.body).toEqual({ message: 'Check-in not found' });
 
-    const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.routeId, h.ids.routeA), eq(studentCheckIns.studentId, h.ids.studentA)));
-    expect(rows.find((r) => r.id === boardId)?.status).toBe('waiting');
-    expect(rows.find((r) => r.id === dropRow.id)?.status).toBe('boarded');
-    expect((await h.db.select().from(parentNotifications).where(eq(parentNotifications.createdById, h.ids.master))).length).toBe(noticesBefore);
+      const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.routeId, h.ids.routeA), eq(studentCheckIns.studentId, h.ids.studentA)));
+      expect(rows.find((r) => r.id === boardId)?.status).toBe('waiting');
+      expect(rows.find((r) => r.id === dropRow.id)?.status).toBe('boarded');
+      expect((await h.db.select().from(parentNotifications).where(eq(parentNotifications.createdById, h.ids.master))).length).toBe(noticesBefore);
+    } finally {
+      await h.db.delete(studentCheckIns).where(eq(studentCheckIns.id, boardId));
+      await h.db.delete(studentCheckIns).where(eq(studentCheckIns.id, dropRow.id));
+    }
   });
 });
