@@ -8,7 +8,7 @@
 // parentChildLinks row), studentA rides routeA; parentB's studentB rides routeB.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { and, eq, notInArray } from 'drizzle-orm';
-import { buses, busJourneys, driverShiftReports, users } from '@shared/schema';
+import { buses, busJourneys, driverShiftReports, routes, students, users } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 
 const h = useIntegrationHarness();
@@ -131,6 +131,14 @@ describe('Q152a the bus-route link follows the driver', () => {
 
   it('X-1: a foreign shift route (routeB, bad data) → activate-route writes no link, and parentB never sees busA (red if shiftRouteInTenant(user) is removed from the activate-route link write)', async () => {
     try {
+      // Preconditions: routeB really is company B's, and parentB's studentB
+      // rides it, so "parentB never sees busA" below is not vacuous.
+      const [rB] = await h.db.select().from(routes).where(eq(routes.id, h.ids.routeB));
+      expect(rB.companyId).toBe(h.ids.companyB);
+      const [sB] = await h.db.select().from(students).where(eq(students.id, h.ids.studentB));
+      expect(sB.routeId).toBe(h.ids.routeB);
+      expect(sB.companyId).toBe(h.ids.companyB);
+
       await startState(null, h.ids.routeB);
       const res = await driverA.post(ACTIVATE).send({});
       expect(res.status).toBe(200);
@@ -143,6 +151,30 @@ describe('Q152a the bus-route link follows the driver', () => {
       expect(JSON.stringify(b.body)).not.toContain(h.ids.busA);
     } finally {
       await startState(savedBus?.currentRouteId ?? null);
+    }
+  });
+
+  it('check-in never clears another company\'s bus link (red if eq(buses.companyId, companyId) is removed from clearRouteFromOtherBuses)', async () => {
+    const orig = await busRow(h.ids.busB);
+    try {
+      // Bad data across companies: company B's bus points at company A's routeA.
+      await h.db.update(buses).set({ currentRouteId: h.ids.routeA }).where(eq(buses.id, h.ids.busB));
+      const before = await busRow(h.ids.busB);
+      expect(before.companyId).toBe(h.ids.companyB);
+      expect(before.currentRouteId).toBe(h.ids.routeA);
+
+      await startState(h.ids.routeA);
+      const res = await driverA.post('/api/driver-check-in').send({
+        driverId: h.ids.driverA, routeId: h.ids.routeA, busId: h.ids.busA,
+        fuelLevel: 'Full', interiorClean: true, exteriorClean: true,
+      });
+      expect(res.status).toBe(200);
+      expect((await busRow(h.ids.busA)).currentRouteId).toBe(h.ids.routeA);
+      expect((await busRow(h.ids.busB)).currentRouteId).toBe(h.ids.routeA);
+    } finally {
+      await h.db.update(buses)
+        .set({ currentRouteId: orig.currentRouteId, status: orig.status })
+        .where(eq(buses.id, h.ids.busB));
     }
   });
 });
