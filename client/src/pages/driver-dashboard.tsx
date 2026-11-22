@@ -630,25 +630,29 @@ export default function DriverDashboard() {
     ? buses.find((bus: any) => bus.driverId === (user as any)?.id) 
     : null;
 
-  // Log bus assignment changes and show toast notification
+  // Q151: toast only when the assigned bus id changes during this visit. Keyed
+  // on the id (the bus object is new on every /api/buses refetch and GPS post);
+  // the first load after a mount (reload, remount, user switch) never toasts.
+  const lastBusIdRef = useRef<string | null | undefined>(undefined); // undefined = not loaded yet
+  const assignedBusId: string | null = assignedBus?.id ?? null;
+  const busesLoaded = Array.isArray(buses);
   useEffect(() => {
-    if (assignedBus) {
-      console.log('Driver assigned bus updated:', assignedBus);
-      // Only show toast if this is not the initial load
-      const hasShownInitialLoad = sessionStorage.getItem('initial-bus-load-shown');
-      if (hasShownInitialLoad) {
+    if (!busesLoaded) return; // wait for the first /api/buses load
+    if (lastBusIdRef.current === undefined) {
+      lastBusIdRef.current = assignedBusId; // first load: remember, no toast
+      return;
+    }
+    if (assignedBusId !== lastBusIdRef.current) {
+      lastBusIdRef.current = assignedBusId;
+      if (assignedBusId && assignedBus) {
         toast({
           title: "Bus Assignment Updated",
           description: `You are now assigned to Bus #${assignedBus.busNumber}`,
           duration: 4000,
         });
-      } else {
-        sessionStorage.setItem('initial-bus-load-shown', 'true');
       }
-    } else {
-      console.log('Driver has no assigned bus');
     }
-  }, [assignedBus, toast]);
+  }, [assignedBusId, busesLoaded, toast]);
 
   // State for location sharing
   const [isLocationSharing, setIsLocationSharing] = useState(false);
