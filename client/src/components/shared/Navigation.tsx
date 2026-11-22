@@ -73,7 +73,7 @@ export default function Navigation() {
             )}
             <div className="hidden sm:flex items-center space-x-2">
               {user?.role === 'master_admin' && (
-                <DropdownMenu>
+                <DropdownMenu modal={false}>
                   <DropdownMenuTrigger asChild>
                     <Button
                       variant="ghost"
@@ -144,7 +144,7 @@ export default function Navigation() {
               </Button>
             </div>
             <div className="sm:hidden">
-              <DropdownMenu>
+              <DropdownMenu modal={false}>
                 <DropdownMenuTrigger asChild>
                   <Button
                     variant="ghost"
