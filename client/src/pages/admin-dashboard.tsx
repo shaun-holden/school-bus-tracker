@@ -3695,7 +3695,7 @@ export default function AdminDashboard() {
                             } catch (error) {
                               toast({
                                 title: "Error",
-                                description: "Failed to simulate location. Driver role required.",
+                                description: "Failed to simulate location. Admin role required.",
                                 variant: "destructive",
                               });
                             }

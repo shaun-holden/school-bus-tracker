@@ -2208,9 +2208,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       const user = await getCaller(req);
       
-      // Allow both drivers and admins to update location (admins for testing)
-      if (!user || (!isDriverRole(user.role) && !isAdminRole(user.role))) {
-        return res.status(403).json({ message: "Unauthorized" });
+      // Q145: admin GPS simulator only (admin, driver_admin, master; same gate
+      // as PATCH/DELETE buses). Drivers report location through the guarded
+      // POST /api/driver/update-location (on duty, own bus).
+      if (!user || !isAdminRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized - admin required" });
       }
 
       const { busId } = req.params;
