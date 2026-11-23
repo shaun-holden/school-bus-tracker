@@ -1241,9 +1241,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         .parse(req.body);
 
       // A bus must never point at another tenant's driver (master admin included).
+      let newDriver: Awaited<ReturnType<typeof storage.getUser>> = undefined;
       if (updateData.driverId != null) {
-        const driver = await storage.getUser(updateData.driverId);
-        if (!driver || !isDriverRole(driver.role) || driver.companyId !== existingBus.companyId) {
+        newDriver = await storage.getUser(updateData.driverId);
+        if (!newDriver || !isDriverRole(newDriver.role) || newDriver.companyId !== existingBus.companyId) {
           return res.status(404).json({ message: "Driver not found" });
         }
       }
@@ -1268,10 +1269,31 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Remove driver assignment when making bus inactive
         updateData.driverId = null;
       }
+
+      // Q160: the route link follows the driver. Only when the driver actually
+      // changes: link this bus to the new driver's shift route if they are on
+      // duty and the route shares the bus's (non-null) company, else unlink it.
+      // One bus per route: clear the route off the company's other buses first
+      // (if that throws, the PATCH fails with a 500).
+      const linkUpdate: { currentRouteId?: string | null } = {};
+      if ('driverId' in updateData && (updateData.driverId ?? null) !== (existingBus.driverId ?? null)) {
+        const driver = updateData.driverId != null ? newDriver : undefined;
+        const shiftRoute =
+          driver && driver.isOnDuty === true && driver.assignedRouteId
+            ? await storage.getRouteById(driver.assignedRouteId)
+            : undefined;
+        if (shiftRoute && existingBus.companyId && shiftRoute.companyId === existingBus.companyId) {
+          await storage.clearRouteFromOtherBuses(shiftRoute.id, id, existingBus.companyId);
+          linkUpdate.currentRouteId = shiftRoute.id;
+        } else {
+          linkUpdate.currentRouteId = null;
+        }
+      }
       
       // Update the bus in the database
       const updatedBus = await storage.updateBus(id, {
         ...updateData,
+        ...linkUpdate,
         lastUpdated: new Date(),
       });
       

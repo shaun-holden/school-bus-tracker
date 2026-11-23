@@ -40,9 +40,12 @@ const resetBus = () =>
   h.db.update(buses).set({ status: 'idle', currentLatitude: null, currentLongitude: null, speed: null }).where(eq(buses.id, h.ids.busA));
 
 async function waitingCheckIn(routeId: string = h.ids.routeA): Promise<string> {
+  // Q158: checkInDate as the app writes it (UTC wall time, enableStudentCheckIn). The
+  // column default is the DB session's local time, which the waiting list's
+  // onLocalDay read puts on the wrong day between ~00:00 and 05:00 ET.
   const [row] = await h.db
     .insert(studentCheckIns)
-    .values({ companyId: h.ids.companyA, studentId: h.ids.studentA, parentId: h.ids.parentA, routeId, status: 'waiting' })
+    .values({ companyId: h.ids.companyA, studentId: h.ids.studentA, parentId: h.ids.parentA, routeId, status: 'waiting', checkInDate: new Date() })
     .returning({ id: studentCheckIns.id });
   return row.id;
 }
