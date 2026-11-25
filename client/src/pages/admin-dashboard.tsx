@@ -10,6 +10,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogContent, AlertDialogDescript
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -1267,6 +1268,11 @@ export default function AdminDashboard() {
   const [editingBus, setEditingBus] = useState<any>(null);
   const [isDeleteBusDialogOpen, setIsDeleteBusDialogOpen] = useState(false);
   const [deletingBus, setDeletingBus] = useState<any>(null);
+  // Q170: route archive / restore / delete
+  const [showArchivedRoutes, setShowArchivedRoutes] = useState(false);
+  const [archivingRoute, setArchivingRoute] = useState<any>(null);
+  const [deletingRoute, setDeletingRoute] = useState<any>(null);
+  const [deleteRouteConfirm, setDeleteRouteConfirm] = useState("");
   const [isDriverDialogOpen, setIsDriverDialogOpen] = useState(false);
   const [editingDriver, setEditingDriver] = useState<any>(null);
   const [isInviteEmployeeDialogOpen, setIsInviteEmployeeDialogOpen] = useState(false);
@@ -2300,6 +2306,66 @@ export default function AdminDashboard() {
     },
   });
 
+  // Q170: a 400 or 409 from the route endpoints carries the server's message
+  // ("409: {\"message\":...}"); anything else is a generic error.
+  const routeActionError = (error: any) => {
+    if (isUnauthorizedError(error)) {
+      toast({ title: "Unauthorized", description: "You are logged out. Logging in again...", variant: "destructive" });
+      setTimeout(() => { window.location.href = "/auth"; }, 500);
+      return;
+    }
+    const match = /^(\d{3}): ([\s\S]*)$/.exec(String(error?.message ?? ""));
+    let description = "Couldn't update the route";
+    if (match && (match[1] === "400" || match[1] === "409")) {
+      try {
+        const body = JSON.parse(match[2]);
+        if (typeof body?.message === "string") description = body.message;
+      } catch {
+        // not JSON: keep the generic text
+      }
+    }
+    toast({ title: "Error", description, variant: "destructive" });
+  };
+  const invalidateRouteLists = () => queryClient.invalidateQueries({ queryKey: ["/api/routes"] });
+
+  const archiveRouteMutation = useMutation({
+    mutationFn: async (routeId: string) => apiRequest(`/api/routes/${routeId}/archive`, "POST"),
+    onSuccess: () => {
+      invalidateRouteLists();
+      setArchivingRoute(null);
+      toast({ title: "Success", description: "Route archived" });
+    },
+    onError: (error) => {
+      setArchivingRoute(null);
+      routeActionError(error);
+    },
+  });
+
+  const restoreRouteMutation = useMutation({
+    mutationFn: async (routeId: string) => apiRequest(`/api/routes/${routeId}/restore`, "POST"),
+    onSuccess: () => {
+      invalidateRouteLists();
+      toast({ title: "Success", description: "Route restored" });
+    },
+    onError: routeActionError,
+  });
+
+  const deleteRouteMutation = useMutation({
+    mutationFn: async ({ routeId, confirmName }: { routeId: string; confirmName: string }) =>
+      apiRequest(`/api/routes/${routeId}`, "DELETE", { confirmName }),
+    onSuccess: () => {
+      invalidateRouteLists();
+      setDeletingRoute(null);
+      setDeleteRouteConfirm("");
+      toast({ title: "Success", description: "Route deleted" });
+    },
+    onError: (error) => {
+      setDeletingRoute(null);
+      setDeleteRouteConfirm("");
+      routeActionError(error);
+    },
+  });
+
   // Delete bus mutation
   const deleteBusMutation = useMutation({
     mutationFn: async (busId: string) => {
@@ -2513,6 +2579,15 @@ export default function AdminDashboard() {
     enabled: !!user,
     retry: false,
   });
+
+  // Q170: archived routes, only while the Routes tab switch is on.
+  const { data: archivedRoutes } = useQuery({
+    queryKey: ["/api/routes", { archived: true }],
+    queryFn: () => apiRequest("/api/routes?archived=1", "GET"),
+    enabled: !!user && showArchivedRoutes,
+    retry: false,
+  });
+  const routeTableRows: any[] | undefined = (showArchivedRoutes ? archivedRoutes : routes) as any[] | undefined;
 
   // Helper function to get school count for a route (each school = 1 stop)
   const getRouteStopCount = async (routeId: string) => {
@@ -4092,6 +4167,15 @@ export default function AdminDashboard() {
                   </div>
                 </CardHeader>
                 <CardContent>
+                  <div className="flex items-center space-x-2 mb-4">
+                    <Switch
+                      id="show-archived-routes"
+                      checked={showArchivedRoutes}
+                      onCheckedChange={setShowArchivedRoutes}
+                      data-testid="switch-show-archived-routes"
+                    />
+                    <Label htmlFor="show-archived-routes">Show archived routes</Label>
+                  </div>
                   <Table>
                     <TableHeader>
                       <TableRow>
@@ -4104,8 +4188,8 @@ export default function AdminDashboard() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {Array.isArray(routes) && routes.length > 0 ? (
-                        routes.map((route: any) => (
+                      {Array.isArray(routeTableRows) && routeTableRows.length > 0 ? (
+                        routeTableRows.map((route: any) => (
                           <TableRow key={route.id}>
                             <TableCell className="font-medium" data-testid={`route-name-${route.id}`}>
                               {route.name}
@@ -4130,17 +4214,51 @@ export default function AdminDashboard() {
                             </TableCell>
                             <TableCell className="text-right">
                               <div className="flex space-x-2">
-                                <Button 
-                                  variant="outline" 
-                                  size="sm" 
-                                  onClick={() => handleEditRoute(route)}
-                                  data-testid={`button-edit-route-${route.id}`}
+                                {route.isActive === false ? (
+                                  <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() => restoreRouteMutation.mutate(route.id)}
+                                    disabled={restoreRouteMutation.isPending}
+                                    data-testid={`button-restore-route-${route.id}`}
+                                  >
+                                    <RotateCcw className="w-4 h-4 mr-1" />
+                                    Restore
+                                  </Button>
+                                ) : (
+                                  <>
+                                    <Button 
+                                      variant="outline" 
+                                      size="sm" 
+                                      onClick={() => handleEditRoute(route)}
+                                      data-testid={`button-edit-route-${route.id}`}
+                                    >
+                                      <Edit className="w-4 h-4 mr-1" />
+                                      Edit
+                                    </Button>
+                                    <Button variant="outline" size="sm" data-testid={`button-view-route-${route.id}`}>
+                                      <MapPin className="w-4 h-4" />
+                                    </Button>
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => setArchivingRoute(route)}
+                                      data-testid={`button-archive-route-${route.id}`}
+                                    >
+                                      <Archive className="w-4 h-4 mr-1" />
+                                      Archive
+                                    </Button>
+                                  </>
+                                )}
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="text-red-600"
+                                  onClick={() => { setDeleteRouteConfirm(""); setDeletingRoute(route); }}
+                                  data-testid={`button-delete-route-${route.id}`}
                                 >
-                                  <Edit className="w-4 h-4 mr-1" />
-                                  Edit
-                                </Button>
-                                <Button variant="outline" size="sm" data-testid={`button-view-route-${route.id}`}>
-                                  <MapPin className="w-4 h-4" />
+                                  <Trash2 className="w-4 h-4 mr-1" />
+                                  Delete
                                 </Button>
                               </div>
                             </TableCell>
@@ -4149,12 +4267,84 @@ export default function AdminDashboard() {
                       ) : (
                         <TableRow>
                           <TableCell colSpan={6} className="text-center text-gray-500 py-8">
-                            No routes created yet. Create your first route to get started.
+                            {showArchivedRoutes
+                              ? "No archived routes."
+                              : "No routes created yet. Create your first route to get started."}
                           </TableCell>
                         </TableRow>
                       )}
                     </TableBody>
                   </Table>
+
+                  {/* Q170: archive route confirm */}
+                  <AlertDialog open={!!archivingRoute} onOpenChange={(open) => { if (!open) setArchivingRoute(null); }}>
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Archive route?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          It disappears from route lists. Past trips keep it. You can restore it later.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <AlertDialogFooter>
+                        <Button variant="outline" onClick={() => setArchivingRoute(null)} data-testid="button-cancel-archive-route">
+                          Cancel
+                        </Button>
+                        <AlertDialogAction
+                          onClick={() => { if (archivingRoute) archiveRouteMutation.mutate(archivingRoute.id); }}
+                          disabled={archiveRouteMutation.isPending}
+                          data-testid="button-confirm-archive-route"
+                        >
+                          {archiveRouteMutation.isPending ? "Archiving..." : "Archive"}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
+
+                  {/* Q170: delete route permanently, behind the typed name */}
+                  <AlertDialog
+                    open={!!deletingRoute}
+                    onOpenChange={(open) => { if (!open) { setDeletingRoute(null); setDeleteRouteConfirm(""); } }}
+                  >
+                    <AlertDialogContent>
+                      <AlertDialogHeader>
+                        <AlertDialogTitle>Delete route permanently?</AlertDialogTitle>
+                        <AlertDialogDescription>
+                          This can't be undone. Only a route with no students, buses or past trips can be deleted; otherwise archive it.
+                        </AlertDialogDescription>
+                      </AlertDialogHeader>
+                      <div className="space-y-2">
+                        <Label htmlFor="delete-route-confirm">Type {deletingRoute?.name} to confirm</Label>
+                        <Input
+                          id="delete-route-confirm"
+                          value={deleteRouteConfirm}
+                          onChange={(e) => setDeleteRouteConfirm(e.target.value)}
+                          autoComplete="off"
+                          data-testid="input-delete-route-confirm"
+                        />
+                      </div>
+                      <AlertDialogFooter>
+                        <Button
+                          variant="outline"
+                          onClick={() => { setDeletingRoute(null); setDeleteRouteConfirm(""); }}
+                          data-testid="button-cancel-delete-route"
+                        >
+                          Cancel
+                        </Button>
+                        <AlertDialogAction
+                          onClick={() => {
+                            if (deletingRoute) {
+                              deleteRouteMutation.mutate({ routeId: deletingRoute.id, confirmName: deleteRouteConfirm });
+                            }
+                          }}
+                          className="bg-red-600 hover:bg-red-700"
+                          disabled={!deletingRoute || deleteRouteConfirm !== deletingRoute.name || deleteRouteMutation.isPending}
+                          data-testid="button-confirm-delete-route"
+                        >
+                          {deleteRouteMutation.isPending ? "Deleting..." : "Delete"}
+                        </AlertDialogAction>
+                      </AlertDialogFooter>
+                    </AlertDialogContent>
+                  </AlertDialog>
                 </CardContent>
               </Card>
             </div>

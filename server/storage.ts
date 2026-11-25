@@ -145,13 +145,18 @@ export interface IStorage {
   deleteSchool(id: string): Promise<boolean>;
 
   // Route operations
-  getAllRoutes(companyId?: string): Promise<Route[]>;
+  getAllRoutes(companyId?: string, opts?: { archived?: boolean }): Promise<Route[]>;
   getRouteById(id: string): Promise<Route | undefined>;
   getRoutesByIds(ids: string[]): Promise<Route[]>;
   getRoutesByDriverId(driverId: string): Promise<Route[]>;
   createRoute(route: InsertRoute): Promise<Route>;
   updateRoute(id: string, updates: Partial<InsertRoute>): Promise<Route | undefined>;
   deleteRoute(id: string): Promise<boolean>;
+  archiveRoute(id: string): Promise<boolean>;
+  restoreRoute(id: string): Promise<boolean>;
+  countRouteUsers(routeId: string, companyId: string | null): Promise<{ students: number; buses: number; drivers: number }>;
+  countRouteHistory(routeId: string): Promise<number>;
+  deleteRouteCompletely(id: string): Promise<{ deleted: boolean; fkBlocked?: boolean }>;
   assignDriverToRoute(driverId: string, routeId: string): Promise<boolean>;
 
   // Route stop operations
@@ -714,7 +719,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Route operations
-  async getAllRoutes(companyId?: string): Promise<Route[]> {
+  // Q170: active routes only by default (a NULL isActive counts as active);
+  // { archived: true } gives archived routes only.
+  async getAllRoutes(companyId?: string, opts?: { archived?: boolean }): Promise<Route[]> {
+    const activeFilter = opts?.archived
+      ? eq(routes.isActive, false)
+      : sql`${routes.isActive} IS DISTINCT FROM false`;
     const routesWithStopCount = await db
       .select({
         id: routes.id,
@@ -730,7 +740,7 @@ export class DatabaseStorage implements IStorage {
       })
       .from(routes)
       .leftJoin(routeStops, eq(routes.id, routeStops.routeId))
-      .where(companyId ? eq(routes.companyId, companyId) : undefined)
+      .where(companyId ? and(eq(routes.companyId, companyId), activeFilter) : activeFilter)
       .groupBy(routes.id, routes.name, routes.description, routes.driverId, routes.busNumber, routes.isActive, routes.estimatedDuration, routes.createdAt, routes.updatedAt)
       .orderBy(asc(routes.name));
     
@@ -776,6 +786,76 @@ export class DatabaseStorage implements IStorage {
   async deleteRoute(id: string): Promise<boolean> {
     const result = await db.delete(routes).where(eq(routes.id, id));
     return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  // Q170: archive hides the route from the lists and drops the route's own driver.
+  async archiveRoute(id: string): Promise<boolean> {
+    const result = await db
+      .update(routes)
+      .set({ isActive: false, driverId: null, updatedAt: new Date() })
+      .where(eq(routes.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  // Q170: restore re-lists it; driverId stays null (the admin re-assigns with Edit).
+  async restoreRoute(id: string): Promise<boolean> {
+    const result = await db
+      .update(routes)
+      .set({ isActive: true, updatedAt: new Date() })
+      .where(eq(routes.id, id));
+    return result.rowCount !== null && result.rowCount > 0;
+  }
+
+  // Q170: what still uses the route now, inside its company. COUNTs only.
+  async countRouteUsers(routeId: string, companyId: string | null): Promise<{ students: number; buses: number; drivers: number }> {
+    const inCompany = (col: AnyColumn) => (companyId ? eq(col, companyId) : isNull(col));
+    const n = sql<number>`count(*)::int`;
+    const [[st], [bu], [dr]] = await Promise.all([
+      db.select({ n }).from(students).where(and(
+        eq(students.routeId, routeId),
+        sql`${students.isActive} IS DISTINCT FROM false`,
+        inCompany(students.companyId),
+      )),
+      db.select({ n }).from(buses).where(and(eq(buses.currentRouteId, routeId), inCompany(buses.companyId))),
+      db.select({ n }).from(users).where(and(eq(users.assignedRouteId, routeId), inCompany(users.companyId))),
+    ]);
+    return { students: Number(st?.n) || 0, buses: Number(bu?.n) || 0, drivers: Number(dr?.n) || 0 };
+  }
+
+  // Q170: every row that records the route's past (any company), plus every
+  // student on it, archived ones included. COUNTs only.
+  async countRouteHistory(routeId: string): Promise<number> {
+    const n = sql<number>`count(*)::int`;
+    const rows = await Promise.all([
+      db.select({ n }).from(attendance).where(eq(attendance.routeId, routeId)),
+      db.select({ n }).from(schoolVisits).where(eq(schoolVisits.routeId, routeId)),
+      db.select({ n }).from(studentAttendance).where(eq(studentAttendance.routeId, routeId)),
+      db.select({ n }).from(driverShiftReports).where(eq(driverShiftReports.routeId, routeId)),
+      db.select({ n }).from(parentNotifications).where(eq(parentNotifications.routeId, routeId)),
+      db.select({ n }).from(studentCheckIns).where(eq(studentCheckIns.routeId, routeId)),
+      db.select({ n }).from(systemNotifications).where(eq(systemNotifications.routeId, routeId)),
+      db.select({ n }).from(busJourneys).where(eq(busJourneys.routeId, routeId)),
+      db.select({ n }).from(routeStopCompletions).where(eq(routeStopCompletions.routeId, routeId)),
+      db.select({ n }).from(students).where(eq(students.routeId, routeId)),
+    ]);
+    return rows.reduce((sum, [r]) => sum + (Number(r?.n) || 0), 0);
+  }
+
+  // Q170: the route's own stops and route_schools rows, then the route, in one
+  // transaction. A foreign-key error (23503) rolls back and is reported as
+  // fkBlocked; anything else is rethrown.
+  async deleteRouteCompletely(id: string): Promise<{ deleted: boolean; fkBlocked?: boolean }> {
+    try {
+      return await db.transaction(async (tx) => {
+        await tx.delete(routeStops).where(eq(routeStops.routeId, id));
+        await tx.delete(routeSchools).where(eq(routeSchools.routeId, id));
+        const result = await tx.delete(routes).where(eq(routes.id, id));
+        return { deleted: result.rowCount !== null && result.rowCount > 0 };
+      });
+    } catch (e) {
+      if (pgError(e)?.code === '23503') return { deleted: false, fkBlocked: true };
+      throw e;
+    }
   }
 
   // Route stop operations

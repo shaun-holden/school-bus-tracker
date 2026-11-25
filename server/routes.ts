@@ -104,6 +104,35 @@ async function shiftRouteIfInTenant(user: any) {
   return shiftRoute && !isOutsideCallerTenant(user, shiftRoute.companyId) ? shiftRoute : null;
 }
 
+// Q170: the record-by-id guards for the route archive / restore / delete
+// endpoints, in order: admin (403) → the route exists → in the caller's tenant
+// (404, same text). Sends the error and returns null, or returns the route.
+async function loadAdminRoute(req: any, res: any) {
+  const user = await getCaller(req);
+  if (!user || !isAdminRole(user.role)) {
+    res.status(403).json({ message: "Unauthorized" });
+    return null;
+  }
+  const route = await storage.getRouteById(req.params.id);
+  if (!route || isOutsideCallerTenant(user, route.companyId)) {
+    res.status(404).json({ message: "Route not found" });
+    return null;
+  }
+  return route;
+}
+
+// Q170: "This route still has 2 students, 1 bus on it now and 1 driver on a
+// shift on it. Move them first." Parts that are 0 are left out. Numbers only.
+function routeInUseMessage(c: { students: number; buses: number; drivers: number }): string {
+  const parts: string[] = [];
+  if (c.students > 0) parts.push(`${c.students} ${c.students === 1 ? 'student' : 'students'}`);
+  if (c.buses > 0) parts.push(`${c.buses} ${c.buses === 1 ? 'bus' : 'buses'} on it now`);
+  if (c.drivers > 0) parts.push(`${c.drivers} ${c.drivers === 1 ? 'driver' : 'drivers'} on a shift on it`);
+  const list = parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+  return `This route still has ${list}. Move them first.`;
+}
+const ROUTE_HAS_HISTORY = "This route has past trips or records. Archive it instead.";
+
 async function isRouteInCompany(routeId: string, companyId: string | null | undefined): Promise<boolean> {
   if (!companyId) return false;
   const route = await storage.getRouteById(routeId);
@@ -1477,7 +1506,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       } else {
         const scope = companyScope(user);
         if (scope === null) return res.json([]);
-        routes = await storage.getAllRoutes(scope);
+        // Q170: ?archived=1 lists archived routes, for admins only; any other
+        // role gets the active list whatever it sends.
+        const archived = isAdminRole(user.role) && req.query.archived === '1';
+        routes = await storage.getAllRoutes(scope, { archived });
       }
 
       res.json(routes);
@@ -1810,6 +1842,73 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       console.error("Error updating route:", error);
       res.status(500).json({ message: "Failed to update route" });
+    }
+  });
+
+  // Q170: archive a route. Hidden from every route list, history kept, the
+  // route's own driver cleared. Refused (409, nothing written) while students,
+  // buses or drivers on a shift still use it.
+  app.post('/api/routes/:id/archive', isAuthenticated, async (req: any, res) => {
+    try {
+      const route = await loadAdminRoute(req, res);
+      if (!route) return;
+      if (route.isActive === false) return res.json({ archived: true });
+      const counts = await storage.countRouteUsers(route.id, route.companyId);
+      if (counts.students > 0 || counts.buses > 0 || counts.drivers > 0) {
+        return res.status(409).json({ message: routeInUseMessage(counts), ...counts });
+      }
+      await storage.archiveRoute(route.id);
+      res.json({ archived: true });
+    } catch (error) {
+      console.error("Error archiving route", pgError(error)?.code);
+      res.status(500).json({ message: "Failed to archive route" });
+    }
+  });
+
+  // Q170: restore an archived route to the lists (driverId stays null).
+  app.post('/api/routes/:id/restore', isAuthenticated, async (req: any, res) => {
+    try {
+      const route = await loadAdminRoute(req, res);
+      if (!route) return;
+      if (route.isActive !== false) return res.json({ archived: false });
+      await storage.restoreRoute(route.id);
+      res.json({ archived: false });
+    } catch (error) {
+      console.error("Error restoring route", pgError(error)?.code);
+      res.status(500).json({ message: "Failed to restore route" });
+    }
+  });
+
+  // Q170: delete a route for good. Only behind the typed name, and only when
+  // nothing uses it now and it has no history at all; otherwise archive it.
+  app.delete('/api/routes/:id', isAuthenticated, async (req: any, res) => {
+    try {
+      const route = await loadAdminRoute(req, res);
+      if (!route) return;
+      const confirmName = req.body?.confirmName;
+      if (typeof confirmName !== 'string' || confirmName.trim() !== (route.name ?? '').trim()) {
+        return res.status(400).json({ message: "Type the route's name to delete it." });
+      }
+      const counts = await storage.countRouteUsers(route.id, route.companyId);
+      if (counts.students > 0 || counts.buses > 0 || counts.drivers > 0) {
+        return res.status(409).json({ message: routeInUseMessage(counts), ...counts });
+      }
+      const history = await storage.countRouteHistory(route.id);
+      if (history > 0) {
+        return res.status(409).json({ message: ROUTE_HAS_HISTORY, history });
+      }
+      const result = await storage.deleteRouteCompletely(route.id);
+      if (result.fkBlocked) {
+        console.error("Route delete blocked by a reference", { code: '23503' });
+        return res.status(409).json({ message: ROUTE_HAS_HISTORY });
+      }
+      if (!result.deleted) {
+        return res.status(404).json({ message: "Route not found" });
+      }
+      res.json({ deleted: true });
+    } catch (error) {
+      console.error("Error deleting route", { code: pgError(error)?.code });
+      res.status(500).json({ message: "Failed to delete route" });
     }
   });
 
@@ -2162,6 +2261,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Q155: the route and the bus must also share a (non-null) company, which
       // covers an unscoped master, for whom isOutsideCallerTenant is always false.
       const shiftRoute = await shiftRouteIfInTenant(user);
+      // Q170: a shift can't start on an archived route.
+      if (shiftRoute && shiftRoute.isActive === false) {
+        return res.status(404).json({ message: "Route not found" });
+      }
       const busOk = !isOutsideCallerTenant(user, driverBus.companyId);
       const link =
         shiftRoute && busOk && driverBus.companyId && shiftRoute.companyId === driverBus.companyId
@@ -2738,7 +2841,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         storage.getRouteById(routeId),
         storage.getBusById(busId),
       ]);
-      if (!selectedDriver || !checkInRoute || !checkInBus) {
+      // Q170: an archived route counts as not found.
+      if (!selectedDriver || !checkInRoute || !checkInBus || checkInRoute.isActive === false) {
         return res.status(404).json({ message: "Not found" });
       }
       if (!isUnscopedMaster(user) && (
