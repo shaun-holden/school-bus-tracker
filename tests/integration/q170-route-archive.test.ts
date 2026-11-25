@@ -76,6 +76,7 @@ afterAll(async () => {
   await h.db.delete(parentNotifications).where(like(parentNotifications.title, 'Q172-%'));
   await h.db.delete(systemNotifications).where(like(systemNotifications.title, 'Q172-%'));
   await h.db.delete(students).where(like(students.firstName, 'A-Q172%'));
+  await h.db.delete(students).where(like(students.firstName, 'A-Q168%'));
   if (createdAttendance.length) await h.db.delete(attendance).where(inArray(attendance.id, createdAttendance));
   if (createdJourneys.length) await h.db.delete(busJourneys).where(inArray(busJourneys.id, createdJourneys));
   if (createdStudents.length) await h.db.delete(students).where(inArray(students.id, createdStudents));
@@ -545,6 +546,7 @@ describe('Q172 route parts on an archived route', () => {
     expect(await stopsOf(rA.id)).toHaveLength(1);
     const foreign = await adminA.post(`/api/routes/${rB.id}/schools/${schoolB2}`).send({});
     expect(foreign.status).toBe(404);
+    expect(foreign.body).toEqual(ROUTE_404);
     expect(await schoolOrders(rB.id)).toEqual([{ schoolId: h.ids.schoolB, order: 0 }]);
   });
 
@@ -580,6 +582,7 @@ describe('Q172 route parts on an archived route', () => {
     expect(await schoolOrders(rA.id)).toEqual([{ schoolId: h.ids.schoolA, order: 0 }]);
     const foreign = await adminA.delete(`/api/routes/${rB.id}/schools/${h.ids.schoolB}`).send({});
     expect(foreign.status).toBe(404);
+    expect(foreign.body).toEqual(ROUTE_404);
     expect(await schoolOrders(rB.id)).toEqual([{ schoolId: h.ids.schoolB, order: 0 }]);
   });
 });
@@ -643,5 +646,97 @@ describe('Q172 create is active, bus link skips archived', () => {
     } finally {
       await restoreDriverA();
     }
+  });
+});
+
+// Q168: a blank Route / School / Stop select sends "" — it must mean "none"
+// (null), not a 500 from the foreign key.
+describe('Q168 blank route, school and stop', () => {
+  it('(29) POST /api/students with routeId "" and schoolId "" → 201, both stored as null (red if insertStudentSchema stops turning "" into null)', async () => {
+    const res = await adminA.post('/api/students').send({
+      firstName: 'A-Q168-Post', lastName: 'Seed', parentId: h.ids.parentA, routeId: '', schoolId: '', stopId: '',
+    });
+    expect(res.status).toBe(201);
+    const [row] = await h.db.select().from(students).where(eq(students.firstName, 'A-Q168-Post'));
+    expect(row).toBeDefined();
+    expect(row.companyId).toBe(h.ids.companyA);
+    expect(row.routeId).toBeNull();
+    expect(row.schoolId).toBeNull();
+    expect(row.stopId).toBeNull();
+  });
+
+  it('(30) PUT { routeId: "" } on a student on routeA → 200 and the route is cleared (red if insertStudentSchema stops turning "" into null)', async () => {
+    seq += 1;
+    const [st] = await h.db.insert(students).values({
+      companyId: h.ids.companyA, firstName: `A-Q168-${seq}`, lastName: 'Seed', parentId: h.ids.parentA, schoolId: h.ids.schoolA, routeId: h.ids.routeA,
+    }).returning();
+    createdStudents.push(st.id);
+    expect((await studentRow(st.id)).routeId).toBe(h.ids.routeA);
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ routeId: '', schoolId: '' });
+    expect(res.status).toBe(200);
+    const row = await studentRow(st.id);
+    expect(row.routeId).toBeNull();
+    expect(row.schoolId).toBeNull();
+  });
+});
+
+describe('Q172b student PUT on archived routes', () => {
+  it("(31) PUT moving a student onto company B's ARCHIVED route → 404 \"Route not found\", still on routeA (red if the archived check runs before the tenant check on PUT)", async () => {
+    const rB = await archivedB();
+    const st = await mkStudentA({ routeId: h.ids.routeA });
+    expect((await studentRow(st.id)).routeId).toBe(h.ids.routeA);
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ routeId: rB.id });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(ROUTE_404);
+    expect((await studentRow(st.id)).routeId).toBe(h.ids.routeA);
+  });
+
+  it('(32) PUT a new stop on the same (unchanged) archived route → 409, stop unchanged (red if the unchanged-stop skip is widened to the route)', async () => {
+    const r = await archivedA();
+    const [stop1] = await stopsOf(r.id);
+    const [stop2] = await h.db.insert(routeStops).values({ routeId: r.id, schoolId: h.ids.schoolA, name: 'Q172b-Stop2', address: '2 Q172b St', order: 2 }).returning();
+    const st = await mkStudentA({ routeId: r.id, stopId: stop1.id, isActive: false });
+    expect(await studentRow(st.id)).toMatchObject({ routeId: r.id, stopId: stop1.id });
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ routeId: r.id, stopId: stop2.id });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual(ARCHIVED);
+    expect((await studentRow(st.id)).stopId).toBe(stop1.id);
+  });
+
+  it('(33) PUT isActive: true on an inactive student with no route but a stop on an own archived route → 409, still inactive (red if the reactivation stop check is removed)', async () => {
+    const r = await archivedA();
+    const [stop] = await stopsOf(r.id);
+    const st = await mkStudentA({ routeId: null, stopId: stop.id, isActive: false });
+    expect(await studentRow(st.id)).toMatchObject({ routeId: null, stopId: stop.id, isActive: false });
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ isActive: true });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual(ARCHIVED);
+    expect((await studentRow(st.id)).isActive).toBe(false);
+  });
+
+  it('(34) PUT { firstName, isActive: true } on an already-active student on an archived route (bad data) → 200 (red if the reactivation gate on existingStudent.isActive is removed)', async () => {
+    const r = await archivedA();
+    const st = await mkStudentA({ routeId: r.id, isActive: true });
+    expect(await studentRow(st.id)).toMatchObject({ routeId: r.id, isActive: true });
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ firstName: 'A-Q172-StillActive', isActive: true });
+    expect(res.status).toBe(200);
+    expect(await studentRow(st.id)).toMatchObject({ firstName: 'A-Q172-StillActive', isActive: true });
+  });
+
+  it("(35) mask: reactivating a student whose stop is on company B's archived route (bad data) is not refused with 409 (red if the stop check uses a lookup without the company)", async () => {
+    const rB = await archivedB();
+    const [stopB] = await stopsOf(rB.id);
+    const st = await mkStudentA({ routeId: null, stopId: stopB.id, isActive: false });
+    expect(await studentRow(st.id)).toMatchObject({ routeId: null, stopId: stopB.id, isActive: false });
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ isActive: true });
+    expect(res.status).not.toBe(409);
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body)).not.toContain('archived');
   });
 });

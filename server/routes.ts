@@ -3149,12 +3149,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       // Q172: reactivating a student whose route after this update is archived
       // is refused (the unchanged-route skip above does not cover it).
-      if (validatedData.isActive === true) {
+      // Q172b: only a real reactivation (inactive -> active) reads, and the
+      // stop's route counts too. A missing or foreign stop/route counts as
+      // none (no 409), so nothing reveals another company's rows.
+      if (validatedData.isActive === true && existingStudent.isActive === false) {
         const routeAfterUpdate = validatedData.routeId !== undefined ? validatedData.routeId : existingStudent.routeId;
         const reactivateRoute = hasId(routeAfterUpdate)
           ? await getRouteInCompany(routeAfterUpdate, existingStudent.companyId)
           : null;
         if (reactivateRoute && reactivateRoute.isActive === false) {
+          return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
+        }
+
+        const stopAfterUpdate = validatedData.stopId !== undefined ? validatedData.stopId : existingStudent.stopId;
+        const reactivateStop = hasId(stopAfterUpdate)
+          ? await storage.getRouteStopById(stopAfterUpdate)
+          : undefined;
+        const stopRoute = reactivateStop && hasId(reactivateStop.routeId)
+          ? await getRouteInCompany(reactivateStop.routeId, existingStudent.companyId)
+          : null;
+        if (stopRoute && stopRoute.isActive === false) {
           return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
         }
       }

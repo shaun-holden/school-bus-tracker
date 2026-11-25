@@ -1776,9 +1776,10 @@ export default function AdminDashboard() {
       }
       
       // Validate school-route association
-      const schoolId = data.schoolId === "none" ? undefined : data.schoolId;
-      const routeId = data.routeId === "none" ? undefined : data.routeId;
-      
+      // Q168: "none" (picked "No ... assigned") and "" (never touched) both mean no value.
+      const schoolId = data.schoolId === "none" || data.schoolId === "" ? null : data.schoolId;
+      const routeId = data.routeId === "none" || data.routeId === "" ? null : data.routeId;
+
       if (schoolId && routeId) {
         const response = await fetch(apiUrl(`/api/routes/${routeId}/schools`), { credentials: 'include' });
         if (response.ok) {
@@ -1786,13 +1787,13 @@ export default function AdminDashboard() {
           const schoolOnRoute = Array.isArray(routeSchools) && routeSchools.some((s: any) => s.id === schoolId);
           if (!schoolOnRoute) {
             const schoolName = Array.isArray(schools) ? schools.find((s: any) => s.id === schoolId)?.name : 'Selected school';
-            const routeName = Array.isArray(routes) ? routes.find((r: any) => r.id === routeId)?.name : 'selected route';
+            const routeName = routeById.get(routeId)?.name ?? 'the selected route';
             throw new Error(`${schoolName} is not associated with ${routeName}. Please add the school to the route first, or select a different school/route combination.`);
           }
         }
       }
-      
-      // Convert "none" values to empty strings for proper API handling
+
+      // Q168: send null (not undefined) so JSON keeps the key and the field is stored empty
       const processedData = {
         ...data,
         schoolId: schoolId,
@@ -1874,9 +1875,10 @@ export default function AdminDashboard() {
       }
       
       // Validate school-route association
-      const schoolId = updateData.schoolId === "none" ? undefined : updateData.schoolId;
-      const routeId = updateData.routeId === "none" ? undefined : updateData.routeId;
-      
+      // Q168: "none" and "" both clear the field (null), so "No route assigned" really unassigns.
+      const schoolId = updateData.schoolId === "none" || updateData.schoolId === "" ? null : updateData.schoolId;
+      const routeId = updateData.routeId === "none" || updateData.routeId === "" ? null : updateData.routeId;
+
       if (schoolId && routeId) {
         const response = await fetch(apiUrl(`/api/routes/${routeId}/schools`), { credentials: 'include' });
         if (response.ok) {
@@ -1884,13 +1886,13 @@ export default function AdminDashboard() {
           const schoolOnRoute = Array.isArray(routeSchools) && routeSchools.some((s: any) => s.id === schoolId);
           if (!schoolOnRoute) {
             const schoolName = Array.isArray(schools) ? schools.find((s: any) => s.id === schoolId)?.name : 'Selected school';
-            const routeName = Array.isArray(routes) ? routes.find((r: any) => r.id === routeId)?.name : 'selected route';
+            const routeName = routeById.get(routeId)?.name ?? 'the selected route';
             throw new Error(`${schoolName} is not associated with ${routeName}. Please add the school to the route first, or select a different school/route combination.`);
           }
         }
       }
-      
-      // Convert "none" values to undefined for proper API handling
+
+      // Q168: send null (not undefined) so JSON keeps the key and the PUT clears the field
       const processedData = {
         ...updateData,
         schoolId: schoolId,
@@ -2597,12 +2599,16 @@ export default function AdminDashboard() {
   // Q170: archived routes. Q172: loaded whenever the admin is, so the student
   // and attendance tables can still name a route after it is archived. The
   // Routes tab switch only picks which list the route table shows.
-  const { data: archivedRoutes } = useQuery({
+  const { data: archivedRoutes, isFetched: archivedRoutesFetched } = useQuery({
     queryKey: ["/api/routes", { archived: true }],
     queryFn: () => apiRequest("/api/routes?archived=1", "GET"),
     enabled: !!user,
     retry: false,
   });
+  // Q172b: the Route cells wait for both lists. isFetched (TanStack v5) is true after
+  // the first fetch settles, success or error, so a failed archived list falls back to
+  // "Unknown Route" instead of "Loading..." forever.
+  const routeListsLoaded = Array.isArray(routes) && archivedRoutesFetched;
   const routeTableRows: any[] | undefined = (showArchivedRoutes ? archivedRoutes : routes) as any[] | undefined;
 
   // Q172: one id -> route lookup over the active and archived lists (no per-row fetch).
@@ -4564,7 +4570,7 @@ export default function AdminDashboard() {
                                 <div className="flex items-center space-x-2">
                                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                                   <span className="text-sm">
-                                    {Array.isArray(routes) ?
+                                    {routeListsLoaded ?
                                       routeDisplayName(student.routeId) :
                                       'Loading...'
                                     }
@@ -5992,7 +5998,6 @@ export default function AdminDashboard() {
                           })
                           .map((record: any) => {
                           const student = Array.isArray(students) ? students.find((s: any) => s.id === record.studentId) : null;
-                          const route = record.routeId ? routeById.get(record.routeId) : null;
                           // Get driver from attendance record's driverId field
                           const driver = Array.isArray(drivers) ? drivers.find((d: any) => d.id === record.driverId) : null;
                           
@@ -6038,7 +6043,7 @@ export default function AdminDashboard() {
                               <TableCell>
                                 <div className="flex items-center space-x-2">
                                   <RouteIcon className="w-4 h-4 text-green-600" />
-                                  <span>{route ? (route.isActive === false ? `${route.name} (archived)` : route.name) : 'Unknown Route'}</span>
+                                  <span>{!record.routeId ? 'Unknown Route' : routeListsLoaded ? routeDisplayName(record.routeId) : 'Loading...'}</span>
                                 </div>
                               </TableCell>
                               <TableCell>
