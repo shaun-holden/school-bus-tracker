@@ -1294,6 +1294,8 @@ export default function AdminDashboard() {
   const [isStudentDialogOpen, setIsStudentDialogOpen] = useState(false);
   const [isEditStudentDialogOpen, setIsEditStudentDialogOpen] = useState(false);
   const [editingStudent, setEditingStudent] = useState<any>(null);
+  // Q180: the student whose Delete dialog is open (null = closed)
+  const [studentToDelete, setStudentToDelete] = useState<any>(null);
   const [showAddSchoolInRoute, setShowAddSchoolInRoute] = useState(false);
   const [activeTab, setActiveTab] = useState("fleet");
   const [calculatedDuration, setCalculatedDuration] = useState<number>(0);
@@ -1898,11 +1900,9 @@ export default function AdminDashboard() {
         schoolId: schoolId,
         routeId: routeId,
       };
-      console.log('Updating student with data:', processedData);
       return await apiRequest(`/api/students/${id}`, "PUT", processedData);
     },
     onSuccess: (updatedStudent) => {
-      console.log("Student updated successfully:", updatedStudent);
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
       editStudentForm.reset();
       setIsEditStudentDialogOpen(false);
@@ -1985,6 +1985,39 @@ export default function AdminDashboard() {
     },
   });
 
+  // Q180: "Mark inactive instead" from the Delete dialog; sends only isActive
+  const markStudentInactiveMutation = useMutation({
+    mutationFn: async (student: any) => {
+      return await apiRequest(`/api/students/${student.id}`, "PUT", { isActive: false });
+    },
+    onSuccess: (_data, student) => {
+      queryClient.invalidateQueries({ queryKey: ["/api/students"] });
+      setStudentToDelete(null);
+      toast({
+        title: "Student updated",
+        description: `${student.firstName} marked inactive`,
+      });
+    },
+    onError: (error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/auth";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Error",
+        description: studentErrorText(error, "Failed to mark the student inactive."),
+        variant: "destructive",
+      });
+    },
+  });
+
   // Handle edit student
   const handleEditStudent = (student: any) => {
     setEditingStudent(student);
@@ -1995,17 +2028,15 @@ export default function AdminDashboard() {
       parentId: student.parentId,
       schoolId: student.schoolId || "",
       routeId: student.routeId || "",
-      isActive: student.isActive,
+      // Q180: NULL counts as active (the column is nullable), so the form never fails silently
+      isActive: student.isActive !== false,
     });
     setIsEditStudentDialogOpen(true);
   };
 
-  // Handle delete student
+  // Q180: open the Delete dialog, which offers "Mark inactive instead"
   const handleDeleteStudent = (student: any) => {
-    const studentName = `${student.firstName} ${student.lastName}`;
-    if (window.confirm(`Are you sure you want to delete ${studentName}? This action cannot be undone.`)) {
-      deleteStudentMutation.mutate(student.id);
-    }
+    setStudentToDelete(student);
   };
 
   // Handle delete driver
@@ -6943,6 +6974,29 @@ export default function AdminDashboard() {
                 )}
               />
 
+              {/* Q180: Active switch (Edit only; new students start active) */}
+              <FormField
+                control={editStudentForm.control}
+                name="isActive"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between gap-4 rounded-md border p-3">
+                    <div className="space-y-1">
+                      <FormLabel>Active</FormLabel>
+                      <p className="text-sm text-muted-foreground">
+                        Inactive students keep their attendance history.
+                      </p>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        data-testid="edit-switch-student-active"
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+
               <div className="flex justify-end space-x-2">
                 <Button
                   type="button"
@@ -6971,6 +7025,50 @@ export default function AdminDashboard() {
           </Form>
         </DialogContent>
       </Dialog>
+
+      {/* Delete Student Dialog */}
+      <AlertDialog open={!!studentToDelete} onOpenChange={(open) => { if (!open) setStudentToDelete(null); }}>
+        <AlertDialogContent data-testid="dialog-delete-student">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete student</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete <strong>{studentToDelete?.firstName} {studentToDelete?.lastName}</strong> permanently? Their attendance history goes too. To stop their bus service but keep the history, mark them inactive instead.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setStudentToDelete(null)}
+              data-testid="button-cancel-delete-student"
+            >
+              Cancel
+            </Button>
+            {studentToDelete && studentToDelete.isActive !== false && (
+              <Button
+                variant="secondary"
+                disabled={markStudentInactiveMutation.isPending}
+                onClick={() => markStudentInactiveMutation.mutate(studentToDelete)}
+                data-testid="button-mark-inactive-instead"
+              >
+                {markStudentInactiveMutation.isPending ? "Saving..." : "Mark inactive instead"}
+              </Button>
+            )}
+            <AlertDialogAction
+              className="bg-red-600 hover:bg-red-700"
+              disabled={deleteStudentMutation.isPending}
+              onClick={() => {
+                if (studentToDelete) {
+                  deleteStudentMutation.mutate(studentToDelete.id);
+                }
+                setStudentToDelete(null);
+              }}
+              data-testid="button-delete-student-permanently"
+            >
+              Delete permanently
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Success Dialog */}
       <AlertDialog open={showSuccessDialog} onOpenChange={setShowSuccessDialog}>
