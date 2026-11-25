@@ -37,6 +37,15 @@ interface LinkedParent {
   lastName?: string;
 }
 
+// Q169: the number boxes keep the typed text; it is turned into a number only
+// here, when generating. A whole number in [min, max], else null (never clamped).
+function parseBoxedInt(text: string, min: number, max: number): number | null {
+  const t = text.trim();
+  if (!/^\d{1,3}$/.test(t)) return null;
+  const n = Number(t);
+  return n >= min && n <= max ? n : null;
+}
+
 interface LinkCodeManagerProps {
   student: Student;
   onClose?: () => void;
@@ -44,8 +53,11 @@ interface LinkCodeManagerProps {
 
 export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
   const { toast } = useToast();
-  const [maxUses, setMaxUses] = useState(2);
-  const [expiresInDays, setExpiresInDays] = useState(7);
+  const [maxUsesText, setMaxUsesText] = useState("2");
+  const [expiresInDaysText, setExpiresInDaysText] = useState("7");
+  const maxUses = parseBoxedInt(maxUsesText, 1, 5);
+  const expiresInDays = parseBoxedInt(expiresInDaysText, 1, 30);
+  const inputsValid = maxUses !== null && expiresInDays !== null;
 
   const { data: linkCodes, isLoading: loadingCodes } = useQuery<LinkCode[]>({
     queryKey: ['/api/students', student.id, 'link-codes'],
@@ -183,8 +195,9 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
                 <Label>Max Uses</Label>
                 <Input 
                   type="number" 
-                  value={maxUses} 
-                  onChange={(e) => setMaxUses(parseInt(e.target.value) || 2)}
+                  value={maxUsesText} 
+                  onChange={(e) => setMaxUsesText(e.target.value)}
+                  onBlur={() => { if (maxUsesText.trim() === "") setMaxUsesText("2"); }}
                   min={1}
                   max={5}
                   className="w-20"
@@ -195,8 +208,9 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
                 <Label>Expires In (Days)</Label>
                 <Input 
                   type="number" 
-                  value={expiresInDays} 
-                  onChange={(e) => setExpiresInDays(parseInt(e.target.value) || 7)}
+                  value={expiresInDaysText} 
+                  onChange={(e) => setExpiresInDaysText(e.target.value)}
+                  onBlur={() => { if (expiresInDaysText.trim() === "") setExpiresInDaysText("7"); }}
                   min={1}
                   max={30}
                   className="w-20"
@@ -204,8 +218,8 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
                 />
               </div>
               <Button 
-                onClick={() => generateCodeMutation.mutate()}
-                disabled={generateCodeMutation.isPending}
+                onClick={() => { if (inputsValid) generateCodeMutation.mutate(); }}
+                disabled={generateCodeMutation.isPending || !inputsValid}
                 data-testid="button-generate-code"
               >
                 {generateCodeMutation.isPending ? (
@@ -215,6 +229,11 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
                 )}
                 Generate Code
               </Button>
+              {!inputsValid && (
+                <p className="text-sm text-destructive" data-testid="text-link-code-input-hint">
+                  Max uses must be 1 to 5 and days 1 to 30.
+                </p>
+              )}
             </div>
           )}
 

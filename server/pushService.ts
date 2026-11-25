@@ -61,6 +61,10 @@ const APNS_ID_RE = /^[A-Z0-9]{10}$/;
 const APNS_BUNDLE_RE = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
 const PEM_BEGIN = "-----BEGIN PRIVATE KEY-----";
 const PEM_END = "-----END PRIVATE KEY-----";
+// Q171: a converted (SEC1) key. Apple only issues PKCS8 .p8 files.
+const SEC1_BEGIN = "-----BEGIN EC PRIVATE KEY-----";
+// Q171: only names of this shape are printed; others are counted, never shown.
+const APNS_SAFE_NAME_RE = /^APNS_[A-Z0-9_]{1,40}$/;
 
 export interface ApnsConfig {
   ready: boolean;
@@ -68,15 +72,16 @@ export interface ApnsConfig {
   keyId: string;
   teamId: string;
   bundleId: string;
-  privateKeyPem: string;
   /** Setting NAMES that are unset or empty after trimming. */
   missing: string[];
   /** "<NAME> <rule>" lines: names and rules only, never a value. */
   problems: string[];
   /** Setting NAMES whose value had whitespace at either end. */
   trimmed: string[];
-  /** APNS_* names that are not one of the five known names. */
+  /** APNS_* names (safe shape only) that are not one of the five known names. */
   unknownNames: string[];
+  /** How many other APNS_* names have unusual characters (never printed). */
+  oddNameCount: number;
   /** unknown name → the known name within 2 edits, when there is one. */
   suggestions: Record<string, string>;
 }
@@ -115,6 +120,30 @@ function isEcP256PrivateKey(pem: string): boolean {
   }
 }
 
+// Q171: the one key check, shared by readApnsConfig (for the problem line) and
+// readApnsPrivateKey (for the PEM). The SEC1 test runs on the RAW value, before
+// the repair, which would otherwise wrap a SEC1 key in a PKCS8 header.
+function checkPrivateKey(rawKey: string): { pem: string; problem: string | null } {
+  if (rawKey.includes(SEC1_BEGIN)) {
+    return {
+      pem: "",
+      problem: 'APNS_PRIVATE_KEY is a SEC1 "EC PRIVATE KEY"; paste Apple\'s .p8 file (BEGIN PRIVATE KEY)',
+    };
+  }
+  const pem = repairPrivateKeyPem(rawKey);
+  if (!isEcP256PrivateKey(pem)) return { pem: "", problem: "APNS_PRIVATE_KEY is not an EC P-256 private key" };
+  return { pem, problem: null };
+}
+
+/**
+ * Q171: the Apple private key as a clean PEM, or "" when unset or unusable.
+ * Kept out of ApnsConfig so a log of the config can never print the key.
+ */
+export function readApnsPrivateKey(env: NodeJS.ProcessEnv): string {
+  const rawKey = (env.APNS_PRIVATE_KEY ?? "").trim();
+  return rawKey ? checkPrivateKey(rawKey).pem : "";
+}
+
 /** Q167: reads, cleans and checks the Apple push settings. Pure: no logging. */
 export function readApnsConfig(env: NodeJS.ProcessEnv): ApnsConfig {
   const missing: string[] = [];
@@ -139,17 +168,15 @@ export function readApnsConfig(env: NodeJS.ProcessEnv): ApnsConfig {
   if (bundleId && !APNS_BUNDLE_RE.test(bundleId)) {
     problems.push("APNS_BUNDLE_ID must be dot-separated parts of letters, digits or hyphens (like com.example.app)");
   }
-  let privateKeyPem = "";
   if (rawKey) {
-    privateKeyPem = repairPrivateKeyPem(rawKey);
-    if (!isEcP256PrivateKey(privateKeyPem)) {
-      problems.push("APNS_PRIVATE_KEY is not an EC P-256 private key");
-      privateKeyPem = "";
-    }
+    const { problem } = checkPrivateKey(rawKey);
+    if (problem) problems.push(problem);
   }
 
   const known = new Set<string>(APNS_KNOWN_NAMES);
-  const unknownNames = Object.keys(env).filter((n) => n.startsWith("APNS_") && !known.has(n)).sort();
+  const otherNames = Object.keys(env).filter((n) => n.startsWith("APNS_") && !known.has(n));
+  const unknownNames = otherNames.filter((n) => APNS_SAFE_NAME_RE.test(n)).sort();
+  const oddNameCount = otherNames.length - unknownNames.length;
   const suggestions: Record<string, string> = {};
   for (const name of unknownNames) {
     let best: string | undefined;
@@ -171,11 +198,11 @@ export function readApnsConfig(env: NodeJS.ProcessEnv): ApnsConfig {
     keyId,
     teamId,
     bundleId,
-    privateKeyPem,
     missing,
     problems,
     trimmed,
     unknownNames,
+    oddNameCount,
     suggestions,
   };
 }
@@ -425,7 +452,7 @@ export class PushService {
     this.apnsKeyId = apns.keyId;
     this.apnsTeamId = apns.teamId;
     this.apnsBundleId = apns.bundleId;
-    this.apnsPrivateKeyPem = apns.privateKeyPem;
+    this.apnsPrivateKeyPem = readApnsPrivateKey(process.env);
     if (this.apnsHost === null) {
       console.error('APNS_ENVIRONMENT must be "sandbox" or "production"; iOS push is off');
     }
@@ -441,6 +468,9 @@ export class PushService {
     for (const name of apns.unknownNames) {
       const known = apns.suggestions[name];
       console.log(`APNs unknown setting name ${name}${known ? ` (did you mean ${known}?)` : ""}`);
+    }
+    if (apns.oddNameCount > 0) {
+      console.log(`APNs: ${apns.oddNameCount} other APNS_ setting name(s) with unusual characters, not shown`);
     }
     this.apnsReady = apns.ready;
     this.fcmReady = firebaseInitialized;

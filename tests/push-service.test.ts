@@ -696,12 +696,27 @@ describe('Q167 APNs settings are trimmed, repaired and checked once at startup (
   const bodyOf = (pem: string) => pem.replace(/-----(BEGIN|END) PRIVATE KEY-----/g, '').replace(/\s+/g, '');
   const BAD_KEY_ID = 'KEYID1234'; // 9 characters
   const BAD_BUNDLE = 'com.example .test'; // a space inside
-  const SECRET_VALUES = ['KEYID12345', 'TEAMID1234', 'com.example.test', BAD_KEY_ID, BAD_BUNDLE];
-  const SECRET_BODIES = [BODY, bodyOf(rsaPem), bodyOf(p384Pem)];
-  const seen: string[] = []; // every line logged by tests (1)-(6), checked by (7)
+  // Q171: a converted (SEC1) P-256 key, the shape Apple never issues.
+  const sec1Pem = crypto.generateKeyPairSync('ec', { namedCurve: 'P-256' }).privateKey.export({ type: 'sec1', format: 'pem' }).toString();
+  const SEC1_LINE = 'APNs setting problem: APNS_PRIVATE_KEY is a SEC1 "EC PRIVATE KEY"; paste Apple\'s .p8 file (BEGIN PRIVATE KEY); iOS push is off';
+  const ODD_NAME = 'APNS_key id'; // lower case and a space: never printed
+  const SECRET_VALUES = ['KEYID12345', 'TEAMID1234', 'com.example.test', BAD_KEY_ID, BAD_BUNDLE, ODD_NAME, 'key id'];
+  const SECRET_BODIES = [BODY, bodyOf(rsaPem), bodyOf(p384Pem), sec1Pem.replace(/-----(BEGIN|END) EC PRIVATE KEY-----/g, '').replace(/\s+/g, '')];
 
+  // Q171 (O-3): every test in this describe checks its OWN log lines, so each one
+  // passes when run alone with -t (red if a startup line logs a setting value or
+  // any 16-character slice of a key body).
+  function expectNoSecretInLogs(lines: string[]) {
+    const all = lines.join('\n');
+    for (const v of SECRET_VALUES) expect(all, `log contains the value "${v}"`).not.toContain(v);
+    for (const body of SECRET_BODIES) {
+      for (let i = 0; i + 16 <= body.length; i++) {
+        if (all.includes(body.slice(i, i + 16))) throw new Error(`log contains a 16-character slice of a test key body at offset ${i}`);
+      }
+    }
+  }
   afterEach(() => {
-    seen.push(...logs);
+    expectNoSecretInLogs(logs);
   });
 
   it('(1) padded APNS_KEY_ID / APNS_TEAM_ID / APNS_BUNDLE_ID → kid, iss and apns-topic are the trimmed values, and the trimmed line names them (red if APNs settings stop being trimmed)', async () => {
@@ -782,15 +797,39 @@ describe('Q167 APNs settings are trimmed, repaired and checked once at startup (
     });
   }
 
-  it('(7) no line logged in (1)-(6) holds a setting value or any 16-character slice of a key body (red if a startup line logs a setting value)', () => {
-    expect(seen.length).toBeGreaterThan(5);
-    const all = seen.join('\n');
-    for (const v of SECRET_VALUES) expect(all, `log contains the value "${v}"`).not.toContain(v);
-    for (const body of SECRET_BODIES) {
-      for (let i = 0; i + 16 <= body.length; i++) {
-        const piece = body.slice(i, i + 16);
-        if (all.includes(piece)) throw new Error(`log contains a 16-character slice of a test key body at offset ${i}`);
-      }
-    }
+  it('(8) a SEC1 "EC PRIVATE KEY" → the SEC1 line, push off, no connect (red if the SEC1 check is removed)', async () => {
+    const { pushService } = await load({ ...APNS_ENV, APNS_PRIVATE_KEY: sec1Pem, APNS_ENVIRONMENT: 'sandbox' });
+    expect(logs).toContain(SEC1_LINE);
+    expect(logs.some((l) => l.includes('is not an EC P-256 private key'))).toBe(false);
+    expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(false);
+    expect(m.connect).not.toHaveBeenCalled();
+    expect(m.requests).toHaveLength(0);
+  });
+
+  it('(9) the same SEC1 key written with literal \\n → the same SEC1 line (red if the SEC1 check runs on the repaired value)', async () => {
+    const { pushService } = await load({ ...APNS_ENV, APNS_PRIVATE_KEY: sec1Pem.replace(/\n/g, '\\n'), APNS_ENVIRONMENT: 'sandbox' });
+    expect(logs).toContain(SEC1_LINE);
+    expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(false);
+    expect(m.connect).not.toHaveBeenCalled();
+  });
+
+  it('(10) readApnsConfig returns no privateKeyPem; readApnsPrivateKey gives the PEM (red if the key goes back into the config)', async () => {
+    const { readApnsConfig, readApnsPrivateKey } = await load({});
+    const env = { ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox' };
+    const cfg = readApnsConfig(env);
+    expect(cfg.ready).toBe(true);
+    expect('privateKeyPem' in cfg).toBe(false);
+    expect(JSON.stringify(cfg)).not.toContain(BODY.slice(0, 16));
+    expect(readApnsPrivateKey(env)).toContain('-----BEGIN PRIVATE KEY-----');
+    expect(readApnsPrivateKey({ ...env, APNS_PRIVATE_KEY: sec1Pem })).toBe('');
+    expect(readApnsPrivateKey({ ...env, APNS_PRIVATE_KEY: '' })).toBe('');
+  });
+
+  it('(11) an APNS_ name with lower case or a space is not printed; one count line is (red if odd names are printed)', async () => {
+    const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox', [ODD_NAME]: 'x', APNS_FOO: 'x' });
+    expect(logs).toContain('APNs: 1 other APNS_ setting name(s) with unusual characters, not shown');
+    expect(logs).toContain('APNs unknown setting name APNS_FOO');
+    expect(logs.join('\n')).not.toContain('key id');
+    expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(true);
   });
 });
