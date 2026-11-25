@@ -59,6 +59,18 @@ describe('Schema Validation - Students', () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it('Q168: blank routeId, schoolId and stopId become null, and real ids pass through (red if the blankToNull preprocess on insertStudentSchema is removed)', () => {
+    const result = insertStudentSchema.parse({
+      firstName: 'Jane', lastName: 'Smith', parentId: 'parent-123', companyId: 'company-123',
+      routeId: '', schoolId: '', stopId: '',
+    });
+    expect(result.routeId).toBeNull();
+    expect(result.schoolId).toBeNull();
+    expect(result.stopId).toBeNull();
+    // Positive control: a real id is kept as is.
+    expect(insertStudentSchema.parse({ firstName: 'J', lastName: 'S', parentId: 'p', routeId: 'route-1' }).routeId).toBe('route-1');
+  });
 });
 
 describe('Schema Validation - Routes', () => {

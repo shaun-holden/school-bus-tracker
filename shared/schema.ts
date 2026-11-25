@@ -727,7 +727,14 @@ export const updateRouteSchema = insertRouteSchema.omit({ companyId: true }).par
   driverId: z.preprocess(blankToNull, z.string().nullable().optional()),
 });
 export const insertRouteStopSchema = createInsertSchema(routeStops).omit({ id: true, createdAt: true });
-export const insertStudentSchema = createInsertSchema(students).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertStudentSchema = createInsertSchema(students).omit({ id: true, createdAt: true, updatedAt: true }).extend({
+  // "" (an untouched or cleared select) becomes null, so the foreign-key
+  // column is left empty instead of failing with a 500 (Q168).
+  // checkStudentForeignKeys still checks every real id.
+  schoolId: z.preprocess(blankToNull, z.string().nullable().optional()),
+  routeId: z.preprocess(blankToNull, z.string().nullable().optional()),
+  stopId: z.preprocess(blankToNull, z.string().nullable().optional()),
+});
 export const insertAttendanceSchema = createInsertSchema(attendance).omit({ id: true, createdAt: true });
 export const insertBusSchema = createInsertSchema(buses).omit({ id: true, createdAt: true, lastUpdated: true });
 export const insertVehicleIssueSchema = createInsertSchema(vehicleIssues).omit({ id: true, createdAt: true, resolvedAt: true });
