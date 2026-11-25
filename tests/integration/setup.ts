@@ -49,6 +49,7 @@ vi.mock('../../server/pushService', () => {
     pushService,
     PushService: vi.fn(() => pushService),
     resolveApnsHost: vi.fn(() => null),
+    readApnsConfig: vi.fn(() => ({ ready: false, host: null, keyId: '', teamId: '', bundleId: '', privateKeyPem: '', missing: [], problems: [], trimmed: [], unknownNames: [], suggestions: {} })),
     APNS_HOSTS: { sandbox: 'api.sandbox.push.apple.com', production: 'api.push.apple.com' },
     APNS_TIMEOUT_MS: 10_000,
     FCM_TIMEOUT_MS: 10_000,

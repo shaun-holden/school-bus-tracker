@@ -681,3 +681,116 @@ describe('tests/integration/setup.ts pushService mock is complete', () => {
     }
   });
 });
+
+// ---- Q167: Apple push settings cleaned and checked at startup ---------------
+describe('Q167 APNs settings are trimmed, repaired and checked once at startup (names-only lines)', () => {
+  const jwtParts = (i = 0) => {
+    const token = String(m.requests[i].headers.authorization).slice('bearer '.length);
+    const [h, p] = token.split('.');
+    const dec = (s: string) => JSON.parse(Buffer.from(s, 'base64url').toString('utf8'));
+    return { token, header: dec(h), payload: dec(p) };
+  };
+  const BODY = P8.replace(/-----(BEGIN|END) PRIVATE KEY-----/g, '').replace(/\s+/g, '');
+  const rsaPem = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const p384Pem = crypto.generateKeyPairSync('ec', { namedCurve: 'P-384' }).privateKey.export({ type: 'pkcs8', format: 'pem' }).toString();
+  const bodyOf = (pem: string) => pem.replace(/-----(BEGIN|END) PRIVATE KEY-----/g, '').replace(/\s+/g, '');
+  const BAD_KEY_ID = 'KEYID1234'; // 9 characters
+  const BAD_BUNDLE = 'com.example .test'; // a space inside
+  const SECRET_VALUES = ['KEYID12345', 'TEAMID1234', 'com.example.test', BAD_KEY_ID, BAD_BUNDLE];
+  const SECRET_BODIES = [BODY, bodyOf(rsaPem), bodyOf(p384Pem)];
+  const seen: string[] = []; // every line logged by tests (1)-(6), checked by (7)
+
+  afterEach(() => {
+    seen.push(...logs);
+  });
+
+  it('(1) padded APNS_KEY_ID / APNS_TEAM_ID / APNS_BUNDLE_ID → kid, iss and apns-topic are the trimmed values, and the trimmed line names them (red if APNs settings stop being trimmed)', async () => {
+    const { pushService } = await load({
+      APNS_KEY_ID: 'KEYID12345 ',
+      APNS_TEAM_ID: 'TEAMID1234\n',
+      APNS_BUNDLE_ID: ' com.example.test\r\n',
+      APNS_PRIVATE_KEY: P8,
+      APNS_ENVIRONMENT: 'sandbox',
+    });
+    expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(true);
+    const { header, payload } = jwtParts();
+    expect(header.kid).toBe('KEYID12345');
+    expect(payload.iss).toBe('TEAMID1234');
+    expect(m.requests[0].headers['apns-topic']).toBe('com.example.test');
+    expect(logs).toContain('APNs settings had extra spaces trimmed: APNS_KEY_ID, APNS_TEAM_ID, APNS_BUNDLE_ID');
+  });
+
+  const KEY_FORMS: Array<[string, string]> = [
+    ['the clean PEM', P8],
+    ['literal \\n', P8.replace(/\n/g, '\\n')],
+    ['CRLF', P8.replace(/\n/g, '\r\n')],
+    ['the bare base64 body', BODY],
+    ['newlines turned into spaces', P8.replace(/\n/g, ' ')],
+  ];
+  for (const [form, key] of KEY_FORMS) {
+    it(`(2) key as ${form} signs an ES256 JWT that verifies (red if the key repair path is removed)`, async () => {
+      const jwtLib = (await import('jsonwebtoken')).default;
+      const { pushService } = await load({ ...APNS_ENV, APNS_PRIVATE_KEY: key, APNS_ENVIRONMENT: 'sandbox' });
+      expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(true);
+      const { token, header } = jwtParts();
+      expect(header.alg).toBe('ES256');
+      expect(() => jwtLib.verify(token, crypto.createPublicKey(P8), { algorithms: ['ES256'] })).not.toThrow();
+      expect(logs.some((l) => l.includes('APNs setting problem'))).toBe(false);
+    });
+  }
+
+  const BAD_KEYS: Array<[string, string]> = [
+    ['an RSA key', rsaPem],
+    ['an EC P-384 key', p384Pem],
+    ['the text "not a key"', 'not a key'],
+  ];
+  for (const [what, key] of BAD_KEYS) {
+    it(`(3) ${what} → iOS push off with the EC line, no signing or request at send time (red if the EC P-256 check is removed)`, async () => {
+      const { pushService } = await load({ ...APNS_ENV, APNS_PRIVATE_KEY: key, APNS_ENVIRONMENT: 'sandbox' });
+      expect(logs).toContain('APNs setting problem: APNS_PRIVATE_KEY is not an EC P-256 private key; iOS push is off');
+      expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(false);
+      expect(m.connect).not.toHaveBeenCalled();
+      expect(m.requests).toHaveLength(0);
+      expect(logs.some((l) => l.includes('JwtSignFailed'))).toBe(false);
+    });
+  }
+
+  it('(4) missing settings → the startup line lists exactly the missing names (red if the missing-names line stops naming the settings)', async () => {
+    const { pushService } = await load({ APNS_KEY_ID: 'KEYID12345', APNS_PRIVATE_KEY: P8, APNS_BUNDLE_ID: '   ' });
+    expect(logs).toContain('APNs not configured (missing: APNS_TEAM_ID, APNS_BUNDLE_ID); iOS push is off');
+    expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(false);
+    expect(m.connect).not.toHaveBeenCalled();
+  });
+
+  it('(5) APNS_KEYS_ID → "did you mean APNS_KEY_ID?"; APNS_FOO → no suggestion; push stays on (red if unknown APNS_ names stop being reported)', async () => {
+    const { pushService } = await load({ ...APNS_ENV, APNS_ENVIRONMENT: 'sandbox', APNS_KEYS_ID: 'KEYID12345', APNS_FOO: 'x' });
+    expect(logs).toContain('APNs unknown setting name APNS_KEYS_ID (did you mean APNS_KEY_ID?)');
+    expect(logs).toContain('APNs unknown setting name APNS_FOO');
+    expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(true);
+  });
+
+  const SHAPES: Array<[string, Record<string, string>, string]> = [
+    ['a 9-character APNS_KEY_ID', { APNS_KEY_ID: BAD_KEY_ID }, 'APNs setting problem: APNS_KEY_ID must be exactly 10 characters, A-Z or 0-9; iOS push is off'],
+    ['an APNS_BUNDLE_ID with a space inside', { APNS_BUNDLE_ID: BAD_BUNDLE }, 'APNs setting problem: APNS_BUNDLE_ID must be dot-separated parts of letters, digits or hyphens (like com.example.app); iOS push is off'],
+  ];
+  for (const [what, over, line] of SHAPES) {
+    it(`(6) ${what} → iOS push off with the named rule (red if the shape checks are removed)`, async () => {
+      const { pushService } = await load({ ...APNS_ENV, ...over, APNS_ENVIRONMENT: 'sandbox' });
+      expect(logs).toContain(line);
+      expect(await pushService.sendToDevice(row(IOS_TOKEN), { title: 't', body: 'b' })).toBe(false);
+      expect(m.connect).not.toHaveBeenCalled();
+    });
+  }
+
+  it('(7) no line logged in (1)-(6) holds a setting value or any 16-character slice of a key body (red if a startup line logs a setting value)', () => {
+    expect(seen.length).toBeGreaterThan(5);
+    const all = seen.join('\n');
+    for (const v of SECRET_VALUES) expect(all, `log contains the value "${v}"`).not.toContain(v);
+    for (const body of SECRET_BODIES) {
+      for (let i = 0; i + 16 <= body.length; i++) {
+        const piece = body.slice(i, i + 16);
+        if (all.includes(piece)) throw new Error(`log contains a 16-character slice of a test key body at offset ${i}`);
+      }
+    }
+  });
+});
