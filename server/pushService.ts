@@ -1,4 +1,5 @@
 import jwt from "jsonwebtoken";
+import crypto from "crypto";
 import http2 from "http2";
 import admin from "firebase-admin";
 import type { DeviceToken } from "@shared/schema";
@@ -51,6 +52,132 @@ export function resolveApnsHost(env: NodeJS.ProcessEnv = process.env): string | 
   if (raw === "sandbox") return APNS_HOSTS.sandbox;
   if (raw === "production") return APNS_HOSTS.production;
   return null;
+}
+
+// Q167: the five Apple push settings. Read ONCE, in the PushService constructor,
+// through readApnsConfig; nothing else reads process.env.APNS_*.
+const APNS_KNOWN_NAMES = ["APNS_KEY_ID", "APNS_TEAM_ID", "APNS_PRIVATE_KEY", "APNS_BUNDLE_ID", "APNS_ENVIRONMENT"] as const;
+const APNS_ID_RE = /^[A-Z0-9]{10}$/;
+const APNS_BUNDLE_RE = /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const PEM_BEGIN = "-----BEGIN PRIVATE KEY-----";
+const PEM_END = "-----END PRIVATE KEY-----";
+
+export interface ApnsConfig {
+  ready: boolean;
+  host: string | null;
+  keyId: string;
+  teamId: string;
+  bundleId: string;
+  privateKeyPem: string;
+  /** Setting NAMES that are unset or empty after trimming. */
+  missing: string[];
+  /** "<NAME> <rule>" lines: names and rules only, never a value. */
+  problems: string[];
+  /** Setting NAMES whose value had whitespace at either end. */
+  trimmed: string[];
+  /** APNS_* names that are not one of the five known names. */
+  unknownNames: string[];
+  /** unknown name → the known name within 2 edits, when there is one. */
+  suggestions: Record<string, string>;
+}
+
+function editDistance(a: string, b: string): number {
+  const prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    let diag = prev[0];
+    prev[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const up = prev[j];
+      prev[j] = Math.min(prev[j] + 1, prev[j - 1] + 1, diag + (a[i - 1] === b[j - 1] ? 0 : 1));
+      diag = up;
+    }
+  }
+  return prev[b.length];
+}
+
+// Rebuilds a clean PKCS8 PEM from any pasted shape: literal "\n", CRLF, newlines
+// turned into spaces, stray indentation, or the bare base64 body.
+function repairPrivateKeyPem(value: string): string {
+  const text = value.replace(/\\n/g, "\n");
+  const begin = text.indexOf(PEM_BEGIN);
+  const end = text.indexOf(PEM_END);
+  const inner = begin !== -1 && end > begin ? text.slice(begin + PEM_BEGIN.length, end) : text;
+  const body = inner.replace(/\s+/g, "");
+  return `${PEM_BEGIN}\n${(body.match(/.{1,64}/g) ?? []).join("\n")}\n${PEM_END}\n`;
+}
+
+function isEcP256PrivateKey(pem: string): boolean {
+  try {
+    const key = crypto.createPrivateKey(pem);
+    return key.asymmetricKeyType === "ec" && key.asymmetricKeyDetails?.namedCurve === "prime256v1";
+  } catch {
+    return false; // never log the crypto error text
+  }
+}
+
+/** Q167: reads, cleans and checks the Apple push settings. Pure: no logging. */
+export function readApnsConfig(env: NodeJS.ProcessEnv): ApnsConfig {
+  const missing: string[] = [];
+  const problems: string[] = [];
+  const trimmed: string[] = [];
+  const read = (name: (typeof APNS_KNOWN_NAMES)[number]): string => {
+    const raw = env[name] ?? "";
+    const value = raw.trim();
+    // A key file's own final line break is normal, not "extra spaces".
+    const expected = name === "APNS_PRIVATE_KEY" ? raw.replace(/\r?\n$/, "") : raw;
+    if (value && value !== expected) trimmed.push(name);
+    if (!value) missing.push(name);
+    return value;
+  };
+  const keyId = read("APNS_KEY_ID");
+  const teamId = read("APNS_TEAM_ID");
+  const rawKey = read("APNS_PRIVATE_KEY");
+  const bundleId = read("APNS_BUNDLE_ID");
+
+  if (keyId && !APNS_ID_RE.test(keyId)) problems.push("APNS_KEY_ID must be exactly 10 characters, A-Z or 0-9");
+  if (teamId && !APNS_ID_RE.test(teamId)) problems.push("APNS_TEAM_ID must be exactly 10 characters, A-Z or 0-9");
+  if (bundleId && !APNS_BUNDLE_RE.test(bundleId)) {
+    problems.push("APNS_BUNDLE_ID must be dot-separated parts of letters, digits or hyphens (like com.example.app)");
+  }
+  let privateKeyPem = "";
+  if (rawKey) {
+    privateKeyPem = repairPrivateKeyPem(rawKey);
+    if (!isEcP256PrivateKey(privateKeyPem)) {
+      problems.push("APNS_PRIVATE_KEY is not an EC P-256 private key");
+      privateKeyPem = "";
+    }
+  }
+
+  const known = new Set<string>(APNS_KNOWN_NAMES);
+  const unknownNames = Object.keys(env).filter((n) => n.startsWith("APNS_") && !known.has(n)).sort();
+  const suggestions: Record<string, string> = {};
+  for (const name of unknownNames) {
+    let best: string | undefined;
+    let bestDistance = 3;
+    for (const k of APNS_KNOWN_NAMES) {
+      const d = editDistance(name, k);
+      if (d < bestDistance) {
+        best = k;
+        bestDistance = d;
+      }
+    }
+    if (best) suggestions[name] = best;
+  }
+
+  const host = resolveApnsHost(env);
+  return {
+    ready: host !== null && missing.length === 0 && problems.length === 0,
+    host,
+    keyId,
+    teamId,
+    bundleId,
+    privateKeyPem,
+    missing,
+    problems,
+    trimmed,
+    unknownNames,
+    suggestions,
+  };
 }
 
 // Apple reasons and FCM codes are fixed words; anything else is logged as
@@ -282,21 +409,40 @@ function dedupeTokens(tokens: DeviceToken[]): DeviceToken[] {
 export class PushService {
   private readonly apnsHost: string | null;
   private readonly apnsReady: boolean;
+  private readonly apnsKeyId: string;
+  private readonly apnsTeamId: string;
+  private readonly apnsBundleId: string;
+  private readonly apnsPrivateKeyPem: string;
   private readonly fcmReady: boolean;
   private apns: ApnsConnection | null = null;
   private apnsJwt: string | null = null;
   private apnsJwtExpiry = 0;
 
   constructor() {
-    const env = process.env;
-    this.apnsHost = resolveApnsHost(env);
-    const hasKeys = !!(env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_PRIVATE_KEY && env.APNS_BUNDLE_ID);
+    // Q167: one read of the Apple settings; startup lines carry NAMES only.
+    const apns = readApnsConfig(process.env);
+    this.apnsHost = apns.host;
+    this.apnsKeyId = apns.keyId;
+    this.apnsTeamId = apns.teamId;
+    this.apnsBundleId = apns.bundleId;
+    this.apnsPrivateKeyPem = apns.privateKeyPem;
     if (this.apnsHost === null) {
       console.error('APNS_ENVIRONMENT must be "sandbox" or "production"; iOS push is off');
-    } else if (!hasKeys) {
-      console.log("APNs not configured; iOS push is off");
     }
-    this.apnsReady = this.apnsHost !== null && hasKeys;
+    if (apns.missing.length > 0) {
+      console.log(`APNs not configured (missing: ${apns.missing.join(", ")}); iOS push is off`);
+    }
+    for (const problem of apns.problems) {
+      console.error(`APNs setting problem: ${problem}; iOS push is off`);
+    }
+    if (apns.trimmed.length > 0) {
+      console.log(`APNs settings had extra spaces trimmed: ${apns.trimmed.join(", ")}`);
+    }
+    for (const name of apns.unknownNames) {
+      const known = apns.suggestions[name];
+      console.log(`APNs unknown setting name ${name}${known ? ` (did you mean ${known}?)` : ""}`);
+    }
+    this.apnsReady = apns.ready;
     this.fcmReady = firebaseInitialized;
   }
 
@@ -305,12 +451,11 @@ export class PushService {
     const now = Math.floor(Date.now() / 1000);
     if (this.apnsJwt && now < this.apnsJwtExpiry) return this.apnsJwt;
 
-    const privateKey = process.env.APNS_PRIVATE_KEY!.replace(/\\n/g, "\n");
-    this.apnsJwt = jwt.sign({}, privateKey, {
+    this.apnsJwt = jwt.sign({}, this.apnsPrivateKeyPem, {
       algorithm: "ES256",
-      issuer: process.env.APNS_TEAM_ID!,
+      issuer: this.apnsTeamId,
       expiresIn: "1h",
-      header: { alg: "ES256", kid: process.env.APNS_KEY_ID! },
+      header: { alg: "ES256", kid: this.apnsKeyId },
     });
     this.apnsJwtExpiry = now + 3000;
     return this.apnsJwt;
@@ -354,7 +499,7 @@ export class PushService {
 
     const headers: Record<string, string | number> = {
       authorization: `bearer ${bearer}`,
-      "apns-topic": process.env.APNS_BUNDLE_ID!,
+      "apns-topic": this.apnsBundleId,
       "apns-push-type": "alert",
       "apns-priority": "10",
       "content-type": "application/json",
