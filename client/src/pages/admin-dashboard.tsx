@@ -4439,7 +4439,7 @@ export default function AdminDashboard() {
                   </CardHeader>
                   <CardContent>
                     <div className="text-2xl font-bold">
-                      {Array.isArray(students) ? students.filter((s: any) => s.isActive).length : 0}
+                      {Array.isArray(students) ? students.filter((s: any) => s.isActive !== false).length : 0}
                     </div>
                   </CardContent>
                 </Card>
@@ -4612,8 +4612,8 @@ export default function AdminDashboard() {
                               )}
                             </TableCell>
                             <TableCell>
-                              <Badge variant={student.isActive ? "default" : "secondary"}>
-                                {student.isActive ? "Active" : "Inactive"}
+                              <Badge variant={student.isActive !== false ? "default" : "secondary"} data-testid={`badge-student-status-${student.id}`}>
+                                {student.isActive !== false ? "Active" : "Inactive"}
                               </Badge>
                             </TableCell>
                             <TableCell>
@@ -7032,7 +7032,7 @@ export default function AdminDashboard() {
           <AlertDialogHeader>
             <AlertDialogTitle>Delete student</AlertDialogTitle>
             <AlertDialogDescription>
-              Delete <strong>{studentToDelete?.firstName} {studentToDelete?.lastName}</strong> permanently? Their attendance history goes too. To stop their bus service but keep the history, mark them inactive instead.
+              Delete <strong>{studentToDelete?.firstName} {studentToDelete?.lastName}</strong> permanently? This can't be undone. Students with attendance records can't be deleted; mark them inactive instead to keep their history.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="gap-2">

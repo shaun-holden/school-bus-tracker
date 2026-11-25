@@ -88,3 +88,28 @@ describe('Q180 Delete offers Mark inactive instead', () => {
     expect(mut).not.toMatch(/console\.log\(/);
   });
 });
+
+describe('Q180 r2 true Delete wording; NULL counts as active in the list', () => {
+  it('the Delete dialog says students with records cannot be deleted (red if the delete text promises history is removed again)', () => {
+    const dlg = dialogBlock('Delete Student Dialog');
+    expect(dlg).toContain("can't be deleted; mark them inactive instead");
+    expect(dlg).not.toContain('history goes too');
+  });
+
+  it('the student Status badge treats NULL isActive as active (red if the list treats NULL isActive as inactive)', () => {
+    const at = SRC.indexOf('data-testid={`badge-student-status-${student.id}`}');
+    expect(at, 'no student status badge test id').toBeGreaterThan(-1);
+    const start = SRC.lastIndexOf('<Badge', at);
+    const badge = SRC.slice(start, SRC.indexOf('</Badge>', at));
+    expect(badge).toMatch(/variant=\{student\.isActive !== false \?/);
+    expect(badge).toMatch(/\{student\.isActive !== false \? "Active" : "Inactive"\}/);
+    expect(badge).not.toMatch(/student\.isActive \?/);
+  });
+
+  it('the Active Students count treats NULL isActive as active (red if the count treats NULL isActive as inactive)', () => {
+    const at = SRC.indexOf('>Active Students</CardTitle>');
+    expect(at, 'no Active Students card').toBeGreaterThan(-1);
+    const card = SRC.slice(at, SRC.indexOf('</Card>', at));
+    expect(card).toMatch(/students\.filter\(\(s: any\) => s\.isActive !== false\)\.length/);
+  });
+});
