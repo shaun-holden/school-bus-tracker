@@ -1756,10 +1756,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (isOutsideCallerTenant(user, existingRoute.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
+      // Q170 r2: an archived route is read-only until it is restored.
+      if (existingRoute.isActive === false) {
+        return res.status(409).json({ message: "Restore the route before editing it." });
+      }
 
       try {
         // Partial update; companyId is not accepted (updateRouteSchema omits it)
         const validatedData = updateRouteSchema.parse(req.body);
+        // Q170 r2: archive / restore go only through their own endpoints.
+        delete validatedData.isActive;
         // Q89: old app builds send driverId: null on every edit; "" is the explicit unassign.
         if (req.body?.driverId === null) delete validatedData.driverId;
 

@@ -760,8 +760,13 @@ export class DatabaseStorage implements IStorage {
     return await db.select().from(routes).where(inArray(routes.id, ids));
   }
 
+  // Q170 r2: active routes only (archiving clears driverId; this also hides
+  // an archived route left with a driver by bad data).
   async getRoutesByDriverId(driverId: string): Promise<Route[]> {
-    return await db.select().from(routes).where(eq(routes.driverId, driverId));
+    return await db.select().from(routes).where(and(
+      eq(routes.driverId, driverId),
+      sql`${routes.isActive} IS DISTINCT FROM false`,
+    ));
   }
 
   async createRoute(route: InsertRoute): Promise<Route> {

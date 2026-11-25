@@ -337,3 +337,65 @@ describe('Q170 guards', () => {
     }
   });
 });
+
+describe('Q170 r2 tenant list, PATCH and driver list', () => {
+  it("(13) X-1: company B's archived route never shows in adminA's GET /api/routes?archived=1 (red if GET /api/routes?archived=1 drops the companyId filter)", async () => {
+    const rB = await mkRoute(h.ids.companyB, h.ids.schoolB, { isActive: false });
+    const rA = await mkRouteA({ isActive: false });
+    // Preconditions: rB is archived and company B's; adminA's archived list works.
+    const row = await routeRow(rB.id);
+    expect(row.companyId).toBe(h.ids.companyB);
+    expect(row.isActive).toBe(false);
+
+    const res = await adminA.get('/api/routes?archived=1');
+    expect(res.status).toBe(200);
+    expect(ids(res.body)).toContain(rA.id);
+    expect(ids(res.body)).not.toContain(rB.id);
+  });
+
+  it('(14) PATCH { isActive: false, name: <same> } on an active route → 200 and the route is still active (red if PATCH /api/routes accepts isActive)', async () => {
+    const r = await mkRouteA();
+    expect((await routeRow(r.id)).isActive).toBe(true);
+
+    const res = await adminA.patch(`/api/routes/${r.id}`).send({ isActive: false, name: r.name });
+    expect(res.status).toBe(200);
+    const row = await routeRow(r.id);
+    expect(row.isActive).toBe(true);
+    expect(row.name).toBe(r.name);
+  });
+
+  it('(15) PATCH { name } or { driverId } on an archived route → 409, name, driver and isActive unchanged (red if PATCH can edit an archived route)', async () => {
+    const r = await mkRouteA({ isActive: false });
+    const before = await routeRow(r.id);
+    expect(before.isActive).toBe(false);
+    expect(before.driverId).toBeNull();
+
+    for (const body of [{ name: 'x' }, { driverId: h.ids.driverA }]) {
+      const res = await adminA.patch(`/api/routes/${r.id}`).send(body);
+      expect(res.status, JSON.stringify(body)).toBe(409);
+      expect(res.body).toEqual({ message: 'Restore the route before editing it.' });
+      const row = await routeRow(r.id);
+      expect(row.name).toBe(before.name);
+      expect(row.driverId).toBeNull();
+      expect(row.isActive).toBe(false);
+    }
+  });
+
+  it('(16) an archived route still carrying driverA (bad data) is not in driverA\'s GET /api/routes (red if the driver route list shows archived routes)', async () => {
+    const r = await mkRouteA({ isActive: false });
+    try {
+      await h.db.update(routes).set({ driverId: h.ids.driverA }).where(eq(routes.id, r.id));
+      // Preconditions: the bad row points at driverA; driverA's list works (routeA).
+      const row = await routeRow(r.id);
+      expect(row.driverId).toBe(h.ids.driverA);
+      expect(row.isActive).toBe(false);
+
+      const res = await driverA.get('/api/routes');
+      expect(res.status).toBe(200);
+      expect(ids(res.body)).toContain(h.ids.routeA);
+      expect(ids(res.body)).not.toContain(r.id);
+    } finally {
+      await h.db.update(routes).set({ driverId: null }).where(eq(routes.id, r.id));
+    }
+  });
+});
