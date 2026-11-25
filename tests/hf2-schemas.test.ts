@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { updateDriverProfileSchema, updateRouteSchema } from '@shared/schema';
+import { insertRouteSchema, updateDriverProfileSchema, updateRouteSchema } from '@shared/schema';
 
 // HF2 (SEC-1 / SEC-2 / SEC-14): mass-assignment allow-lists.
 // These import the REAL schemas used by:
@@ -149,6 +149,13 @@ describe('HF2 - updateRouteSchema (PATCH /api/routes/:id)', () => {
 
   it('does not include companyId in its shape', () => {
     expect(Object.keys(updateRouteSchema.shape)).not.toContain('companyId');
+  });
+
+  it('Q172: neither insertRouteSchema nor updateRouteSchema has isActive, so a create is always active and archive goes through its own endpoint (red if the isActive omit is removed)', () => {
+    expect(Object.keys(insertRouteSchema.shape)).not.toContain('isActive');
+    expect(Object.keys(updateRouteSchema.shape)).not.toContain('isActive');
+    // Positive control: the omit didn't take name with it.
+    expect(Object.keys(insertRouteSchema.shape)).toContain('name');
   });
 
   it('is partial: an empty body is valid', () => {

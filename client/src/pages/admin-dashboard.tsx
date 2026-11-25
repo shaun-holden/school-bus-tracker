@@ -1746,6 +1746,20 @@ export default function AdminDashboard() {
     }
   };
 
+  // Q172: throwIfResNotOk makes server errors like `409: {"message":"..."}`.
+  // Show the server's own message; anything that doesn't parse keeps `fallback`.
+  const studentErrorText = (error: any, fallback: string): string => {
+    const match = /^\d{3}: ([\s\S]*)$/.exec(String(error?.message ?? ""));
+    if (match) {
+      try {
+        const body = JSON.parse(match[1]);
+        if (typeof body?.message === "string" && body.message) return body.message;
+      } catch {
+        // not JSON: keep the existing text
+      }
+    }
+    return fallback;
+  };
 
   // Student creation mutation
   const createStudentMutation = useMutation({
@@ -1835,7 +1849,7 @@ export default function AdminDashboard() {
       } else {
         toast({
           title: "Error",
-          description: error?.message || "Failed to create student. Please check all required fields.",
+          description: studentErrorText(error, error?.message || "Failed to create student. Please check all required fields."),
           variant: "destructive",
         });
       }
@@ -1924,7 +1938,7 @@ export default function AdminDashboard() {
       } else {
         toast({
           title: "Error",
-          description: error?.message || "Failed to update student. Please check all required fields.",
+          description: studentErrorText(error, error?.message || "Failed to update student. Please check all required fields."),
           variant: "destructive",
         });
       }
@@ -2580,14 +2594,31 @@ export default function AdminDashboard() {
     retry: false,
   });
 
-  // Q170: archived routes, only while the Routes tab switch is on.
+  // Q170: archived routes. Q172: loaded whenever the admin is, so the student
+  // and attendance tables can still name a route after it is archived. The
+  // Routes tab switch only picks which list the route table shows.
   const { data: archivedRoutes } = useQuery({
     queryKey: ["/api/routes", { archived: true }],
     queryFn: () => apiRequest("/api/routes?archived=1", "GET"),
-    enabled: !!user && showArchivedRoutes,
+    enabled: !!user,
     retry: false,
   });
   const routeTableRows: any[] | undefined = (showArchivedRoutes ? archivedRoutes : routes) as any[] | undefined;
+
+  // Q172: one id -> route lookup over the active and archived lists (no per-row fetch).
+  const routeById = useMemo(() => {
+    const map = new Map<string, any>();
+    for (const list of [routes, archivedRoutes]) {
+      if (Array.isArray(list)) for (const r of list) map.set(r.id, r);
+    }
+    return map;
+  }, [routes, archivedRoutes]);
+  // "(archived)" comes from the row's own flag, not from which list it came from.
+  const routeDisplayName = (routeId: string): string => {
+    const route = routeById.get(routeId);
+    if (!route) return "Unknown Route";
+    return route.isActive === false ? `${route.name} (archived)` : route.name;
+  };
 
   // Helper function to get school count for a route (each school = 1 stop)
   const getRouteStopCount = async (routeId: string) => {
@@ -4533,8 +4564,8 @@ export default function AdminDashboard() {
                                 <div className="flex items-center space-x-2">
                                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
                                   <span className="text-sm">
-                                    {Array.isArray(routes) ? 
-                                      routes.find((r: any) => r.id === student.routeId)?.name || 'Unknown Route' : 
+                                    {Array.isArray(routes) ?
+                                      routeDisplayName(student.routeId) :
                                       'Loading...'
                                     }
                                   </span>
@@ -5961,7 +5992,7 @@ export default function AdminDashboard() {
                           })
                           .map((record: any) => {
                           const student = Array.isArray(students) ? students.find((s: any) => s.id === record.studentId) : null;
-                          const route = Array.isArray(routes) ? routes.find((r: any) => r.id === record.routeId) : null;
+                          const route = record.routeId ? routeById.get(record.routeId) : null;
                           // Get driver from attendance record's driverId field
                           const driver = Array.isArray(drivers) ? drivers.find((d: any) => d.id === record.driverId) : null;
                           
@@ -6007,7 +6038,7 @@ export default function AdminDashboard() {
                               <TableCell>
                                 <div className="flex items-center space-x-2">
                                   <RouteIcon className="w-4 h-4 text-green-600" />
-                                  <span>{route ? route.name : 'Unknown Route'}</span>
+                                  <span>{route ? (route.isActive === false ? `${route.name} (archived)` : route.name) : 'Unknown Route'}</span>
                                 </div>
                               </TableCell>
                               <TableCell>

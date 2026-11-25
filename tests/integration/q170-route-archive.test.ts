@@ -13,12 +13,15 @@
 // Real HTTP + real Postgres. Each title names the clause whose deletion turns
 // it red; preconditions are asserted first.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { eq, inArray } from 'drizzle-orm';
-import { attendance, buses, busJourneys, routes, routeSchools, routeStops, students, users } from '@shared/schema';
+import { asc, eq, inArray, like } from 'drizzle-orm';
+import { attendance, buses, busJourneys, parentNotifications, routes, routeSchools, routeStops, schools, students, systemNotifications, users } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 
 const h = useIntegrationHarness();
 const HISTORY_MSG = 'This route has past trips or records. Archive it instead.';
+// Q172: an admin's write onto their own archived route.
+const ARCHIVED = { message: 'This route is archived. Restore it first.' };
+const ROUTE_404 = { message: 'Route not found' };
 
 let adminA: Agent;
 let driverA: Agent;
@@ -34,6 +37,7 @@ const createdStudents: string[] = [];
 const createdBuses: string[] = [];
 const createdJourneys: string[] = [];
 const createdAttendance: string[] = [];
+const createdSchools: string[] = [];
 
 let seq = 0;
 // A route with one stop and one route_schools row (its own parts).
@@ -68,6 +72,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  // Q172: anything a mutation run might have written (titles/names are unique to this file).
+  await h.db.delete(parentNotifications).where(like(parentNotifications.title, 'Q172-%'));
+  await h.db.delete(systemNotifications).where(like(systemNotifications.title, 'Q172-%'));
+  await h.db.delete(students).where(like(students.firstName, 'A-Q172%'));
   if (createdAttendance.length) await h.db.delete(attendance).where(inArray(attendance.id, createdAttendance));
   if (createdJourneys.length) await h.db.delete(busJourneys).where(inArray(busJourneys.id, createdJourneys));
   if (createdStudents.length) await h.db.delete(students).where(inArray(students.id, createdStudents));
@@ -76,6 +84,7 @@ afterAll(async () => {
   if (savedDriverA2) await h.db.update(users).set(savedDriverA2).where(eq(users.id, h.ids.driverA2));
   // route_stops and route_schools cascade with the route.
   if (createdRoutes.length) await h.db.delete(routes).where(inArray(routes.id, createdRoutes));
+  if (createdSchools.length) await h.db.delete(schools).where(inArray(schools.id, createdSchools));
 });
 
 describe('Q170 archive and restore', () => {
@@ -396,6 +405,243 @@ describe('Q170 r2 tenant list, PATCH and driver list', () => {
       expect(ids(res.body)).not.toContain(r.id);
     } finally {
       await h.db.update(routes).set({ driverId: null }).where(eq(routes.id, r.id));
+    }
+  });
+});
+
+// Q172: an archived route is read-only. An admin's write onto their OWN
+// archived route → 409 ARCHIVED, nothing written. Tenant checks run first, so
+// company B's route (archived or not) is still 404, never 409.
+const studentRow = async (id: string) => (await h.db.select().from(students).where(eq(students.id, id)))[0];
+const stopsOf = async (routeId: string) => h.db.select().from(routeStops).where(eq(routeStops.routeId, routeId));
+const schoolOrders = async (routeId: string) =>
+  (await h.db.select().from(routeSchools).where(eq(routeSchools.routeId, routeId)).orderBy(asc(routeSchools.order)))
+    .map((r) => ({ schoolId: r.schoolId, order: r.order }));
+const mkSchool = async (companyId: string) => {
+  seq += 1;
+  const [s] = await h.db.insert(schools).values({ companyId, name: `Q172-School-${seq}`, address: `${seq} Q172 Rd` }).returning({ id: schools.id });
+  createdSchools.push(s.id);
+  return s.id;
+};
+const mkStudentA = async (extra: Partial<typeof students.$inferInsert> = {}) => {
+  seq += 1;
+  const [st] = await h.db.insert(students).values({
+    companyId: h.ids.companyA, firstName: `A-Q172-${seq}`, lastName: 'Seed', parentId: h.ids.parentA, schoolId: h.ids.schoolA, ...extra,
+  }).returning();
+  createdStudents.push(st.id);
+  return st;
+};
+const archivedA = async () => {
+  const r = await mkRouteA({ isActive: false });
+  expect((await routeRow(r.id)).isActive).toBe(false);
+  return r;
+};
+const archivedB = async () => {
+  const r = await mkRoute(h.ids.companyB, h.ids.schoolB, { isActive: false });
+  const row = await routeRow(r.id);
+  expect(row.companyId).toBe(h.ids.companyB);
+  expect(row.isActive).toBe(false);
+  return r;
+};
+
+describe('Q172 students on an archived route', () => {
+  it('(17) POST /api/students with an own archived routeId → 409, no student written (red if checkStudentForeignKeys drops the archived-route 409)', async () => {
+    const r = await archivedA();
+    const res = await adminA.post('/api/students').send({
+      firstName: 'A-Q172-Post', lastName: 'Seed', parentId: h.ids.parentA, routeId: r.id,
+    });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual(ARCHIVED);
+    expect(await h.db.select().from(students).where(eq(students.firstName, 'A-Q172-Post'))).toHaveLength(0);
+  });
+
+  it('(18) PUT /api/students/:id moving a student onto an own archived route → 409, it keeps its old route (red if checkStudentForeignKeys drops the archived-route 409)', async () => {
+    const r = await archivedA();
+    const st = await mkStudentA({ routeId: h.ids.routeA });
+    expect((await studentRow(st.id)).routeId).toBe(h.ids.routeA);
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ routeId: r.id });
+    expect(res.status).toBe(409);
+    expect(res.body).toEqual(ARCHIVED);
+    expect((await studentRow(st.id)).routeId).toBe(h.ids.routeA);
+  });
+
+  it('(18b) PUT a name change carrying the unchanged archived routeId/stopId on an inactive student → 200, name saved (red if the unchanged-routeId skip is removed)', async () => {
+    const r = await archivedA();
+    const [stop] = await stopsOf(r.id);
+    const st = await mkStudentA({ routeId: r.id, stopId: stop.id, isActive: false });
+    expect(await studentRow(st.id)).toMatchObject({ routeId: r.id, stopId: stop.id, isActive: false });
+
+    const res = await adminA.put(`/api/students/${st.id}`).send({ firstName: 'A-Q172-Renamed', routeId: r.id, stopId: stop.id });
+    expect(res.status).toBe(200);
+    expect(await studentRow(st.id)).toMatchObject({ firstName: 'A-Q172-Renamed', routeId: r.id, isActive: false });
+  });
+
+  it('(18c) PUT isActive: true on an inactive student whose (unchanged) route is archived → 409, still inactive (red if reactivating a student on an archived route is allowed)', async () => {
+    const r = await archivedA();
+    const st = await mkStudentA({ routeId: r.id, isActive: false });
+    expect((await studentRow(st.id)).isActive).toBe(false);
+
+    for (const body of [{ isActive: true }, { isActive: true, routeId: r.id }]) {
+      const res = await adminA.put(`/api/students/${st.id}`).send(body);
+      expect(res.status, JSON.stringify(body)).toBe(409);
+      expect(res.body).toEqual(ARCHIVED);
+      expect((await studentRow(st.id)).isActive).toBe(false);
+    }
+  });
+
+  it("(19) a stopId on an own archived route → 409; a stopId on company B's archived route → 404 (red if the stop branch of checkStudentForeignKeys drops the archived check)", async () => {
+    const rA = await archivedA();
+    const rB = await archivedB();
+    const [stopA] = await stopsOf(rA.id);
+    const [stopB] = await stopsOf(rB.id);
+
+    const own = await adminA.post('/api/students').send({ firstName: 'A-Q172-StopA', lastName: 'Seed', parentId: h.ids.parentA, stopId: stopA.id });
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual(ARCHIVED);
+    const foreign = await adminA.post('/api/students').send({ firstName: 'A-Q172-StopB', lastName: 'Seed', parentId: h.ids.parentA, stopId: stopB.id });
+    expect(foreign.status).toBe(404);
+    expect(foreign.body).toEqual({ message: 'Stop not found' });
+    expect(await h.db.select().from(students).where(like(students.firstName, 'A-Q172-Stop%'))).toHaveLength(0);
+  });
+
+  it("(20) X-1 mask: adminA POST /api/students with company B's ARCHIVED routeId → 404 \"Route not found\", not 409 (red if the archived check runs before the tenant check)", async () => {
+    const rB = await archivedB();
+    const res = await adminA.post('/api/students').send({
+      firstName: 'A-Q172-Mask', lastName: 'Seed', parentId: h.ids.parentA, routeId: rB.id,
+    });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(ROUTE_404);
+    expect(await h.db.select().from(students).where(eq(students.firstName, 'A-Q172-Mask'))).toHaveLength(0);
+  });
+});
+
+describe('Q172 route parts on an archived route', () => {
+  it("(21) POST /api/routes/:archived/stops → 409, no stop; company B's archived route → 404 (red if POST route stops drops the archived check)", async () => {
+    const rA = await archivedA();
+    const rB = await archivedB();
+    const body = { name: 'Q172-Stop', address: '1 Q172 Way', order: 2 };
+
+    const own = await adminA.post(`/api/routes/${rA.id}/stops`).send(body);
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual(ARCHIVED);
+    expect(await stopsOf(rA.id)).toHaveLength(1);
+    const foreign = await adminA.post(`/api/routes/${rB.id}/stops`).send(body);
+    expect(foreign.status).toBe(404);
+    expect(foreign.body).toEqual(ROUTE_404);
+    expect(await stopsOf(rB.id)).toHaveLength(1);
+  });
+
+  it("(22) POST /api/routes/:archived/schools/:school → 409, no route_schools row and no stop; company B's archived route → 404 (red if POST route-schools drops the archived check)", async () => {
+    const rA = await archivedA();
+    const rB = await archivedB();
+    const schoolA2 = await mkSchool(h.ids.companyA);
+    const schoolB2 = await mkSchool(h.ids.companyB);
+
+    const own = await adminA.post(`/api/routes/${rA.id}/schools/${schoolA2}`).send({});
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual(ARCHIVED);
+    expect(await schoolOrders(rA.id)).toEqual([{ schoolId: h.ids.schoolA, order: 0 }]);
+    expect(await stopsOf(rA.id)).toHaveLength(1);
+    const foreign = await adminA.post(`/api/routes/${rB.id}/schools/${schoolB2}`).send({});
+    expect(foreign.status).toBe(404);
+    expect(await schoolOrders(rB.id)).toEqual([{ schoolId: h.ids.schoolB, order: 0 }]);
+  });
+
+  it("(23) PUT /api/routes/:archived/schools/reorder → 409, orders unchanged 0/5; company B's archived route → 404 (red if the reorder PUT drops the archived check)", async () => {
+    const rA = await archivedA();
+    const rB = await archivedB();
+    const schoolA2 = await mkSchool(h.ids.companyA);
+    const schoolB2 = await mkSchool(h.ids.companyB);
+    await h.db.insert(routeSchools).values([
+      { routeId: rA.id, schoolId: schoolA2, order: 5 },
+      { routeId: rB.id, schoolId: schoolB2, order: 5 },
+    ]);
+    const before = (s2: string, s1: string) => [{ schoolId: s1, order: 0 }, { schoolId: s2, order: 5 }];
+    expect(await schoolOrders(rA.id)).toEqual(before(schoolA2, h.ids.schoolA));
+
+    const own = await adminA.put(`/api/routes/${rA.id}/schools/reorder`).send({ schoolId: schoolA2, direction: 'up' });
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual(ARCHIVED);
+    expect(await schoolOrders(rA.id)).toEqual(before(schoolA2, h.ids.schoolA));
+    const foreign = await adminA.put(`/api/routes/${rB.id}/schools/reorder`).send({ schoolId: schoolB2, direction: 'up' });
+    expect(foreign.status).toBe(404);
+    expect(foreign.body).toEqual(ROUTE_404);
+    expect(await schoolOrders(rB.id)).toEqual(before(schoolB2, h.ids.schoolB));
+  });
+
+  it("(24) DELETE /api/routes/:archived/schools/:school → 409, the row stays; company B's archived route → 404 (red if DELETE route-school drops the archived check)", async () => {
+    const rA = await archivedA();
+    const rB = await archivedB();
+
+    const own = await adminA.delete(`/api/routes/${rA.id}/schools/${h.ids.schoolA}`).send({});
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual(ARCHIVED);
+    expect(await schoolOrders(rA.id)).toEqual([{ schoolId: h.ids.schoolA, order: 0 }]);
+    const foreign = await adminA.delete(`/api/routes/${rB.id}/schools/${h.ids.schoolB}`).send({});
+    expect(foreign.status).toBe(404);
+    expect(await schoolOrders(rB.id)).toEqual([{ schoolId: h.ids.schoolB, order: 0 }]);
+  });
+});
+
+describe('Q172 alerts on an archived route', () => {
+  it("(25) POST /api/notifications with an own archived routeId → 409, no row; company B's archived routeId → 404 (red if POST /api/notifications drops the archived check)", async () => {
+    const rA = await archivedA();
+    const rB = await archivedB();
+    const send = (routeId: string, title: string) =>
+      adminA.post('/api/notifications').send({ type: 'delay', title, message: 'Q172 body', routeId, isGlobal: false });
+
+    const own = await send(rA.id, 'Q172-Alert-Own');
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual(ARCHIVED);
+    const foreign = await send(rB.id, 'Q172-Alert-Foreign');
+    expect(foreign.status).toBe(404);
+    expect(foreign.body).toEqual(ROUTE_404);
+    expect(await h.db.select().from(parentNotifications).where(like(parentNotifications.title, 'Q172-Alert-%'))).toHaveLength(0);
+  });
+
+  it("(26) POST /api/system-notifications with an own archived routeId → 409, no row; company B's archived routeId → 404 (red if POST /api/system-notifications drops the archived check)", async () => {
+    const rA = await archivedA();
+    const rB = await archivedB();
+    const send = (routeId: string, title: string) =>
+      adminA.post('/api/system-notifications').send({ type: 'info', title, message: 'Q172 body', recipientRole: 'route_parents', routeId });
+
+    const own = await send(rA.id, 'Q172-System-Own');
+    expect(own.status).toBe(409);
+    expect(own.body).toEqual(ARCHIVED);
+    const foreign = await send(rB.id, 'Q172-System-Foreign');
+    expect(foreign.status).toBe(404);
+    expect(foreign.body).toEqual(ROUTE_404);
+    expect(await h.db.select().from(systemNotifications).where(like(systemNotifications.title, 'Q172-System-%'))).toHaveLength(0);
+  });
+});
+
+describe('Q172 create is active, bus link skips archived', () => {
+  it('(27) POST /api/routes { isActive: false, driverId } → success and the new route is active (red if insertRouteSchema keeps isActive)', async () => {
+    const res = await adminA.post('/api/routes').send({ name: 'Q172-Created', isActive: false, driverId: h.ids.driverA2 });
+    expect([200, 201]).toContain(res.status);
+    expect(res.body.id).toBeTruthy();
+    createdRoutes.push(res.body.id);
+    const row = await routeRow(res.body.id);
+    expect(row.companyId).toBe(h.ids.companyA);
+    expect(row.driverId).toBe(h.ids.driverA2);
+    expect(row.isActive).toBe(true);
+  });
+
+  it('(28) bus PATCH: driverA on duty with an archived assignedRouteId (bad data), assign driverA to busA → busA currentRouteId null (red if the bus PATCH route link drops isActive !== false)', async () => {
+    const r = await archivedA();
+    try {
+      await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date(), assignedRouteId: r.id }).where(eq(users.id, h.ids.driverA));
+      await h.db.update(buses).set({ driverId: null, currentRouteId: null }).where(eq(buses.id, h.ids.busA));
+      expect(await userRow(h.ids.driverA)).toMatchObject({ isOnDuty: true, assignedRouteId: r.id, companyId: h.ids.companyA });
+
+      const res = await adminA.patch(`/api/buses/${h.ids.busA}`).send({ driverId: h.ids.driverA });
+      expect(res.status).toBe(200);
+      const [bA] = await h.db.select().from(buses).where(eq(buses.id, h.ids.busA));
+      expect(bA.driverId).toBe(h.ids.driverA);
+      expect(bA.currentRouteId).toBeNull();
+    } finally {
+      await restoreDriverA();
     }
   });
 });

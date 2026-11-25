@@ -714,7 +714,9 @@ export type InsertDriverShiftReport = typeof driverShiftReports.$inferInsert;
 
 // Zod schemas for inserts
 export const insertSchoolSchema = createInsertSchema(schools).omit({ id: true, createdAt: true });
-export const insertRouteSchema = createInsertSchema(routes).omit({ id: true, createdAt: true, updatedAt: true });
+// isActive is omitted (Q172): a new route is always active (column default
+// true), and archive/restore are the only ways to change it.
+export const insertRouteSchema = createInsertSchema(routes).omit({ id: true, createdAt: true, updatedAt: true, isActive: true });
 // PATCH /api/routes/:id: a route can never be moved to another company (SEC-14)
 export const updateRouteSchema = insertRouteSchema.omit({ companyId: true }).partial().extend({
   // "" (the client's "remove school" / "no driver") becomes null, so the

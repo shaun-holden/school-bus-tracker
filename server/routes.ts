@@ -133,10 +133,19 @@ function routeInUseMessage(c: { students: number; buses: number; drivers: number
 }
 const ROUTE_HAS_HISTORY = "This route has past trips or records. Archive it instead.";
 
-async function isRouteInCompany(routeId: string, companyId: string | null | undefined): Promise<boolean> {
-  if (!companyId) return false;
+// Q172: the 409 for a write that attaches something to the caller's own
+// archived route (isActive === false; NULL counts as active).
+const ROUTE_ARCHIVED_MESSAGE = "This route is archived. Restore it first.";
+
+// The route when it exists and is in companyId, else null. One read.
+async function getRouteInCompany(routeId: string, companyId: string | null | undefined) {
+  if (!companyId) return null;
   const route = await storage.getRouteById(routeId);
-  return !!route && route.companyId === companyId;
+  return route && route.companyId === companyId ? route : null;
+}
+
+async function isRouteInCompany(routeId: string, companyId: string | null | undefined): Promise<boolean> {
+  return (await getRouteInCompany(routeId, companyId)) !== null;
 }
 
 // Student FK checks (SEC-15). routeId / schoolId must be in the student's
@@ -145,21 +154,39 @@ async function isRouteInCompany(routeId: string, companyId: string | null | unde
 // company (any role). Ids in `alwaysAllowedParentIds` (the caller, or the
 // unchanged parent on update) skip the parent check. Returns null when OK,
 // else the status + message to send.
+// Q172: a route (or a stop's route) that is in the company but archived is a
+// 409, checked only AFTER the tenant 404 so a foreign route is never
+// confirmed. On update, `existing` carries the student's current routeId /
+// stopId: an unchanged one skips the archived 409 (an inactive student may
+// sit on an archived route; the edit form sends it back unchanged).
 async function checkStudentForeignKeys(
   studentCompanyId: string | null | undefined,
   ids: { routeId?: unknown; schoolId?: unknown; stopId?: unknown; parentId?: unknown },
   alwaysAllowedParentIds: Array<string | null | undefined> = [],
+  existing: { routeId?: string | null; stopId?: string | null } = {},
 ): Promise<{ status: number; message: string } | null> {
-  if (hasId(ids.routeId) && !(await isRouteInCompany(ids.routeId, studentCompanyId))) {
-    return { status: 404, message: "Route not found" };
+  if (hasId(ids.routeId)) {
+    const route = await getRouteInCompany(ids.routeId, studentCompanyId);
+    if (!route) {
+      return { status: 404, message: "Route not found" };
+    }
+    const routeUnchanged = hasId(existing.routeId) && ids.routeId === existing.routeId;
+    if (route.isActive === false && !routeUnchanged) {
+      return { status: 409, message: ROUTE_ARCHIVED_MESSAGE };
+    }
   }
   if (hasId(ids.schoolId) && !(await isSchoolInCompany(ids.schoolId, studentCompanyId))) {
     return { status: 404, message: "School not found" };
   }
   if (hasId(ids.stopId)) {
     const stop = await storage.getRouteStopById(ids.stopId);
-    if (!stop || !(await isRouteInCompany(stop.routeId, studentCompanyId))) {
+    const stopRoute = stop ? await getRouteInCompany(stop.routeId, studentCompanyId) : null;
+    if (!stop || !stopRoute) {
       return { status: 404, message: "Stop not found" };
+    }
+    const stopUnchanged = hasId(existing.stopId) && ids.stopId === existing.stopId;
+    if (stopRoute.isActive === false && !stopUnchanged) {
+      return { status: 409, message: ROUTE_ARCHIVED_MESSAGE };
     }
     if (hasId(ids.routeId) && stop.routeId !== ids.routeId) {
       return { status: 400, message: "Stop does not belong to the selected route" };
@@ -1311,7 +1338,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
           driver && driver.isOnDuty === true && driver.assignedRouteId
             ? await storage.getRouteById(driver.assignedRouteId)
             : undefined;
-        if (shiftRoute && existingBus.companyId && shiftRoute.companyId === existingBus.companyId) {
+        // Q172: an archived route is never linked (falls to null).
+        if (shiftRoute && existingBus.companyId && shiftRoute.companyId === existingBus.companyId && shiftRoute.isActive !== false) {
           await storage.clearRouteFromOtherBuses(shiftRoute.id, id, existingBus.companyId);
           linkUpdate.currentRouteId = shiftRoute.id;
         } else {
@@ -1763,9 +1791,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       try {
         // Partial update; companyId is not accepted (updateRouteSchema omits it)
+        // Q170 r2 / Q172: archive / restore go only through their own
+        // endpoints; updateRouteSchema has no isActive, so zod drops it.
         const validatedData = updateRouteSchema.parse(req.body);
-        // Q170 r2: archive / restore go only through their own endpoints.
-        delete validatedData.isActive;
         // Q89: old app builds send driverId: null on every edit; "" is the explicit unassign.
         if (req.body?.driverId === null) delete validatedData.driverId;
 
@@ -1937,6 +1965,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
+      }
+      // Q172: an archived route is read-only (after the tenant 404).
+      if (route.isActive === false) {
+        return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
       }
 
       const validatedData = insertRouteStopSchema.parse({ ...req.body, routeId });
@@ -3105,9 +3137,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // FK ids must belong to the student's company. An unchanged parentId is
       // always allowed (legacy parents outside the company).
-      const fkError = await checkStudentForeignKeys(existingStudent.companyId, validatedData, [existingStudent.parentId]);
+      // Q172: an unchanged routeId / stopId skips the archived-route 409.
+      const fkError = await checkStudentForeignKeys(
+        existingStudent.companyId,
+        validatedData,
+        [existingStudent.parentId],
+        { routeId: existingStudent.routeId, stopId: existingStudent.stopId },
+      );
       if (fkError) {
         return res.status(fkError.status).json({ message: fkError.message });
+      }
+      // Q172: reactivating a student whose route after this update is archived
+      // is refused (the unchanged-route skip above does not cover it).
+      if (validatedData.isActive === true) {
+        const routeAfterUpdate = validatedData.routeId !== undefined ? validatedData.routeId : existingStudent.routeId;
+        const reactivateRoute = hasId(routeAfterUpdate)
+          ? await getRouteInCompany(routeAfterUpdate, existingStudent.companyId)
+          : null;
+        if (reactivateRoute && reactivateRoute.isActive === false) {
+          return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
+        }
       }
 
       const updatedStudent = await storage.updateStudent(id, validatedData);
@@ -3264,6 +3313,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!route || isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
       }
+      // Q172: an archived route is read-only (after the tenant 404, before
+      // anything renumbers).
+      if (route.isActive === false) {
+        return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
+      }
 
       const parsedBody = reorderRouteSchoolBodySchema.safeParse(req.body ?? {});
       if (!parsedBody.success) {
@@ -3355,6 +3409,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (parentSchool.companyId !== parentRoute.companyId) {
         return res.status(404).json({ message: "School not found" });
       }
+      // Q172: an archived route is read-only (after every 404).
+      if (parentRoute.isActive === false) {
+        return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
+      }
 
       // Add school to route
       const routeSchool = await storage.addSchoolToRoute(routeId, schoolId);
@@ -3411,6 +3469,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
       if (isOutsideCallerTenant(user, route.companyId)) {
         return res.status(404).json({ message: "Route not found" });
+      }
+      // Q172: an archived route is read-only, so a detach is refused too
+      // (after the route 404s, before anything is removed).
+      if (route.isActive === false) {
+        return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
       }
 
       // Remove school from route
@@ -4165,7 +4228,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const effectiveRouteId = routeId && routeId !== "all" ? routeId : null;
 
       // Tenant checks on body FKs, before any write (T-5)
-      if (effectiveRouteId && !(await isRouteInCompany(effectiveRouteId, companyId))) {
+      const alertRoute = effectiveRouteId ? await getRouteInCompany(effectiveRouteId, companyId) : null;
+      if (effectiveRouteId && !alertRoute) {
         return res.status(404).json({ message: "Route not found" });
       }
       if (busId) {
@@ -4173,6 +4237,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!bus || bus.companyId !== companyId) {
           return res.status(404).json({ message: "Bus not found" });
         }
+      }
+      // Q172: no alert onto an archived route (after every tenant 404).
+      if (alertRoute && alertRoute.isActive === false) {
+        return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
       }
 
       const shouldBeGlobal = isGlobal || !effectiveRouteId;
@@ -4342,8 +4410,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Recipient not found" });
         }
       }
-      if (hasId(routeId) && !(await isRouteInCompany(routeId, user.companyId))) {
-        return res.status(404).json({ message: "Route not found" });
+      if (hasId(routeId)) {
+        const noteRoute = await getRouteInCompany(routeId, user.companyId);
+        if (!noteRoute) {
+          return res.status(404).json({ message: "Route not found" });
+        }
+        // Q172: no notification onto an archived route (after the tenant 404).
+        if (noteRoute.isActive === false) {
+          return res.status(409).json({ message: ROUTE_ARCHIVED_MESSAGE });
+        }
       }
 
       const notification = await storage.createSystemNotification({
