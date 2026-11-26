@@ -201,6 +201,39 @@ async function checkStudentForeignKeys(
   return null;
 }
 
+// Q173 house rule: a parent reaches a student only through a parent-child
+// link (never the students.parentId shortcut, which misses link-code
+// parents), AND the student must be in the parent's company. A parent with
+// no company yet (NULL) reaches a linked child of any company (the same rule
+// as the push fence). Not isOutsideCallerTenant: it treats a NULL company as
+// always outside. No link, no student or another company all return
+// undefined, so the caller sends one 404 and existence stays masked.
+async function getParentLinkedStudent(
+  parent: { id: string; companyId?: string | null },
+  studentId: string,
+) {
+  const link = await storage.getParentChildLink(parent.id, studentId);
+  if (!link) return undefined;
+  // Untested by design: a link always has a student (studentId is a notNull FK).
+  const student = await storage.getStudentById(studentId);
+  if (!student) return undefined;
+  if (parent.companyId != null && parent.companyId !== student.companyId) return undefined;
+  return student;
+}
+
+// Q173: a parent may change only first name, last name and grade. Any other
+// key (route, stop, school, active, parent, company, ...) is a ZodError, so
+// the request is refused with 400, never silently stripped. {} is a 400 too.
+const parentStudentUpdateSchema = insertStudentSchema
+  .pick({ firstName: true, lastName: true, grade: true })
+  .partial()
+  .extend({
+    firstName: z.string().trim().min(1).optional(),
+    lastName: z.string().trim().min(1).optional(),
+  })
+  .strict()
+  .refine((data) => Object.keys(data).length > 0, { message: "Nothing to update" });
+
 // Password-setup link for invite emails. Uses a trusted base URL, never a
 // request header such as x-forwarded-host.
 function buildPasswordSetupUrl(token: string): string {
@@ -3085,7 +3118,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.status(201).json(student);
     } catch (error: any) {
-      console.error("Error creating student:", error);
+      console.error("Error creating student", pgError(error)?.code);
       if (error?.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid student data", errors: error.errors });
       }
@@ -3108,12 +3141,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { id } = req.params;
       
       let existingStudent;
-      // For parents, verify they own the student
+      // Q173: parents edit only name and grade of a linked child in their own
+      // company (getParentLinkedStudent). They skip the FK checks, the
+      // reactivation gate and the companyId force: nothing else is written.
       if (user.role === 'parent') {
-        existingStudent = await storage.getStudentById(id);
-        if (!existingStudent || existingStudent.parentId !== userId) {
-          return res.status(403).json({ message: "Unauthorized - can only update your own students" });
+        existingStudent = await getParentLinkedStudent(user, id);
+        if (!existingStudent) {
+          return res.status(404).json({ message: "Student not found" });
         }
+        const parentData = parentStudentUpdateSchema.parse(req.body);
+        const updatedByParent = await storage.updateStudent(id, parentData);
+        if (!updatedByParent) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+        return res.json(updatedByParent);
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
       } else {
@@ -3128,10 +3169,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const validatedData = insertStudentSchema.partial().parse(req.body);
-      // Parents may not reassign the parent or the company
-      if (user.role === 'parent') {
-        delete validatedData.parentId;
-      }
       // A student never moves company: force the existing record's value
       validatedData.companyId = existingStudent.companyId;
 
@@ -3181,7 +3218,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json(updatedStudent);
     } catch (error: any) {
-      console.error("Error updating student:", error);
+      // Never the raw error: a DB error carries the bound values (names, grade).
+      console.error("Error updating student", pgError(error)?.code);
       if (error?.name === 'ZodError') {
         return res.status(400).json({ message: "Invalid student data", errors: error.errors });
       }
@@ -3248,19 +3286,24 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const { id } = req.params;
+
+      // Q173: parents by link AND company (getParentLinkedStudent); every
+      // miss is the same 404 as a missing student.
+      if (user.role === 'parent') {
+        const linkedStudent = await getParentLinkedStudent(user, id);
+        if (!linkedStudent) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+        return res.json(linkedStudent);
+      }
+
       const student = await storage.getStudentById(id);
       
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
       }
 
-      // Check authorization using linking system
-      if (user.role === 'parent') {
-        const link = await storage.getParentChildLink(userId, id);
-        if (!link) {
-          return res.status(403).json({ message: "Unauthorized - can only view your linked students" });
-        }
-      } else if (!isAdminRole(user.role)) {
+      if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized access" });
       } else if (isOutsideCallerTenant(user, student.companyId)) {
         // Admin path (incl. driver_admin): record-by-id 404 masks existence
