@@ -169,6 +169,28 @@ describe('Q173 parent PUT /api/students/:id: only name and grade', () => {
   });
 });
 
+describe('Q173 minors: parent schema limits', () => {
+  it('(11) parentA PUT studentA {grade: null} → 200, grade cleared', async () => {
+    const res = await parentA.put(url(h.ids.studentA)).send({ grade: null });
+    expect(res.status).toBe(200);
+    expect((await studentRow(h.ids.studentA)).grade).toBeNull();
+  });
+
+  it('(11b) parentA PUT studentA with a 101-character first name → 400, name unchanged (red if .max(100) is removed)', async () => {
+    const pre = await studentRow(h.ids.studentA);
+    const res = await parentA.put(url(h.ids.studentA)).send({ firstName: 'Q'.repeat(101) });
+    expect(res.status).toBe(400);
+    expect((await studentRow(h.ids.studentA)).firstName).toBe(pre.firstName);
+  });
+
+  it('(11c) parentA PUT studentA with a 21-character grade → 400, grade unchanged (red if the grade .max(20) is removed)', async () => {
+    const pre = await studentRow(h.ids.studentA);
+    const res = await parentA.put(url(h.ids.studentA)).send({ grade: 'G'.repeat(21) });
+    expect(res.status).toBe(400);
+    expect((await studentRow(h.ids.studentA)).grade).toBe(pre.grade);
+  });
+});
+
 describe('Q173 parent GET /api/students/:id', () => {
   it('(9) parentB GET studentA (not linked) → 404 "Student not found" (red if the GET parent path returns 403 again)', async () => {
     expect(await linkExists(h.ids.parentB, h.ids.studentA)).toBe(false);

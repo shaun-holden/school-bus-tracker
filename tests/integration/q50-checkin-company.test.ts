@@ -79,27 +79,51 @@ describe('Q50 direct-only parent', () => {
   });
 });
 
+// Q173-1 (DeShaun 2026-11-26): a parent with a company no longer reaches a
+// linked child of another company, so the "matched student" case runs as
+// parentNull (NULL company), linked first to company A's studentA, then to
+// company B's studentB. The two cross-company links are now refused.
 describe('Q50 company comes from the matched student', () => {
+  let parentNull: Agent;
+
   beforeAll(async () => {
+    // Insert order matters: studentA is parentNull's first linked student.
+    await h.db.insert(parentChildLinks).values({ parentId: h.ids.parentNull, studentId: h.ids.studentA });
+    await h.db.insert(parentChildLinks).values({ parentId: h.ids.parentNull, studentId: h.ids.studentB });
     await h.db.insert(parentChildLinks).values([
       { parentId: h.ids.parentA, studentId: h.ids.studentB },
       { parentId: h.ids.parentB, studentId: h.ids.studentA },
     ]);
+    // 4th login (MAX_LOGINS_PER_FILE is 8).
+    parentNull = await h.loginAs('parentNull');
   });
 
-  it('parentA (first linked student is A\'s) enabling for company B\'s studentB → the row is company B (red if the company goes back to linkedStudents[0])', async () => {
-    const res = await parentA.post('/api/check-in/enable').send({ studentId: h.ids.studentB, deviceId: 'q50-a-on-b' });
+  it('parentNull (first linked student is A\'s) enabling for company B\'s studentB → the row is company B (red if the company goes back to linkedStudents[0])', async () => {
+    const links = await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, h.ids.parentNull));
+    expect(links.map((l) => l.studentId)).toEqual([h.ids.studentA, h.ids.studentB]);
+    const [sA] = await h.db.select().from(students).where(eq(students.id, h.ids.studentA));
+    expect(sA.companyId).toBe(h.ids.companyA);
+
+    const res = await parentNull.post('/api/check-in/enable').send({ studentId: h.ids.studentB, deviceId: 'q50-null-on-b' });
     expect(res.status).toBe(200);
-    const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, h.ids.studentB), eq(studentCheckIns.parentId, h.ids.parentA)));
+    const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, h.ids.studentB), eq(studentCheckIns.parentId, h.ids.parentNull)));
     expect(rows).toHaveLength(1);
     expect(rows[0].companyId).toBe(h.ids.companyB);
   });
 
-  it('parentB linked to company A\'s studentA enabling → the row is company A', async () => {
+  it('parentA linked to company B\'s studentB enabling → 404 "Student not found" and no row (red if check-in enable skips the company match)', async () => {
+    const res = await parentA.post('/api/check-in/enable').send({ studentId: h.ids.studentB, deviceId: 'q50-a-on-b' });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(NOT_FOUND);
+    const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, h.ids.studentB), eq(studentCheckIns.parentId, h.ids.parentA)));
+    expect(rows).toHaveLength(0);
+  });
+
+  it('parentB linked to company A\'s studentA enabling → 404 "Student not found" and no row (red if check-in enable skips the company match)', async () => {
     const res = await parentB.post('/api/check-in/enable').send({ studentId: h.ids.studentA, deviceId: 'q50-b-on-a' });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(NOT_FOUND);
     const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, h.ids.studentA), eq(studentCheckIns.parentId, h.ids.parentB)));
-    expect(rows).toHaveLength(1);
-    expect(rows[0].companyId).toBe(h.ids.companyA);
+    expect(rows).toHaveLength(0);
   });
 });

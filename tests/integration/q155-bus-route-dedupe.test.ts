@@ -12,7 +12,7 @@
 // whole body.
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq } from 'drizzle-orm';
-import { buses, routes, students, users } from '@shared/schema';
+import { buses, parentChildLinks, routes, students, users } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 import { seedQ8Extras, type Q8Ids } from './seed';
 
@@ -24,6 +24,7 @@ const STUDENTS = '/api/students';
 let driverA: Agent;
 let parentA: Agent;
 let parentB: Agent;
+let parentNull: Agent; // Q173-1: (3b) runs as parentNull (linked to studentBx and studentA)
 let master: Agent;
 let q8: Q8Ids;
 
@@ -67,10 +68,11 @@ beforeAll(async () => {
   savedMaster = pick(await userRow(h.ids.master));
   savedBusA = pickBus(await busRow(h.ids.busA));
   savedBusB = pickBus(await busRow(h.ids.busB));
-  // 4 logins (MAX_LOGINS_PER_FILE is 8).
+  // 5 logins (MAX_LOGINS_PER_FILE is 8).
   driverA = await h.loginAs('driverA');
   parentA = await h.loginAs('parentA');
   parentB = await h.loginAs('parentB');
+  parentNull = await h.loginAs('parentNull');
   master = await h.loginAs('master');
 });
 
@@ -222,7 +224,9 @@ describe("Q155 parent bus reads show only the child's own-school bus", () => {
       }
     });
 
-    it(`(3b) studentBx (company B) on routeA with company A's busA → no bus, studentA4 still sees busA (red if ${read.name} stops checking the bus's company against the child's)`, async () => {
+    // Q173-1: parentB (company B) no longer sees studentA4 (company A), so this
+    // runs as parentNull (NULL company), linked to studentBx and studentA.
+    it(`(3b) studentBx (company B) on routeA with company A's busA → no bus, studentA still sees busA (red if ${read.name} stops checking the bus's company against the child's)`, async () => {
       try {
         await setLink(h.ids.busA, h.ids.routeA);
         await setLink(h.ids.busB, h.ids.routeB);
@@ -234,15 +238,18 @@ describe("Q155 parent bus reads show only the child's own-school bus", () => {
         const bA = await busRow(h.ids.busA);
         expect(bA.companyId).toBe(h.ids.companyA);
         expect(bA.currentRouteId).toBe(h.ids.routeA);
-        const [sA4] = await h.db.select().from(students).where(eq(students.id, q8.studentA4));
-        expect(sA4.companyId).toBe(h.ids.companyA);
-        expect(sA4.routeId).toBe(h.ids.routeA);
+        const [sA] = await h.db.select().from(students).where(eq(students.id, h.ids.studentA));
+        expect(sA.companyId).toBe(h.ids.companyA);
+        expect(sA.routeId).toBe(h.ids.routeA);
+        expect((await userRow(h.ids.parentNull)).companyId).toBeNull();
+        const nullLinks = await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, h.ids.parentNull));
+        expect(nullLinks.map((l) => l.studentId)).toEqual(expect.arrayContaining([q8.studentBx, h.ids.studentA]));
 
-        const res = await parentB.get(read.url);
+        const res = await parentNull.get(read.url);
         expect(res.status).toBe(200);
         expect(res.body.some((r: any) => (r.student?.id ?? r.id) === q8.studentBx)).toBe(true);
         expect(read.busOf(res.body, q8.studentBx)).toBeNull();
-        expect(read.busOf(res.body, q8.studentA4)?.id).toBe(h.ids.busA);
+        expect(read.busOf(res.body, h.ids.studentA)?.id).toBe(h.ids.busA);
       } finally {
         await restoreBuses();
       }

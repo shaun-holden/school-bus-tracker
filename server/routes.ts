@@ -221,15 +221,42 @@ async function getParentLinkedStudent(
   return student;
 }
 
+// Q173-1: a parent's own children for the "my children" reads, with the same
+// company rule as getParentLinkedStudent: linked children (plus the
+// students.parentId shortcut where `includeDirect`, which keeps each read's
+// source as it was), deduped by id, then only those in the parent's company,
+// or every one when the parent has no company yet. Pass the getCaller(req)
+// user, so an impersonating master is held to the impersonated company.
+// At most 2 bounded queries (one parent's children); filtered in JS.
+async function getParentChildren(
+  parent: { id: string; companyId?: string | null },
+  { includeDirect }: { includeDirect: boolean },
+) {
+  const [direct, linked] = await Promise.all([
+    includeDirect ? storage.getStudentsByParentId(parent.id) : Promise.resolve([]),
+    storage.getLinkedStudentsByParentId(parent.id),
+  ]);
+  const byId = new Map<string, (typeof linked)[number]>();
+  for (const child of [...direct, ...linked]) byId.set(child.id, child);
+  return Array.from(byId.values())
+    .filter((child) => parent.companyId == null || child.companyId === parent.companyId);
+}
+
+// Q187: an admin delete refused by a foreign key (attendance and similar
+// history rows). Matches the Q180 Delete permanently dialog text.
+const STUDENT_HAS_HISTORY = "Students with attendance records can't be deleted; mark them inactive instead.";
+
 // Q173: a parent may change only first name, last name and grade. Any other
 // key (route, stop, school, active, parent, company, ...) is a ZodError, so
 // the request is refused with 400, never silently stripped. {} is a 400 too.
+// Q173 minors: names at most 100, grade at most 20 (null still clears it).
 const parentStudentUpdateSchema = insertStudentSchema
   .pick({ firstName: true, lastName: true, grade: true })
   .partial()
   .extend({
-    firstName: z.string().trim().min(1).optional(),
-    lastName: z.string().trim().min(1).optional(),
+    firstName: z.string().trim().min(1).max(100).optional(),
+    lastName: z.string().trim().min(1).max(100).optional(),
+    grade: z.string().max(20).nullable().optional(),
   })
   .strict()
   .refine((data) => Object.keys(data).length > 0, { message: "Nothing to update" });
@@ -1497,8 +1524,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       let students;
       if (user.role === 'parent') {
-        // Use the linking system - only return students linked via parentChildLinks
-        const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
+        // Use the linking system - only return students linked via parentChildLinks,
+        // in the parent's company (Q173-1)
+        const linkedStudents = await getParentChildren(user, { includeDirect: false });
 
         // Batch-load related records: avoids N+1 by issuing one query per
         // related table instead of 4 per student.
@@ -1546,7 +1574,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(students);
     } catch (error) {
-      console.error("Error fetching students:", error);
+      console.error("Error fetching students", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch students" });
     }
   });
@@ -2650,13 +2678,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { studentId } = req.params;
 
-      // Verify parent owns this student
-      const [directStudents, linkedStudents] = await Promise.all([
-        storage.getStudentsByParentId(userId),
-        storage.getLinkedStudentsByParentId(userId),
-      ]);
-      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
-      
+      // Verify parent owns this student (Q173-1: and in the parent's company)
+      const myChildren = await getParentChildren(user, { includeDirect: true });
+      const student = myChildren.find(s => s.id === studentId);
+
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
       }
@@ -3184,6 +3209,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (fkError) {
         return res.status(fkError.status).json({ message: fkError.message });
       }
+      // Q175: a route change (or "No route") with no stop in the body clears a
+      // stop that isn't on the new route, so a stale stop on an old archived
+      // route no longer blocks the reactivation below. The cheap gate runs
+      // first: an edit with the same route does no extra read.
+      if (
+        validatedData.routeId !== undefined &&
+        validatedData.stopId === undefined &&
+        hasId(existingStudent.stopId) &&
+        (validatedData.routeId === null || validatedData.routeId !== existingStudent.routeId)
+      ) {
+        const oldStop = await storage.getRouteStopById(existingStudent.stopId);
+        if (!oldStop || oldStop.routeId !== validatedData.routeId) {
+          validatedData.stopId = null;
+        }
+      }
       // Q172: reactivating a student whose route after this update is archived
       // is refused (the unchanged-route skip above does not cover it).
       // Q172b: only a real reactivation (inactive -> active) reads, and the
@@ -3241,12 +3281,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { id } = req.params;
 
-      // For parents, verify they are linked to the student
+      // Q187: a parent only unlinks themselves (link AND company, same 404 as
+      // PUT/GET); the student record stays for the school and other parents.
       if (user.role === 'parent') {
-        const link = await storage.getParentChildLink(userId, id);
-        if (!link) {
-          return res.status(403).json({ message: "Unauthorized - can only delete your linked students" });
+        const linked = await getParentLinkedStudent(user, id);
+        if (!linked) {
+          return res.status(404).json({ message: "Student not found" });
         }
+        const unlinked = await storage.unlinkParentFromStudent(user.id, id);
+        if (!unlinked) {
+          return res.status(404).json({ message: "Student not found" });
+        }
+        return res.json({ success: true });
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       } else {
@@ -3260,15 +3306,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const deleted = await storage.deleteStudent(id);
+      // Q187: a student with history rows (attendance and similar) can't be
+      // deleted; one statement, so nothing is deleted on a 23503.
+      let deleted: boolean;
+      try {
+        deleted = await storage.deleteStudent(id);
+      } catch (deleteError) {
+        if (pgError(deleteError)?.code === '23503') {
+          console.error("Student delete blocked", { code: '23503' });
+          return res.status(409).json({ message: STUDENT_HAS_HISTORY });
+        }
+        throw deleteError;
+      }
       if (!deleted) {
         return res.status(404).json({ message: "Student not found" });
       }
-      
+
       console.log("Student deleted successfully:", id);
       res.json({ message: "Student deleted successfully" });
     } catch (error) {
-      console.error("Error deleting student:", error);
+      console.error("Error deleting student", pgError(error)?.code);
       res.status(500).json({ message: "Failed to delete student" });
     }
   });
@@ -4171,20 +4228,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
-      // Get all children for this parent (both direct and linked via link codes)
-      const directChildren = await storage.getStudentsByParentId(userId);
-      const linkedChildren = await storage.getLinkedStudentsByParentId(userId);
-      
-      // Combine and deduplicate children
-      const childrenMap = new Map();
-      for (const child of directChildren) {
-        childrenMap.set(child.id, child);
-      }
-      for (const child of linkedChildren) {
-        childrenMap.set(child.id, child);
-      }
-      const children = Array.from(childrenMap.values());
-      
+      // Get all children for this parent (both direct and linked via link
+      // codes), deduped, in the parent's company (Q173-1)
+      const children = await getParentChildren(user, { includeDirect: true });
+
       // Batch-load routes, buses (by route), and stops for all children in one
       // round-trip each instead of 3 queries per child.
       const routeIds = Array.from(new Set(children.map(c => c.routeId).filter((x: string | null): x is string => !!x)));
@@ -4238,7 +4285,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.json(childrenWithBuses);
     } catch (error) {
-      console.error("Error fetching children buses:", error);
+      console.error("Error fetching children buses", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch children buses" });
     }
   });
@@ -5005,10 +5052,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - parent role required" });
       }
 
-      const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
+      const linkedStudents = await getParentChildren(user, { includeDirect: false });
       res.json(linkedStudents);
     } catch (error) {
-      console.error("Error fetching linked children:", error);
+      console.error("Error fetching linked children", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch linked children" });
     }
   });
@@ -5596,11 +5643,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       const { studentId } = req.params;
       
-      // Verify parent has access to this student
-      const linkedStudents = await storage.getLinkedStudentsByParentId(userId);
+      // Verify parent has access to this student (Q173-1: in the parent's
+      // company; a miss is 404, masking existence)
+      const linkedStudents = await getParentChildren(user, { includeDirect: false });
       const student = linkedStudents.find(s => s.id === studentId);
       if (!student) {
-        return res.status(403).json({ message: "You don't have access to this student" });
+        return res.status(404).json({ message: "Student not found" });
       }
 
       // Get student's route
@@ -5648,7 +5696,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         lastCompletedStopId: lastCompleted?.routeStopId,
       });
     } catch (error) {
-      console.error("Error fetching stop progress:", error);
+      console.error("Error fetching stop progress", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch stop progress" });
     }
   });
@@ -5673,12 +5721,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID and device ID are required" });
       }
 
-      // Verify parent has access to this student (direct parentId or link code)
-      const [directStudents, linkedStudents] = await Promise.all([
-        storage.getStudentsByParentId(userId),
-        storage.getLinkedStudentsByParentId(userId),
-      ]);
-      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
+      // Verify parent has access to this student (direct parentId or link
+      // code; Q173-1: in the parent's company)
+      const myChildren = await getParentChildren(user, { includeDirect: true });
+      const student = myChildren.find(s => s.id === studentId);
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
       }
@@ -5689,7 +5735,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const checkIn = await storage.enableStudentCheckIn(studentId, userId, deviceId, effectiveCompanyId || undefined, tz);
       res.json(checkIn);
     } catch (error) {
-      console.error("Error enabling check-in:", error);
+      console.error("Error enabling check-in", pgError(error)?.code);
       res.status(500).json({ message: "Failed to enable check-in" });
     }
   });
@@ -5712,12 +5758,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID is required" });
       }
 
-      // Verify parent has access to this student (direct parentId or link code)
-      const [directStudents, linkedStudents] = await Promise.all([
-        storage.getStudentsByParentId(userId),
-        storage.getLinkedStudentsByParentId(userId),
-      ]);
-      const student = [...directStudents, ...linkedStudents].find(s => s.id === studentId);
+      // Verify parent has access to this student (direct parentId or link
+      // code; Q173-1: in the parent's company)
+      const myChildren = await getParentChildren(user, { includeDirect: true });
+      const student = myChildren.find(s => s.id === studentId);
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
       }
@@ -5728,7 +5772,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       await storage.disableStudentCheckIn(studentId, tz);
       res.json({ success: true, message: "Check-in disabled" });
     } catch (error) {
-      console.error("Error disabling check-in:", error);
+      console.error("Error disabling check-in", pgError(error)?.code);
       res.status(500).json({ message: "Failed to disable check-in" });
     }
   });
@@ -5747,20 +5791,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       try {
-        // Get all children for this parent (both direct and linked via link codes)
-        const directChildren = await storage.getStudentsByParentId(userId);
-        const linkedChildren = await storage.getLinkedStudentsByParentId(userId);
-        
-        // Combine and deduplicate children
-        const childrenMap = new Map();
-        for (const child of directChildren) {
-          childrenMap.set(child.id, child);
-        }
-        for (const child of linkedChildren) {
-          childrenMap.set(child.id, child);
-        }
-        const allChildrenIds = Array.from(childrenMap.keys());
-        
+        // Get all children for this parent (both direct and linked via link
+        // codes), deduped, in the parent's company (Q173-1)
+        const myChildren = await getParentChildren(user, { includeDirect: true });
+        const allChildrenIds = myChildren.map(child => child.id);
+
         // Get check-ins for all children (by studentId, not just parentId)
         const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
         const tz = company?.timezone || 'UTC';
@@ -5774,7 +5809,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
     } catch (error) {
-      console.error("Error fetching check-in status:", error);
+      console.error("Error fetching check-in status", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch check-in status" });
     }
   });
@@ -5792,20 +5827,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only parents can view attendance" });
       }
 
-      // Get all children for this parent (both direct and linked via link codes)
-      const directChildren = await storage.getStudentsByParentId(userId);
-      const linkedChildren = await storage.getLinkedStudentsByParentId(userId);
-      
-      // Combine and deduplicate children
-      const childrenMap = new Map();
-      for (const child of directChildren) {
-        childrenMap.set(child.id, child);
-      }
-      for (const child of linkedChildren) {
-        childrenMap.set(child.id, child);
-      }
-      const allChildrenIds = Array.from(childrenMap.keys());
-      
+      // Get all children for this parent (both direct and linked via link
+      // codes), deduped, in the parent's company (Q173-1)
+      const myChildren = await getParentChildren(user, { includeDirect: true });
+      const allChildrenIds = myChildren.map(child => child.id);
+
       // Get driver-marked attendance for all children, scoped to the
       // parent's tenant calendar day so a late evening still reads as today.
       const company = user.companyId ? await storage.getCompanyById(user.companyId) : null;
@@ -5814,7 +5840,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json(attendance);
     } catch (error) {
-      console.error("Error fetching children attendance:", error);
+      console.error("Error fetching children attendance", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch attendance" });
     }
   });
@@ -5841,18 +5867,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Invalid status. Must be 'riding' or 'not_riding'" });
       }
 
-      // Verify parent has access to this student
-      const directChildren = await storage.getStudentsByParentId(userId);
-      const linkedChildren = await storage.getLinkedStudentsByParentId(userId);
-      const allChildren = [...directChildren, ...linkedChildren];
-      const hasAccess = allChildren.some(child => child.id === studentId);
-      
-      if (!hasAccess) {
-        return res.status(403).json({ message: "You don't have access to this student" });
+      // Verify parent has access to this student (Q173-1: in the parent's
+      // company; a miss is 404, masking existence)
+      const allChildren = await getParentChildren(user, { includeDirect: true });
+      const student = allChildren.find(c => c.id === studentId);
+      if (!student) {
+        return res.status(404).json({ message: "Student not found" });
       }
 
-      const student = allChildren.find(c => c.id === studentId);
-      const effectiveCompanyId = student?.companyId || user.companyId;
+      const effectiveCompanyId = student.companyId || user.companyId;
       const company = effectiveCompanyId ? await storage.getCompanyById(effectiveCompanyId) : null;
       const tz = company?.timezone || 'UTC';
 
@@ -5872,7 +5895,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         res.json({ success: true, message: "Student marked as not riding today" });
       }
     } catch (error) {
-      console.error("Error setting parent check-in:", error);
+      console.error("Error setting parent check-in", pgError(error)?.code);
       res.status(500).json({ message: "Failed to set check-in status" });
     }
   });
