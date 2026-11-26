@@ -16,6 +16,7 @@ const ADMIN = readFileSync(
 
 // The JSX element that opens on the line carrying `marker`, up to its matching
 // closing tag (counts <tag ...> / </tag> of the same name; self-closing skipped).
+// Limits: an opening tag ends at its first '>' (an '=>' in an attribute ends it early; fine for paired tags, wrong for a self-closing one); the marker must be the first '<' back to the tag start; nested tags of the same name are counted.
 function elementAt(src: string, marker: string): string {
   const at = src.indexOf(marker);
   expect(at, `no ${marker}`).toBeGreaterThan(-1);

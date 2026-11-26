@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2, Copy, RefreshCw, Trash2, Link, Users, Key, Clock, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import { format } from "date-fns";
+import { splitLinkCodes } from "@/lib/linkCodes";
 
 interface Student {
   id: string;
@@ -160,10 +161,9 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
     }
   };
 
-  const activeCodes = linkCodes?.filter(c => c.status === 'active' && new Date(c.expiresAt) > new Date()) || [];
+  // Q185/Q188: current codes vs old ones (revoked, used, expired); old ones fold under a toggle
+  const { active: activeCodes, old: oldCodes } = splitLinkCodes(linkCodes ?? []);
   const hasActiveCode = activeCodes.length > 0;
-  // Q185: revoked, used and expired codes are folded under a toggle, collapsed by default
-  const oldCodes = linkCodes?.filter(c => !activeCodes.includes(c)) || [];
 
   const renderCodeTable = (codes: LinkCode[], testId: string) => (
     <Table data-testid={testId}>

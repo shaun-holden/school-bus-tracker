@@ -1801,11 +1801,9 @@ export default function AdminDashboard() {
         schoolId: schoolId,
         routeId: routeId,
       };
-      console.log('Creating student with data:', processedData);
       return await apiRequest("/api/students", "POST", processedData);
     },
     onSuccess: (newStudent) => {
-      console.log("Student created successfully:", newStudent);
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
       studentForm.reset({
         firstName: "",
@@ -1828,8 +1826,7 @@ export default function AdminDashboard() {
       }, 5000);
     },
     onError: (error) => {
-      console.error("Error creating student:", error);
-      console.log("Form errors:", studentForm.formState.errors);
+      console.error("Error creating student");
       
       if (isUnauthorizedError(error)) {
         toast({
@@ -1918,7 +1915,7 @@ export default function AdminDashboard() {
       }, 5000);
     },
     onError: (error) => {
-      console.error("Error updating student:", error);
+      console.error("Error updating student");
       if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -1954,6 +1951,8 @@ export default function AdminDashboard() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
+      // Q188: the Delete dialog closes only once the DELETE succeeds
+      setStudentToDelete(null);
       
       // Show success popup for delete
       setStudentSuccessMessage("Student has been removed from the roster successfully.");
@@ -1965,7 +1964,7 @@ export default function AdminDashboard() {
       }, 5000);
     },
     onError: (error) => {
-      console.error("Error deleting student:", error);
+      console.error("Error deleting student");
       if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -4623,6 +4622,8 @@ export default function AdminDashboard() {
                                   variant="outline" 
                                   size="sm"
                                   onClick={() => handleEditStudent(student)}
+                                  aria-label="Edit student"
+                                  title="Edit student"
                                   data-testid={`button-edit-student-${student.id}`}
                                 >
                                   <Edit className="w-4 h-4" />
@@ -4631,6 +4632,8 @@ export default function AdminDashboard() {
                                   variant="outline" 
                                   size="sm"
                                   onClick={() => handleDeleteStudent(student)}
+                                  aria-label="Delete student"
+                                  title="Delete student"
                                   disabled={deleteStudentMutation.isPending}
                                   className="text-red-500 hover:text-red-700"
                                   data-testid={`button-delete-student-${student.id}`}
@@ -6706,9 +6709,6 @@ export default function AdminDashboard() {
           </DialogHeader>
           <Form {...studentForm}>
             <form onSubmit={studentForm.handleSubmit((data) => {
-              console.log("Form submitted with data:", data);
-              console.log("Form valid:", studentForm.formState.isValid);
-              console.log("Form errors:", studentForm.formState.errors);
               createStudentMutation.mutate(data);
             })} className="space-y-6">
               <div className="grid grid-cols-2 gap-4">
@@ -7027,7 +7027,8 @@ export default function AdminDashboard() {
       </Dialog>
 
       {/* Delete Student Dialog */}
-      <AlertDialog open={!!studentToDelete} onOpenChange={(open) => { if (!open) setStudentToDelete(null); }}>
+      {/* Q188: no closing while a delete or mark-inactive request is in flight */}
+      <AlertDialog open={!!studentToDelete} onOpenChange={(open) => { if (!open && !deleteStudentMutation.isPending && !markStudentInactiveMutation.isPending) setStudentToDelete(null); }}>
         <AlertDialogContent data-testid="dialog-delete-student">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete student</AlertDialogTitle>
@@ -7038,6 +7039,7 @@ export default function AdminDashboard() {
           <AlertDialogFooter className="gap-2">
             <Button
               variant="outline"
+              disabled={deleteStudentMutation.isPending || markStudentInactiveMutation.isPending}
               onClick={() => setStudentToDelete(null)}
               data-testid="button-cancel-delete-student"
             >
@@ -7046,26 +7048,25 @@ export default function AdminDashboard() {
             {studentToDelete && studentToDelete.isActive !== false && (
               <Button
                 variant="secondary"
-                disabled={markStudentInactiveMutation.isPending}
+                disabled={deleteStudentMutation.isPending || markStudentInactiveMutation.isPending}
                 onClick={() => markStudentInactiveMutation.mutate(studentToDelete)}
                 data-testid="button-mark-inactive-instead"
               >
                 {markStudentInactiveMutation.isPending ? "Saving..." : "Mark inactive instead"}
               </Button>
             )}
-            <AlertDialogAction
+            <Button
               className="bg-red-600 hover:bg-red-700"
-              disabled={deleteStudentMutation.isPending}
+              disabled={deleteStudentMutation.isPending || markStudentInactiveMutation.isPending}
               onClick={() => {
                 if (studentToDelete) {
                   deleteStudentMutation.mutate(studentToDelete.id);
                 }
-                setStudentToDelete(null);
               }}
               data-testid="button-delete-student-permanently"
             >
-              Delete permanently
-            </AlertDialogAction>
+              {deleteStudentMutation.isPending ? "Deleting..." : "Delete permanently"}
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
