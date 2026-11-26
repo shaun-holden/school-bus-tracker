@@ -1979,7 +1979,7 @@ export default function AdminDashboard() {
       }
       toast({
         title: "Error",
-        description: error?.message || "Failed to delete student",
+        description: studentErrorText(error, "Failed to delete student"),
         variant: "destructive",
       });
     },
