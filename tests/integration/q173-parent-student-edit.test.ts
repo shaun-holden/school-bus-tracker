@@ -87,6 +87,31 @@ describe('Q173 parent PUT /api/students/:id: who may edit', () => {
     expect(await studentRow(q8.studentA4)).toEqual(pre);
   });
 
+  it("(3b) parentA PUT studentA4 (same company, not linked) → 404, studentA4 unchanged (red if getParentLinkedStudent's link check is removed)", async () => {
+    expect(await linkExists(h.ids.parentA, q8.studentA4)).toBe(false);
+    const pre = await studentRow(q8.studentA4);
+    expect(pre.parentId).not.toBe(h.ids.parentA);
+    expect((await userRow(h.ids.parentA)).companyId).toBe(h.ids.companyA);
+    expect(pre.companyId).toBe(h.ids.companyA);
+
+    const res = await parentA.put(url(q8.studentA4)).send({ grade: 'Q173-G3b' });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(NOT_FOUND);
+    expect(await studentRow(q8.studentA4)).toEqual(pre);
+  });
+
+  it("(3c) parentNull PUT studentA4 (NULL company, not linked) → 404, studentA4 unchanged (red if getParentLinkedStudent's link check is removed)", async () => {
+    expect(await linkExists(h.ids.parentNull, q8.studentA4)).toBe(false);
+    expect((await userRow(h.ids.parentNull)).companyId).toBeNull();
+    const pre = await studentRow(q8.studentA4);
+    expect(pre.parentId).not.toBe(h.ids.parentNull);
+
+    const res = await parentNull.put(url(q8.studentA4)).send({ grade: 'Q173-G3c' });
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(NOT_FOUND);
+    expect(await studentRow(q8.studentA4)).toEqual(pre);
+  });
+
   it('(4) parentA PUT a random uuid → 404 with the same body as a not-linked student', async () => {
     const res = await parentA.put(url(crypto.randomUUID())).send({ grade: 'Q173-G4' });
     expect(res.status).toBe(404);
@@ -117,9 +142,11 @@ describe('Q173 parent PUT /api/students/:id: only name and grade', () => {
     expect(await studentRow(h.ids.studentA)).toEqual(pre);
   });
 
-  it('(6) parentA PUT studentA {} → 400 (red if the at-least-one-key refine is removed)', async () => {
+  it('(6) parentA PUT studentA {} → 400, studentA unchanged (red if the at-least-one-key refine is removed)', async () => {
+    const pre = await studentRow(h.ids.studentA);
     const res = await parentA.put(url(h.ids.studentA)).send({});
     expect(res.status).toBe(400);
+    expect(await studentRow(h.ids.studentA)).toEqual(pre);
   });
 
   it('(7) parentA PUT studentA {firstName, lastName, grade} → 200 and the row changed (name trimmed)', async () => {
@@ -158,7 +185,26 @@ describe('Q173 parent GET /api/students/:id', () => {
     expect(res.body).toEqual(NOT_FOUND);
   });
 
+  it("(9d) parentA GET studentA4 (same company, not linked) → 404 (red if getParentLinkedStudent's link check is removed)", async () => {
+    expect(await linkExists(h.ids.parentA, q8.studentA4)).toBe(false);
+    expect((await userRow(h.ids.parentA)).companyId).toBe(h.ids.companyA);
+    expect((await studentRow(q8.studentA4)).companyId).toBe(h.ids.companyA);
+    const res = await parentA.get(url(q8.studentA4));
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(NOT_FOUND);
+  });
+
+  it("(9e) parentNull GET studentA4 (NULL company, not linked) → 404 (red if getParentLinkedStudent's link check is removed)", async () => {
+    expect(await linkExists(h.ids.parentNull, q8.studentA4)).toBe(false);
+    expect((await userRow(h.ids.parentNull)).companyId).toBeNull();
+    const res = await parentNull.get(url(q8.studentA4));
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual(NOT_FOUND);
+  });
+
   it('(9c) parentNull GET studentA (link only) → 200 (positive control)', async () => {
+    expect(await linkExists(h.ids.parentNull, h.ids.studentA)).toBe(true);
+    expect((await userRow(h.ids.parentNull)).companyId).toBeNull();
     const res = await parentNull.get(url(h.ids.studentA));
     expect(res.status).toBe(200);
     expect(res.body.id).toBe(h.ids.studentA);
