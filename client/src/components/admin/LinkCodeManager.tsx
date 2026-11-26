@@ -55,6 +55,7 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
   const { toast } = useToast();
   const [maxUsesText, setMaxUsesText] = useState("2");
   const [expiresInDaysText, setExpiresInDaysText] = useState("7");
+  const [showOldCodes, setShowOldCodes] = useState(false);
   const maxUses = parseBoxedInt(maxUsesText, 1, 5);
   const expiresInDays = parseBoxedInt(expiresInDaysText, 1, 30);
   const inputsValid = maxUses !== null && expiresInDays !== null;
@@ -161,6 +162,69 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
 
   const activeCodes = linkCodes?.filter(c => c.status === 'active' && new Date(c.expiresAt) > new Date()) || [];
   const hasActiveCode = activeCodes.length > 0;
+  // Q185: revoked, used and expired codes are folded under a toggle, collapsed by default
+  const oldCodes = linkCodes?.filter(c => !activeCodes.includes(c)) || [];
+
+  const renderCodeTable = (codes: LinkCode[], testId: string) => (
+    <Table data-testid={testId}>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Code</TableHead>
+          <TableHead>Status</TableHead>
+          <TableHead>Uses</TableHead>
+          <TableHead>Expires</TableHead>
+          <TableHead>Actions</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {codes.map((code) => (
+          <TableRow key={code.id}>
+            <TableCell>
+              <code className="font-mono text-base sm:text-lg font-bold text-orange-600 bg-orange-50 px-3 py-1 rounded">
+                {code.code}
+              </code>
+            </TableCell>
+            <TableCell>
+              {getStatusBadge(code.status, code.expiresAt)}
+            </TableCell>
+            <TableCell>
+              {code.usesCount} / {code.maxUses}
+            </TableCell>
+            <TableCell>
+              <div className="flex items-center space-x-1 text-sm text-muted-foreground">
+                <Clock className="w-3 h-3" />
+                <span>{format(new Date(code.expiresAt), 'MMM d, yyyy')}</span>
+              </div>
+            </TableCell>
+            <TableCell>
+              <div className="flex space-x-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => copyToClipboard(code.code)}
+                  data-testid={`button-copy-code-${code.id}`}
+                >
+                  <Copy className="w-4 h-4" />
+                </Button>
+                {code.status === 'active' && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => revokeCodeMutation.mutate(code.id)}
+                    disabled={revokeCodeMutation.isPending}
+                    className="text-red-500 hover:text-red-700"
+                    data-testid={`button-revoke-code-${code.id}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </Button>
+                )}
+              </div>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
 
   return (
     <div className="space-y-6">
@@ -190,45 +254,48 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
         </CardHeader>
         <CardContent className="space-y-4">
           {!hasActiveCode && (
-            <div className="flex items-end space-x-4 p-4 bg-muted rounded-lg">
-              <div className="space-y-2">
-                <Label>Max Uses</Label>
-                <Input 
-                  type="number" 
-                  value={maxUsesText} 
-                  onChange={(e) => setMaxUsesText(e.target.value)}
-                  onBlur={() => { if (maxUsesText.trim() === "") setMaxUsesText("2"); }}
-                  min={1}
-                  max={5}
-                  className="w-20"
-                  data-testid="input-max-uses"
-                />
+            <div className="space-y-2">
+              {/* Q183: the row wraps on phones; the hint sits on its own line below it */}
+              <div className="flex flex-wrap items-end gap-4 p-4 bg-muted rounded-lg" data-testid="row-generate-link-code">
+                <div className="space-y-2">
+                  <Label>Max Uses</Label>
+                  <Input 
+                    type="number" 
+                    value={maxUsesText} 
+                    onChange={(e) => setMaxUsesText(e.target.value)}
+                    onBlur={() => { if (maxUsesText.trim() === "") setMaxUsesText("2"); }}
+                    min={1}
+                    max={5}
+                    className="w-20"
+                    data-testid="input-max-uses"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Expires In (Days)</Label>
+                  <Input 
+                    type="number" 
+                    value={expiresInDaysText} 
+                    onChange={(e) => setExpiresInDaysText(e.target.value)}
+                    onBlur={() => { if (expiresInDaysText.trim() === "") setExpiresInDaysText("7"); }}
+                    min={1}
+                    max={30}
+                    className="w-20"
+                    data-testid="input-expires-days"
+                  />
+                </div>
+                <Button 
+                  onClick={() => { if (inputsValid) generateCodeMutation.mutate(); }}
+                  disabled={generateCodeMutation.isPending || !inputsValid}
+                  data-testid="button-generate-code"
+                >
+                  {generateCodeMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Key className="w-4 h-4 mr-2" />
+                  )}
+                  Generate Code
+                </Button>
               </div>
-              <div className="space-y-2">
-                <Label>Expires In (Days)</Label>
-                <Input 
-                  type="number" 
-                  value={expiresInDaysText} 
-                  onChange={(e) => setExpiresInDaysText(e.target.value)}
-                  onBlur={() => { if (expiresInDaysText.trim() === "") setExpiresInDaysText("7"); }}
-                  min={1}
-                  max={30}
-                  className="w-20"
-                  data-testid="input-expires-days"
-                />
-              </div>
-              <Button 
-                onClick={() => { if (inputsValid) generateCodeMutation.mutate(); }}
-                disabled={generateCodeMutation.isPending || !inputsValid}
-                data-testid="button-generate-code"
-              >
-                {generateCodeMutation.isPending ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <Key className="w-4 h-4 mr-2" />
-                )}
-                Generate Code
-              </Button>
               {!inputsValid && (
                 <p className="text-sm text-destructive" data-testid="text-link-code-input-hint">
                   Max uses must be 1 to 5 and days 1 to 30.
@@ -241,69 +308,30 @@ export function LinkCodeManager({ student, onClose }: LinkCodeManagerProps) {
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-6 h-6 animate-spin" />
             </div>
-          ) : linkCodes && linkCodes.length > 0 ? (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Code</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Uses</TableHead>
-                  <TableHead>Expires</TableHead>
-                  <TableHead>Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {linkCodes.map((code) => (
-                  <TableRow key={code.id}>
-                    <TableCell>
-                      <code className="font-mono text-lg font-bold text-orange-600 bg-orange-50 px-3 py-1 rounded">
-                        {code.code}
-                      </code>
-                    </TableCell>
-                    <TableCell>
-                      {getStatusBadge(code.status, code.expiresAt)}
-                    </TableCell>
-                    <TableCell>
-                      {code.usesCount} / {code.maxUses}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center space-x-1 text-sm text-muted-foreground">
-                        <Clock className="w-3 h-3" />
-                        <span>{format(new Date(code.expiresAt), 'MMM d, yyyy')}</span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex space-x-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => copyToClipboard(code.code)}
-                          data-testid={`button-copy-code-${code.id}`}
-                        >
-                          <Copy className="w-4 h-4" />
-                        </Button>
-                        {code.status === 'active' && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => revokeCodeMutation.mutate(code.id)}
-                            disabled={revokeCodeMutation.isPending}
-                            className="text-red-500 hover:text-red-700"
-                            data-testid={`button-revoke-code-${code.id}`}
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
           ) : (
-            <div className="text-center py-6 text-muted-foreground">
-              No link codes generated yet
-            </div>
+            <>
+              {activeCodes.length > 0 ? (
+                renderCodeTable(activeCodes, "table-active-codes")
+              ) : (
+                <div className="text-center py-6 text-muted-foreground">
+                  {oldCodes.length > 0 ? "No active code. Generate one above." : "No link codes generated yet"}
+                </div>
+              )}
+              {oldCodes.length > 0 && (
+                <div className="space-y-2">
+                  <Button
+                    variant="link"
+                    size="sm"
+                    className="px-0"
+                    onClick={() => setShowOldCodes((v) => !v)}
+                    data-testid="button-toggle-old-codes"
+                  >
+                    {showOldCodes ? "Hide old codes" : `Show old codes (${oldCodes.length})`}
+                  </Button>
+                  {showOldCodes && renderCodeTable(oldCodes, "table-old-codes")}
+                </div>
+              )}
+            </>
           )}
 
           {hasActiveCode && (
@@ -400,12 +428,15 @@ export function LinkCodeButton({ student }: { student: Student }) {
         <Button 
           variant="outline" 
           size="sm"
+          aria-label="Link code"
           data-testid={`button-manage-link-${student.id}`}
         >
-          <Link className="w-4 h-4" />
+          <Link className="w-4 h-4 mr-1" />
+          <span>Link code</span>
         </Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+      {/* Q183: side gap on phones, local to this dialog */}
+      <DialogContent className="w-[calc(100%-2rem)] max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Parent Linking</DialogTitle>
           <DialogDescription>
