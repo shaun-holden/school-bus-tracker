@@ -4,9 +4,10 @@
 // linkedStudents[0]), and answer a student outside the list with 404
 // "Student not found" (checklist T-2). Real HTTP + real Postgres.
 //
-// getLinkedStudentsByParentId has no ORDER BY; the "matched student" case
-// asserts through it that parentNull's first linked student is company A's
-// studentA, so the old linkedStudents[0] rule would wrongly stamp company A.
+// getLinkedStudentsByParentId has no ORDER BY, so the "matched student" case
+// is order-free: parentNull (NULL company) is linked to company A's studentA
+// and company B's studentB and enables for BOTH. Whatever order the read
+// returns, a linkedStudents[0] rule stamps the wrong company on one of them.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { students, parentChildLinks, studentCheckIns } from '@shared/schema';
@@ -81,13 +82,12 @@ describe('Q50 direct-only parent', () => {
 
 // Q173-1 (DeShaun 2026-11-26): a parent with a company no longer reaches a
 // linked child of another company, so the "matched student" case runs as
-// parentNull (NULL company), linked first to company A's studentA, then to
-// company B's studentB. The two cross-company links are now refused.
+// parentNull (NULL company), linked to company A's studentA and company B's
+// studentB (in any order). The two cross-company links are now refused.
 describe('Q50 company comes from the matched student', () => {
   let parentNull: Agent;
 
   beforeAll(async () => {
-    // Insert order matters: studentA is parentNull's first linked student.
     await h.db.insert(parentChildLinks).values({ parentId: h.ids.parentNull, studentId: h.ids.studentA });
     await h.db.insert(parentChildLinks).values({ parentId: h.ids.parentNull, studentId: h.ids.studentB });
     await h.db.insert(parentChildLinks).values([
@@ -98,18 +98,28 @@ describe('Q50 company comes from the matched student', () => {
     parentNull = await h.loginAs('parentNull');
   });
 
-  it('parentNull (first linked student is A\'s) enabling for company B\'s studentB → the row is company B (red if the company goes back to linkedStudents[0])', async () => {
-    // Q193: the premise through the server's own read, not the table order.
+  it('parentNull, linked to company A\'s studentA and company B\'s studentB, enabling for each → studentB\'s row is company B and studentA\'s row is company A, in any link order (red if the company goes back to linkedStudents[0])', async () => {
+    // Premise through the server's own read, order-free (Q192 r2).
     const linked = await storage.getLinkedStudentsByParentId(h.ids.parentNull);
-    expect(linked.map((st) => st.id)).toEqual([h.ids.studentA, h.ids.studentB]);
+    const linkedIds = linked.map((st) => st.id);
+    expect(linkedIds).toHaveLength(2);
+    expect(linkedIds).toEqual(expect.arrayContaining([h.ids.studentA, h.ids.studentB]));
     const [sA] = await h.db.select().from(students).where(eq(students.id, h.ids.studentA));
+    const [sB] = await h.db.select().from(students).where(eq(students.id, h.ids.studentB));
     expect(sA.companyId).toBe(h.ids.companyA);
+    expect(sB.companyId).toBe(h.ids.companyB);
+    expect(h.ids.companyA).not.toBe(h.ids.companyB);
 
-    const res = await parentNull.post('/api/check-in/enable').send({ studentId: h.ids.studentB, deviceId: 'q50-null-on-b' });
-    expect(res.status).toBe(200);
-    const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, h.ids.studentB), eq(studentCheckIns.parentId, h.ids.parentNull)));
-    expect(rows).toHaveLength(1);
-    expect(rows[0].companyId).toBe(h.ids.companyB);
+    for (const [studentId, companyId, deviceId] of [
+      [h.ids.studentB, h.ids.companyB, 'q50-null-on-b'],
+      [h.ids.studentA, h.ids.companyA, 'q50-null-on-a'],
+    ] as const) {
+      const res = await parentNull.post('/api/check-in/enable').send({ studentId, deviceId });
+      expect(res.status).toBe(200);
+      const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, studentId), eq(studentCheckIns.parentId, h.ids.parentNull)));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].companyId).toBe(companyId);
+    }
   });
 
   it('parentA linked to company B\'s studentB enabling → 404 "Student not found" and no row (red if check-in enable skips the company match)', async () => {
