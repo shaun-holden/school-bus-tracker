@@ -331,9 +331,16 @@ describe('Q88 NULL-company and direct parents', () => {
     expect(await badge(nullNoKids)).toBe(0);
   });
 
-  it('A11 route_parents routes come from direct children too: a direct-only parent sees the routeA driver message', async () => {
+  // Q192: students.parentId grants nothing, so a direct-only parent (no link)
+  // gets no route rows; only their company's broadcasts and global alerts.
+  it('A11 a direct-only parent (students.parentId, no link) does not see the routeA driver message (still sees company-wide rows), and the badge counts only what it lists (red if getParentChildScope reads students.parentId again)', async () => {
+    const [kid] = await h.db.select().from(students).where(eq(students.parentId, directOnlyId));
+    expect(kid).toMatchObject({ companyId: h.ids.companyA, routeId: h.ids.routeA });
+    expect(await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, directOnlyId))).toHaveLength(0);
     const items = await list(directOnly);
-    expect(find(items, routeMsgA)).toMatchObject({ source: 'system' });
+    expect(find(items, routeMsgA)).toBeUndefined();
+    expect(items.map((n) => n.id)).toEqual(expect.arrayContaining([alertA, alertA2, broadcastA]));
+    expect(await badge(directOnly)).toBe(items.filter((n) => !n.isRead).length);
   });
 
   it('A12 PARENT_NOTICE_LIST_CAP: CAP + 1 items → CAP returned, the oldest dropped', async () => {

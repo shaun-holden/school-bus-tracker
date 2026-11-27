@@ -177,7 +177,6 @@ export interface IStorage {
   // Student operations
   getAllStudents(companyId?: string): Promise<Student[]>;
   getStudentById(id: string): Promise<Student | undefined>;
-  getStudentsByParentId(parentId: string): Promise<Student[]>;
   getStudentsByRouteId(routeId: string): Promise<Student[]>;
   getStudentsByStopId(stopId: string): Promise<Student[]>;
   getStudentsBySchoolId(schoolId: string): Promise<Student[]>;
@@ -388,8 +387,8 @@ export function isPerParentCopy(row: { recipientRole: string | null; recipientId
   return row.recipientRole === 'parent' && row.recipientId != null;
 }
 
-// The parent's children (direct via students.parentId + linked via
-// parentChildLinks), deduped by student id, with their routes and companies.
+// The parent's children (linked via parentChildLinks only; students.parentId
+// grants nothing, Q192), with their routes and companies.
 type ParentChildScope = {
   children: Array<{ routeId: string | null; companyId: string | null }>;
   routeIds: string[];
@@ -972,14 +971,6 @@ export class DatabaseStorage implements IStorage {
       .from(students)
       .where(eq(students.id, id));
     return student;
-  }
-
-  async getStudentsByParentId(parentId: string): Promise<Student[]> {
-    return await db
-      .select()
-      .from(students)
-      .where(eq(students.parentId, parentId))
-      .orderBy(asc(students.firstName));
   }
 
   async getStudentsByRouteId(routeId: string): Promise<Student[]> {
@@ -1892,22 +1883,14 @@ export class DatabaseStorage implements IStorage {
       .orderBy(desc(parentNotifications.createdAt));
   }
 
-  // Q88: the parent's children from both sources, one query each, deduped.
+  // Q88 / Q192: the parent's linked children, one query (a link is unique per
+  // parent and student, so no dedupe is needed).
   private async getParentChildScope(parentId: string): Promise<ParentChildScope> {
-    const cols = { id: students.id, routeId: students.routeId, companyId: students.companyId };
-    const [direct, linked] = await Promise.all([
-      db.select(cols).from(students).where(eq(students.parentId, parentId)),
-      db
-        .select(cols)
-        .from(parentChildLinks)
-        .innerJoin(students, eq(students.id, parentChildLinks.studentId))
-        .where(eq(parentChildLinks.parentId, parentId)),
-    ]);
-    const byId = new Map<string, { routeId: string | null; companyId: string | null }>();
-    for (const c of [...direct, ...linked]) {
-      if (!byId.has(c.id)) byId.set(c.id, { routeId: c.routeId, companyId: c.companyId });
-    }
-    const children = Array.from(byId.values());
+    const children = await db
+      .select({ routeId: students.routeId, companyId: students.companyId })
+      .from(parentChildLinks)
+      .innerJoin(students, eq(students.id, parentChildLinks.studentId))
+      .where(eq(parentChildLinks.parentId, parentId));
     const routeIds = Array.from(new Set(children.map(c => c.routeId).filter((x): x is string => !!x)));
     const companyIds = Array.from(new Set(children.map(c => c.companyId).filter((x): x is string => !!x)));
     return { children, routeIds, companyIds };
@@ -1926,8 +1909,8 @@ export class DatabaseStorage implements IStorage {
     // route rows match only when targetParentId IS NULL.
 
     // Parent with no company (SEC-20): never fall back to an unfiltered
-    // "1=1". Global rows are limited to the companies of the parent's direct
-    // and linked children; route rows are already bounded by the children's
+    // "1=1". Global rows are limited to the companies of the parent's linked
+    // children (Q192: links only); route rows are already bounded by the children's
     // route ids.
     if (!parentCompanyId) {
       const conditions: SQL[] = [];
@@ -2582,7 +2565,7 @@ export class DatabaseStorage implements IStorage {
   }
 
   async getDriversForParent(parentId: string, companyId?: string): Promise<User[]> {
-    // Q89: direct (students.parentId) and linked children, via the shared scope.
+    // Q89 / Q192: linked children only, via the shared scope.
     const { children } = await this.getParentChildScope(parentId);
     if (children.length === 0) return [];
 
@@ -2621,24 +2604,22 @@ export class DatabaseStorage implements IStorage {
   // getNotificationsForParent shows the row to:
   //  - common: role 'parent' AND coalesce(isActive, true).
   //  - global (routeId null): parent of this company, OR a null-company parent
-  //    with a child (students.parentId or a parentChildLinks row) in this company.
+  //    with a linked child (a parentChildLinks row) in this company.
   //  - route (routeId set): parent of this company or with no company, AND a
-  //    child of this company on that route (students.parentId or a link row).
+  //    linked child of this company on that route.
+  //  Links only: students.parentId grants nothing (Q192).
   // One query, distinct user ids.
   async getAlertRecipients(companyId: string, routeId: string | null): Promise<string[]> {
     if (!companyId) return [];
 
-    const childOfCaller = or(
-      eq(students.parentId, users.id),
-      exists(
-        db
-          .select({ one: sql`1` })
-          .from(parentChildLinks)
-          .where(and(
-            eq(parentChildLinks.parentId, users.id),
-            eq(parentChildLinks.studentId, students.id),
-          )),
-      ),
+    const childOfCaller = exists(
+      db
+        .select({ one: sql`1` })
+        .from(parentChildLinks)
+        .where(and(
+          eq(parentChildLinks.parentId, users.id),
+          eq(parentChildLinks.studentId, students.id),
+        )),
     );
     const hasChildInScope = exists(
       db
@@ -2681,8 +2662,8 @@ export class DatabaseStorage implements IStorage {
   //  - company approved and active (coalesce true).
   //  - 2A: parents only while the company's parent portal is on; drivers
   //    unaffected.
-  //  - tenant: user of this company, OR a null-company parent with a child
-  //    (students.parentId or a parentChildLinks row) in this company.
+  //  - tenant: user of this company, OR a null-company parent with a linked
+  //    child (a parentChildLinks row) in this company (links only, Q192).
   async filterPushRecipients(userIds: string[], companyId: string | null | undefined): Promise<string[]> {
     if (!companyId) return [];
     const ids = Array.from(new Set(userIds));
@@ -2694,17 +2675,14 @@ export class DatabaseStorage implements IStorage {
         .from(students)
         .where(and(
           eq(students.companyId, companyId),
-          or(
-            eq(students.parentId, users.id),
-            exists(
-              db
-                .select({ one: sql`1` })
-                .from(parentChildLinks)
-                .where(and(
-                  eq(parentChildLinks.parentId, users.id),
-                  eq(parentChildLinks.studentId, students.id),
-                )),
-            ),
+          exists(
+            db
+              .select({ one: sql`1` })
+              .from(parentChildLinks)
+              .where(and(
+                eq(parentChildLinks.parentId, users.id),
+                eq(parentChildLinks.studentId, students.id),
+              )),
           ),
         )),
     );
@@ -2957,12 +2935,12 @@ export class DatabaseStorage implements IStorage {
     return await db.insert(systemNotifications).values(rows).returning();
   }
 
-  // Q89: the two-source parent fence shared by getParentRecipientsForRouteEvent
-  // and getParentsForDriver (so they can't drift). Students must be in
+  // Q89: the parent fence shared by getParentRecipientsForRouteEvent and
+  // getParentsForDriver (so they can't drift). Students must be in
   // `companyId` and on one of `routeIds`; `extra` narrows them further.
-  //  1. parentChildLinks: role 'parent' AND (companyId = companyId OR NULL).
-  //  2. students.parentId: role 'parent' AND companyId = companyId (strict).
-  // Two queries, rows not deduped (callers dedupe by their own key).
+  // parentChildLinks only (Q192: students.parentId grants nothing): role
+  // 'parent' AND (companyId = companyId OR NULL). One query; a link is unique
+  // per parent and student, and callers still dedupe by their own key.
   private async routeParentRows(
     companyId: string,
     routeIds: string[],
@@ -2974,29 +2952,16 @@ export class DatabaseStorage implements IStorage {
       inArray(students.routeId, routeIds),
       extra,
     );
-    const cols = { parentId: users.id, studentId: students.id, firstName: students.firstName };
-    const [linked, direct] = await Promise.all([
-      db
-        .select(cols)
-        .from(parentChildLinks)
-        .innerJoin(students, eq(students.id, parentChildLinks.studentId))
-        .innerJoin(users, eq(users.id, parentChildLinks.parentId))
-        .where(and(
-          studentFilter,
-          eq(users.role, 'parent'),
-          or(eq(users.companyId, companyId), isNull(users.companyId)),
-        )),
-      db
-        .select(cols)
-        .from(students)
-        .innerJoin(users, eq(users.id, students.parentId))
-        .where(and(
-          studentFilter,
-          eq(users.role, 'parent'),
-          eq(users.companyId, companyId),
-        )),
-    ]);
-    return [...linked, ...direct];
+    return await db
+      .select({ parentId: users.id, studentId: students.id, firstName: students.firstName })
+      .from(parentChildLinks)
+      .innerJoin(students, eq(students.id, parentChildLinks.studentId))
+      .innerJoin(users, eq(users.id, parentChildLinks.parentId))
+      .where(and(
+        studentFilter,
+        eq(users.role, 'parent'),
+        or(eq(users.companyId, companyId), isNull(users.companyId)),
+      ));
   }
 
   // Q89 messaging: a linked parent (role 'parent', company = companyId or
@@ -3021,15 +2986,12 @@ export class DatabaseStorage implements IStorage {
 
   // Parent recipients for a driver route event (school arrival/departure, stop
   // completed). Students must be in `companyId` and on `routeId` (optionally
-  // narrowed by schoolId / stopId / studentIds). Parents come from two sources:
-  //  1. parentChildLinks (link-code flow): users.role = 'parent' AND
-  //     (users.companyId = companyId OR users.companyId IS NULL). A null-company
-  //     parent is reachable only via a link to a student of this company; a
-  //     parent of another company is dropped.
-  //  2. students.parentId shortcut: users.role = 'parent' AND users.companyId =
-  //     companyId (strict; parentId may point at a non-parent such as an admin).
-  // Results are merged and deduped by parentId:studentId. Two queries, no
-  // per-student loop. Native push (plans/native-push.md T4) reuses this helper
+  // narrowed by schoolId / stopId / studentIds). Parents come from
+  // parentChildLinks only (Q192: students.parentId grants nothing):
+  // users.role = 'parent' AND (users.companyId = companyId OR users.companyId
+  // IS NULL). A null-company parent is reachable only via a link to a student
+  // of this company; a parent of another company is dropped. Deduped by
+  // parentId:studentId. One query, no per-student loop. Native push (plans/native-push.md T4) reuses this helper
   // and adds its own device-token isActive fence.
   async getParentRecipientsForRouteEvent(
     companyId: string,
@@ -3091,11 +3053,11 @@ export class DatabaseStorage implements IStorage {
   // list, the count and the by-id check all build on it, so they can't drift.
   // null = the parent can see nothing (never an unfiltered query).
   //  - company: companyId if the parent has one; otherwise the companies of
-  //    their direct + linked children (SEC-20 fence; none → null).
+  //    their linked children (SEC-20 fence; none → null).
   //  - a row addressed to a recipient (recipientId set) is visible only to that
   //    recipient. Broadcast rows (recipientId IS NULL) match by role
   //    ('parent'/'all_parents') or by route ('route_parents' on one of the
-  //    parent's direct or linked children's routes).
+  //    parent's linked children's routes; Q192: links only).
   private async parentSystemNoticeWhere(parentId: string, companyId: string | null): Promise<SQL | null> {
     const scope = await this.getParentChildScope(parentId);
     let companyCond: SQL;

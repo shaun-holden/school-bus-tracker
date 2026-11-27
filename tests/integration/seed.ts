@@ -422,13 +422,13 @@ export async function assertSeed(ids: SeedIds): Promise<void> {
 // the plain two-tenant data.
 //
 // Recipients a company-A route event on routeA at schoolA / stopA1 must reach:
-//   (parentA, studentA)    via both students.parentId and a link: ONE row
+//   (parentA, studentA)    via its link (also students.parentId, which grants nothing): ONE row
 //   (parentNull, studentA) null-company parent linked to an A student
 // and must NOT reach:
 //   parentA3     child on routeA2 (same school, other route)
 //   parentNull   for studentBx (company-B student on routeA/schoolA, bad data)
 //   parentB      for studentBx (company B) and for studentA4 (linked by mistake)
-//   adminA       students.parentId of studentA4 (shortcut pointing at an admin)
+//   adminA       students.parentId of studentA4 (parentId grants nothing, Q192)
 export const Q8_EMAILS = {
   parentA3: 'q8-parent-a3@sbt.test',
   driverX: 'q8-driver-x@sbt.test',
@@ -514,8 +514,8 @@ export async function seedQ8Extras(ids: SeedIds): Promise<Q8Ids> {
 // Every new student is a company-A student on routeA at schoolA / stopA1, so
 // it is reachable by an arrival at schoolA, a departure from it and a
 // completion of stopA1; none of them may produce a notice:
-//   A-ShortB     students.parentId = parentB (company B), no link row
-//   A-ShortNull  students.parentId = parentNull (no company), no link row
+//   A-ShortB     students.parentId = parentB (company B), no link row (grants nothing, Q192)
+//   A-ShortNull  students.parentId = parentNull (no company), no link row (grants nothing, Q192)
 //   A-LinkAdmin  students.parentId = driverA; adminA linked via parentChildLinks
 // Plus two schools that are on a driver's route by ONE path only:
 //   schoolStopOnly   only through a routeA stop's schoolId

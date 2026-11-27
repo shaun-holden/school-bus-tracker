@@ -221,25 +221,15 @@ async function getParentLinkedStudent(
   return student;
 }
 
-// Q173-1: a parent's own children for the "my children" reads, with the same
-// company rule as getParentLinkedStudent: linked children (plus the
-// students.parentId shortcut where `includeDirect`, which keeps each read's
-// source as it was), deduped by id, then only those in the parent's company,
-// or every one when the parent has no company yet. Pass the getCaller(req)
-// user, so an impersonating master is held to the impersonated company.
-// At most 2 bounded queries (one parent's children); filtered in JS.
-async function getParentChildren(
-  parent: { id: string; companyId?: string | null },
-  { includeDirect }: { includeDirect: boolean },
-) {
-  const [direct, linked] = await Promise.all([
-    includeDirect ? storage.getStudentsByParentId(parent.id) : Promise.resolve([]),
-    storage.getLinkedStudentsByParentId(parent.id),
-  ]);
-  const byId = new Map<string, (typeof linked)[number]>();
-  for (const child of [...direct, ...linked]) byId.set(child.id, child);
-  return Array.from(byId.values())
-    .filter((child) => parent.companyId == null || child.companyId === parent.companyId);
+// Q173-1 / Q192: a parent's own children for the "my children" reads, with
+// the same company rule as getParentLinkedStudent: linked children only
+// (students.parentId grants nothing, Q192), then only those in the parent's
+// company, or every one when the parent has no company yet. Pass the
+// getCaller(req) user, so an impersonating master is held to the
+// impersonated company. One bounded query (one parent's links); filtered in JS.
+async function getParentChildren(parent: { id: string; companyId?: string | null }) {
+  const linked = await storage.getLinkedStudentsByParentId(parent.id);
+  return linked.filter((child) => parent.companyId == null || child.companyId === parent.companyId);
 }
 
 // Q187: an admin delete refused by a foreign key (attendance and similar
@@ -1526,7 +1516,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (user.role === 'parent') {
         // Use the linking system - only return students linked via parentChildLinks,
         // in the parent's company (Q173-1)
-        const linkedStudents = await getParentChildren(user, { includeDirect: false });
+        const linkedStudents = await getParentChildren(user);
 
         // Batch-load related records: avoids N+1 by issuing one query per
         // related table instead of 4 per student.
@@ -2679,7 +2669,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       const { studentId } = req.params;
 
       // Verify parent owns this student (Q173-1: and in the parent's company)
-      const myChildren = await getParentChildren(user, { includeDirect: true });
+      const myChildren = await getParentChildren(user);
       const student = myChildren.find(s => s.id === studentId);
 
       if (!student) {
@@ -3116,16 +3106,17 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       const user = await getCaller(req);
-      if (!user || (!isAdminRole(user.role) && !isParentRole(user.role))) {
-        return res.status(403).json({ message: "Unauthorized - admin or parent access required" });
+      // Q192 (2A): a parent can't add a student (access is through a link row
+      // only, and a create writes none). Exactly role 'parent': isParentRole
+      // is also true for masters, whose creates are unchanged.
+      if (user?.role === 'parent') {
+        return res.status(403).json({ message: "Parents can't add students" });
+      }
+      if (!user || !isAdminRole(user.role)) {
+        return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
 
       const validatedData = insertStudentSchema.parse(req.body);
-
-      // If parent is creating, ensure they're creating for themselves
-      if (user.role === 'parent') {
-        validatedData.parentId = userId;
-      }
 
       // Force tenant scope from session; never trust client-supplied companyId.
       // (Previously this only set companyId when absent — attacker could supply
@@ -3219,9 +3210,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         hasId(existingStudent.stopId) &&
         (validatedData.routeId === null || validatedData.routeId !== existingStudent.routeId)
       ) {
-        const oldStop = await storage.getRouteStopById(existingStudent.stopId);
-        if (!oldStop || oldStop.routeId !== validatedData.routeId) {
+        // Q193: "No route" clears the stop with no read.
+        if (validatedData.routeId === null) {
           validatedData.stopId = null;
+        } else {
+          const oldStop = await storage.getRouteStopById(existingStudent.stopId);
+          if (!oldStop || oldStop.routeId !== validatedData.routeId) {
+            validatedData.stopId = null;
+          }
         }
       }
       // Q172: reactivating a student whose route after this update is archived
@@ -3292,6 +3288,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         if (!unlinked) {
           return res.status(404).json({ message: "Student not found" });
         }
+        console.log("Parent unlinked from student", { studentId: id, parentId: user.id });
         return res.json({ success: true });
       } else if (!isAdminRole(user.role)) {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
@@ -3369,7 +3366,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       res.json(student);
     } catch (error) {
-      console.error("Error fetching student:", error);
+      console.error("Error fetching student", pgError(error)?.code);
       res.status(500).json({ message: "Failed to fetch student" });
     }
   });
@@ -4228,9 +4225,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - parent required" });
       }
 
-      // Get all children for this parent (both direct and linked via link
-      // codes), deduped, in the parent's company (Q173-1)
-      const children = await getParentChildren(user, { includeDirect: true });
+      // Get all children linked to this parent (links only, Q192), in the
+      // parent's company (Q173-1)
+      const children = await getParentChildren(user);
 
       // Batch-load routes, buses (by route), and stops for all children in one
       // round-trip each instead of 3 queries per child.
@@ -4958,10 +4955,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
       if (!unlinked) {
         return res.status(404).json({ message: "Link not found" });
       }
+      console.log("Parent unlinked from student", { studentId, parentId });
 
       res.json({ success: true, message: "Parent unlinked successfully" });
     } catch (error) {
-      console.error("Error unlinking parent:", error);
+      console.error("Error unlinking parent", pgError(error)?.code);
       res.status(500).json({ message: "Failed to unlink parent" });
     }
   });
@@ -5052,7 +5050,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - parent role required" });
       }
 
-      const linkedStudents = await getParentChildren(user, { includeDirect: false });
+      const linkedStudents = await getParentChildren(user);
       res.json(linkedStudents);
     } catch (error) {
       console.error("Error fetching linked children", pgError(error)?.code);
@@ -5645,7 +5643,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
       
       // Verify parent has access to this student (Q173-1: in the parent's
       // company; a miss is 404, masking existence)
-      const linkedStudents = await getParentChildren(user, { includeDirect: false });
+      const linkedStudents = await getParentChildren(user);
       const student = linkedStudents.find(s => s.id === studentId);
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
@@ -5721,9 +5719,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID and device ID are required" });
       }
 
-      // Verify parent has access to this student (direct parentId or link
-      // code; Q173-1: in the parent's company)
-      const myChildren = await getParentChildren(user, { includeDirect: true });
+      // Verify parent has access to this student (a link row only, Q192;
+      // Q173-1: in the parent's company)
+      const myChildren = await getParentChildren(user);
       const student = myChildren.find(s => s.id === studentId);
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
@@ -5758,9 +5756,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(400).json({ message: "Student ID is required" });
       }
 
-      // Verify parent has access to this student (direct parentId or link
-      // code; Q173-1: in the parent's company)
-      const myChildren = await getParentChildren(user, { includeDirect: true });
+      // Verify parent has access to this student (a link row only, Q192;
+      // Q173-1: in the parent's company)
+      const myChildren = await getParentChildren(user);
       const student = myChildren.find(s => s.id === studentId);
       if (!student) {
         return res.status(404).json({ message: "Student not found" });
@@ -5791,9 +5789,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       }
 
       try {
-        // Get all children for this parent (both direct and linked via link
-        // codes), deduped, in the parent's company (Q173-1)
-        const myChildren = await getParentChildren(user, { includeDirect: true });
+        // Get all children linked to this parent (links only, Q192), in the
+        // parent's company (Q173-1)
+        const myChildren = await getParentChildren(user);
         const allChildrenIds = myChildren.map(child => child.id);
 
         // Get check-ins for all children (by studentId, not just parentId)
@@ -5827,9 +5825,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Only parents can view attendance" });
       }
 
-      // Get all children for this parent (both direct and linked via link
-      // codes), deduped, in the parent's company (Q173-1)
-      const myChildren = await getParentChildren(user, { includeDirect: true });
+      // Get all children linked to this parent (links only, Q192), in the
+      // parent's company (Q173-1)
+      const myChildren = await getParentChildren(user);
       const allChildrenIds = myChildren.map(child => child.id);
 
       // Get driver-marked attendance for all children, scoped to the
@@ -5869,7 +5867,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       // Verify parent has access to this student (Q173-1: in the parent's
       // company; a miss is 404, masking existence)
-      const allChildren = await getParentChildren(user, { includeDirect: true });
+      const allChildren = await getParentChildren(user);
       const student = allChildren.find(c => c.id === studentId);
       if (!student) {
         return res.status(404).json({ message: "Student not found" });

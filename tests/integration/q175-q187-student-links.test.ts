@@ -229,8 +229,9 @@ describe('Q173-1 parent reads apply the company rule', () => {
   });
 
   afterAll(async () => {
-    await h.db.delete(studentAttendance).where(inArray(studentAttendance.studentId, [q8.studentA4, q8.studentBx]));
-    await h.db.delete(studentCheckIns).where(inArray(studentCheckIns.studentId, [q8.studentA4, q8.studentBx]));
+    // Q193: delete only the rows beforeAll inserted, by id.
+    await h.db.delete(studentAttendance).where(inArray(studentAttendance.id, seededAttendance));
+    await h.db.delete(studentCheckIns).where(inArray(studentCheckIns.id, seededCheckIns));
   });
 
   it('seed: parentB (company B) is linked to studentA4 (company A) and studentBx (company B)', async () => {

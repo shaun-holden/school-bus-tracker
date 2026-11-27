@@ -7,8 +7,8 @@
 // America/Chicago, so 2026-12-01 must be stored as 2026-12-01 18:00:00.
 // Note: no screen shows attendance rows today, so this is data correctness.
 import { describe, it, expect, beforeAll, beforeEach } from 'vitest';
-import { eq, sql } from 'drizzle-orm';
-import { attendance, students } from '@shared/schema';
+import { and, eq, sql } from 'drizzle-orm';
+import { attendance, parentChildLinks, students } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
 import { insertUser, SEED_PASSWORD } from './seed';
 
@@ -27,12 +27,17 @@ const url = (studentId: string) => `/api/students/${studentId}/absence`;
 const rowsFor = (studentId: string) => h.db.select().from(attendance).where(eq(attendance.studentId, studentId));
 
 beforeAll(async () => {
-  // parentA's own child with no route yet, and a company-B child with no route.
+  // parentA's own child with no route yet (linked: Q192 parent access is
+  // through a link row only), and a company-B child with no route.
   const [own] = await h.db
     .insert(students)
     .values({ companyId: h.ids.companyA, firstName: 'A-NoRoute', lastName: 'Seed', parentId: h.ids.parentA, schoolId: h.ids.schoolA })
     .returning({ id: students.id });
   noRouteOwn = own.id;
+  await h.db.insert(parentChildLinks).values({ parentId: h.ids.parentA, studentId: noRouteOwn });
+  const ownLink = await h.db.select().from(parentChildLinks)
+    .where(and(eq(parentChildLinks.parentId, h.ids.parentA), eq(parentChildLinks.studentId, noRouteOwn)));
+  expect(ownLink).toHaveLength(1);
   const [foreign] = await h.db
     .insert(students)
     .values({ companyId: h.ids.companyB, firstName: 'B-NoRoute', lastName: 'Seed', parentId: h.ids.parentB, schoolId: h.ids.schoolB })

@@ -117,7 +117,7 @@ describe('Q8 A2 + A5 recipients of an arrival at schoolA on routeA', () => {
     expect(rows.every((r) => r.companyId === h.ids.companyA && r.recipientRole === 'parent')).toBe(true);
   });
 
-  it('parentA is both students.parentId and a linked parent of studentA and gets 1 row, not 2 (red if the (parent, student) dedupe is removed)', async () => {
+  it('parentA is both students.parentId and a linked parent of studentA and gets exactly 1 row, through the link (Q192: links only)', async () => {
     const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.parentA);
     expect(rows).toHaveLength(1);
   });
@@ -143,7 +143,7 @@ describe('Q8 A2 + A5 recipients of an arrival at schoolA on routeA', () => {
     expect(rows.map((r) => r.message)).toEqual(['The bus has arrived at A-School for A-Student']);
   });
 
-  it('adminA, the students.parentId of A-Student4, gets 0 rows (red if users.role = \'parent\' is dropped from the shortcut query)', async () => {
+  it('adminA, the students.parentId of A-Student4, gets 0 rows (red if a `students.parentId` branch comes back)', async () => {
     expect((await arrivalRows()).filter((r) => r.recipientId === h.ids.adminA)).toHaveLength(0);
   });
 });
@@ -165,7 +165,7 @@ describe('Q8 round 2: arrival recipients, parent company and role', () => {
   const titled = (res: { body: Array<{ title: string; message: string }> }, name: string) =>
     res.body.filter((n) => n.title === TITLE && n.message.includes(name));
 
-  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if a `students.parentId` branch comes back)', async () => {
     const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.parentB);
     expect(rows).toHaveLength(0);
     const res = await parentB.get('/api/system-notifications');
@@ -174,7 +174,7 @@ describe('Q8 round 2: arrival recipients, parent company and role', () => {
     expect(r2.studentShortB).toBeTruthy();
   });
 
-  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if a `students.parentId` branch comes back)', async () => {
     const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.parentNull && r.message.includes('A-ShortNull'));
     expect(rows).toHaveLength(0);
     const res = await parentNull.get('/api/system-notifications');
@@ -185,7 +185,7 @@ describe('Q8 round 2: arrival recipients, parent company and role', () => {
   it('adminA, linked to A-LinkAdmin through parentChildLinks, gets 0 rows (red if users.role = \'parent\' is dropped from the link-code query)', async () => {
     const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.adminA);
     expect(rows).toHaveLength(0);
-    // driverA is A-LinkAdmin's students.parentId: excluded by the shortcut role check.
+    // driverA is A-LinkAdmin's students.parentId: grants nothing (Q192: links only).
     expect((await arrivalRows()).filter((r) => r.recipientId === h.ids.driverA)).toHaveLength(0);
   });
 });

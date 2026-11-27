@@ -51,7 +51,7 @@ describe('TD-2 absence report ownership', () => {
     expect(await rowsForStudentA()).toHaveLength(0);
   });
 
-  it('(c) the direct parent (students.parentId) still gets 200', async () => {
+  it('(c) the seeded linked parent (parentA, link row) still gets 200 (Q192: access is through the link, not students.parentId)', async () => {
     const res = await parentA.post(url()).send({ date: '2026-12-02' });
     expect(res.status).toBe(200);
     expect(await rowsForStudentA()).toHaveLength(1);

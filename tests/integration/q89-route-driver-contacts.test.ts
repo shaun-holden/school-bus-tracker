@@ -1,8 +1,8 @@
 // Q89: saving a route keeps its driver (PATCH /api/routes/:id treats
 // driverId: null as "not sent"; "" still unassigns), and the messaging
 // contact lists use the same parent fence as the route-event recipients
-// (direct parents of this company + linked parents of this company or with no
-// company), with the send check agreeing. Real HTTP + real Postgres; every
+// (linked parents of this company or with no company; Q192: students.parentId
+// grants nothing), with the send check agreeing. Real HTTP + real Postgres; every
 // foreign row is seeded and asserted to exist (checklist X-1/X-2/X-3).
 //
 // Each title names the clause whose deletion turns it red.
@@ -52,15 +52,17 @@ beforeAll(async () => {
   );
   await h.db.insert(students).values({ ...onRouteA, firstName: 'Q89-DirectChild', parentId: directParentAId });
 
-  // A company-A parent whose only (direct) child is a company-B student on routeB.
+  // A company-A parent whose only child is a company-B student on routeB,
+  // linked (Q192), so "a B child gives no B driver" is still a live check.
   parentAWithBChildId = await insertUser(
     { email: EMAIL_A_WITH_B_CHILD, firstName: 'Q89-AWithB', lastName: 'Seed', role: 'parent', companyId: h.ids.companyA },
     { password: true },
   );
-  await h.db.insert(students).values({
+  const [bChild] = await h.db.insert(students).values({
     companyId: h.ids.companyB, firstName: 'Q89-BChild', lastName: 'Seed', parentId: parentAWithBChildId,
     schoolId: h.ids.schoolB, routeId: h.ids.routeB, stopId: h.ids.stopB1,
-  });
+  }).returning({ id: students.id });
+  await h.db.insert(parentChildLinks).values({ parentId: parentAWithBChildId, studentId: bChild.id });
 
   // A NULL-company parent with a B child inserted (and linked) BEFORE an A child.
   nullTwoSchoolsId = await insertUser(
@@ -114,14 +116,20 @@ beforeAll(async () => {
   expect(pNull.companyId).toBeNull();
   const twoLinks = await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, nullTwoSchoolsId));
   expect(twoLinks).toHaveLength(2);
+  // Q192: the direct parent has a students.parentId child on routeA and NO link.
+  const [directKid] = await h.db.select().from(students).where(eq(students.parentId, directParentAId));
+  expect(directKid).toMatchObject({ companyId: h.ids.companyA, routeId: h.ids.routeA });
+  expect(await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, directParentAId))).toHaveLength(0);
+  const bChildLinks = await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, parentAWithBChildId));
+  expect(bChildLinks).toHaveLength(1);
 });
 
 describe('Q89 driver and parent contacts', () => {
-  it('B4 getParentsForDriver uses the route-event fence: direct A parent and NULL-company linked parent listed; B parent and admin not', async () => {
+  it('B4 getParentsForDriver uses the route-event fence: linked A parent and NULL-company linked parent listed; a direct-only (students.parentId) A parent, B parent and admin not (red if the routeParentRows students.parentId branch comes back)', async () => {
     const res = await driverA.get('/api/messages/contacts');
     expect(res.status).toBe(200);
     const ids = contactIds(res);
-    expect(ids).toContain(directParentAId);
+    expect(ids).not.toContain(directParentAId);
     expect(ids).toContain(h.ids.parentA);
     expect(ids).toContain(h.ids.parentNull);
     expect(ids).toContain(nullTwoSchoolsId);
@@ -130,10 +138,10 @@ describe('Q89 driver and parent contacts', () => {
     expect(ids).not.toContain(nullBOnlyId);
   });
 
-  it('B5 getDriversForParent includes direct children: a direct parent sees the route driver; a B child gives no B driver', async () => {
+  it('B5 getDriversForParent uses links only: a direct-only (students.parentId) parent gets no contacts; a linked B child gives no B driver (red if getParentChildScope reads students.parentId again)', async () => {
     const direct = await directParentA.get('/api/messages/contacts');
     expect(direct.status).toBe(200);
-    expect(contactIds(direct)).toContain(h.ids.driverA);
+    expect(direct.body).toEqual([]);
 
     const cross = await parentAWithBChild.get('/api/messages/contacts');
     expect(cross.status).toBe(200);

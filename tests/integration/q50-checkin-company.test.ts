@@ -1,18 +1,17 @@
 // Q50: POST /api/check-in/enable and /disable find the student in the
-// parent's direct (students.parentId) AND linked (parentChildLinks) lists,
-// take the company and time zone from THAT student (not linkedStudents[0]),
-// and answer a student outside both lists with 404 "Student not found"
-// (checklist T-2). Real HTTP + real Postgres.
+// parent's linked (parentChildLinks) list only (Q192: students.parentId
+// grants nothing), take the company and time zone from THAT student (not
+// linkedStudents[0]), and answer a student outside the list with 404
+// "Student not found" (checklist T-2). Real HTTP + real Postgres.
 //
-// getLinkedStudentsByParentId has no ORDER BY; on this small table it comes
-// back in insert order (studentA before studentB). The "matched student"
-// case therefore links parentA (whose first linked student is studentA, in
-// company A) to company B's studentB, so the old linkedStudents[0] rule
-// would wrongly stamp company A.
+// getLinkedStudentsByParentId has no ORDER BY; the "matched student" case
+// asserts through it that parentNull's first linked student is company A's
+// studentA, so the old linkedStudents[0] rule would wrongly stamp company A.
 import { describe, it, expect, beforeAll } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import { students, parentChildLinks, studentCheckIns } from '@shared/schema';
 import { useIntegrationHarness, type Agent } from './harness';
+import { storage } from '../../server/storage';
 import { insertUser, SEED_PASSWORD } from './seed';
 
 const h = useIntegrationHarness();
@@ -66,16 +65,17 @@ describe('Q50 refusal', () => {
 });
 
 describe('Q50 direct-only parent', () => {
-  it('a parent who is only students.parentId (no link row) enables → 200 and a waiting row, then disables → 200 and it is gone (red if the lookup goes back to linked-only)', async () => {
+  it('a parent who is only students.parentId (no link row) → enable 404 "Student not found" and no row; disable 404 (red if the `parentId` shortcut comes back)', async () => {
+    const [kid] = await h.db.select().from(students).where(eq(students.id, directStudentId));
+    expect(kid.parentId).toBe(directParentId);
+    expect(await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, directParentId))).toHaveLength(0);
     const en = await directParent.post('/api/check-in/enable').send({ studentId: directStudentId, deviceId: 'q50-direct' });
-    expect(en.status).toBe(200);
-    const rows = await checkInsFor(directStudentId);
-    expect(rows).toHaveLength(1);
-    expect(rows[0].status).toBe('waiting');
-    expect(rows[0].companyId).toBe(h.ids.companyA);
-    const dis = await directParent.post('/api/check-in/disable').send({ studentId: directStudentId });
-    expect(dis.status).toBe(200);
+    expect(en.status).toBe(404);
+    expect(en.body).toEqual(NOT_FOUND);
     expect(await checkInsFor(directStudentId)).toHaveLength(0);
+    const dis = await directParent.post('/api/check-in/disable').send({ studentId: directStudentId });
+    expect(dis.status).toBe(404);
+    expect(dis.body).toEqual(NOT_FOUND);
   });
 });
 
@@ -99,8 +99,9 @@ describe('Q50 company comes from the matched student', () => {
   });
 
   it('parentNull (first linked student is A\'s) enabling for company B\'s studentB → the row is company B (red if the company goes back to linkedStudents[0])', async () => {
-    const links = await h.db.select().from(parentChildLinks).where(eq(parentChildLinks.parentId, h.ids.parentNull));
-    expect(links.map((l) => l.studentId)).toEqual([h.ids.studentA, h.ids.studentB]);
+    // Q193: the premise through the server's own read, not the table order.
+    const linked = await storage.getLinkedStudentsByParentId(h.ids.parentNull);
+    expect(linked.map((st) => st.id)).toEqual([h.ids.studentA, h.ids.studentB]);
     const [sA] = await h.db.select().from(students).where(eq(students.id, h.ids.studentA));
     expect(sA.companyId).toBe(h.ids.companyA);
 
@@ -112,6 +113,7 @@ describe('Q50 company comes from the matched student', () => {
   });
 
   it('parentA linked to company B\'s studentB enabling → 404 "Student not found" and no row (red if check-in enable skips the company match)', async () => {
+    expect(await storage.getParentChildLink(h.ids.parentA, h.ids.studentB)).toBeTruthy();
     const res = await parentA.post('/api/check-in/enable').send({ studentId: h.ids.studentB, deviceId: 'q50-a-on-b' });
     expect(res.status).toBe(404);
     expect(res.body).toEqual(NOT_FOUND);
@@ -120,6 +122,7 @@ describe('Q50 company comes from the matched student', () => {
   });
 
   it('parentB linked to company A\'s studentA enabling → 404 "Student not found" and no row (red if check-in enable skips the company match)', async () => {
+    expect(await storage.getParentChildLink(h.ids.parentB, h.ids.studentA)).toBeTruthy();
     const res = await parentB.post('/api/check-in/enable').send({ studentId: h.ids.studentA, deviceId: 'q50-b-on-a' });
     expect(res.status).toBe(404);
     expect(res.body).toEqual(NOT_FOUND);

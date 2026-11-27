@@ -103,14 +103,14 @@ describe('Q8 round 2: stop-completed recipients, parent company and role', () =>
     expect(res.status).toBe(200);
   });
 
-  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if a `students.parentId` branch comes back)', async () => {
     expect((await rowsNow()).filter((r) => r.recipientId === h.ids.parentB)).toHaveLength(0);
     const res = await parentB.get('/api/system-notifications');
     expect(res.status).toBe(200);
     expect(res.body.filter((n: { title: string; message: string }) => n.title === TITLE && n.message.includes('A-ShortB'))).toHaveLength(0);
   });
 
-  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if eq(users.companyId, companyId) is dropped from the parentId-shortcut query)', async () => {
+  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if a `students.parentId` branch comes back)', async () => {
     expect((await rowsNow()).filter((r) => r.recipientId === h.ids.parentNull && r.message.includes('A-ShortNull'))).toHaveLength(0);
     const res = await parentNull.get('/api/system-notifications');
     expect(res.status).toBe(200);

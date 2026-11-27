@@ -1,8 +1,8 @@
 // T4b: storage.filterPushRecipients(userIds, companyId), the push fence every
 // event goes through. Kept: active parent/driver users of an approved, active
 // company; a parent only when that company's parent portal is on (decision
-// 2A); a NULL-company parent only when linked (link row or students.parentId)
-// to a student of that company. Real Postgres; foreign rows seeded and
+// 2A); a NULL-company parent only when linked (a link row; students.parentId
+// grants nothing, Q192) to a student of that company. Real Postgres; foreign rows seeded and
 // asserted to be in company B. Each title names the clause whose removal turns
 // it red; every "dropped" case sits next to a positive control.
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
