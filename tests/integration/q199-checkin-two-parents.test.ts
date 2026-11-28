@@ -212,4 +212,13 @@ describe('Q202 enableStudentCheckIn race guard (source scan)', () => {
     const upd = method.indexOf('.update(studentCheckIns)');
     expect(method.indexOf('this.getCheckInById(current.id)', upd)).toBeGreaterThan(upd);
   });
+
+  it('the fallback returns the re-read row only when it is not dropped_off (red if the fallback returns a dropped_off row instead of inserting)', () => {
+    const fb = method.indexOf('this.getCheckInById(current.id)');
+    expect(fb).toBeGreaterThan(-1);
+    const ret = method.slice(fb, method.indexOf('\n    }', fb));
+    expect(ret).toMatch(/if \(fresh && fresh\.status !== 'dropped_off'\) return fresh;/);
+    // ...and the insert is still reached after it.
+    expect(method.indexOf('.insert(studentCheckIns)', fb)).toBeGreaterThan(fb);
+  });
 });
