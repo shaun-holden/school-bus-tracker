@@ -2750,13 +2750,20 @@ export class DatabaseStorage implements IStorage {
     const current = existing[0];
     if (current && current.status === 'boarded') return current;
     if (current && current.status !== 'dropped_off') {
-      // Update today's waiting check-in: it follows the latest enabling parent
+      // Update today's waiting check-in: it follows the latest enabling parent.
+      // Q202: only while it is still waiting, so a driver's boarding (or
+      // drop-off) between the select and here is never knocked back.
       const [updated] = await db
         .update(studentCheckIns)
         .set({ deviceId, parentId, routeId: student?.routeId ?? null, status: 'waiting' })
-        .where(eq(studentCheckIns.id, current.id))
+        .where(and(eq(studentCheckIns.id, current.id), eq(studentCheckIns.status, 'waiting')))
         .returning();
-      return updated;
+      if (updated) return updated;
+      // Lost a race: a row still there and not dropped off (boarded, or
+      // waiting again) is left as it is; one a concurrent disable deleted, or
+      // one dropped off meanwhile, falls through to a new row below.
+      const fresh = await this.getCheckInById(current.id);
+      if (fresh && fresh.status !== 'dropped_off') return fresh;
     }
     
     // Create new check-in

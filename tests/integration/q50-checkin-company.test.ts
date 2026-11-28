@@ -49,12 +49,15 @@ beforeAll(async () => {
 
 describe('Q50 refusal', () => {
   it('company B\'s parent on company A\'s student (no link) → 404 "Student not found" and no row (T-2)', async () => {
-    const res = await parentB.post('/api/check-in/enable').send({ studentId: h.ids.studentA, deviceId: 'q50-dev' });
+    const res = await parentB.post('/api/check-in/enable').send({ studentId: h.ids.studentA, deviceId: 'q50-refusal-dev' });
     expect(res.status).toBe(404);
     expect(res.body).toEqual(NOT_FOUND);
     // Q198: only parentB's rows, so this holds in any test order.
     const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, h.ids.studentA), eq(studentCheckIns.parentId, h.ids.parentB)));
     expect(rows).toHaveLength(0);
+    // Q201: and no row anywhere carries this request's device (a wrongly
+    // allowed update of another parent's row would).
+    expect(await h.db.select().from(studentCheckIns).where(eq(studentCheckIns.deviceId, 'q50-refusal-dev'))).toHaveLength(0);
     const dis = await parentB.post('/api/check-in/disable').send({ studentId: h.ids.studentA });
     expect(dis.status).toBe(404);
     expect(dis.body).toEqual(NOT_FOUND);

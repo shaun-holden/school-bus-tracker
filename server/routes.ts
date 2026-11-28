@@ -3187,12 +3187,14 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       }
 
-      const validatedData = insertStudentSchema.partial().parse(req.body);
+      // Q204: parentId is not writable on PUT (nor on POST, which sets the
+      // caller); a body parentId is stripped and the stored one is kept.
+      const validatedData = insertStudentSchema.omit({ parentId: true }).partial().parse(req.body);
       // A student never moves company: force the existing record's value
       validatedData.companyId = existingStudent.companyId;
 
-      // FK ids must belong to the student's company. An unchanged parentId is
-      // always allowed (legacy parents outside the company).
+      // FK ids must belong to the student's company. parentId is no longer
+      // writable on PUT or POST, so its check here can't fire.
       // Q172: an unchanged routeId / stopId skips the archived-route 409.
       const fkError = await checkStudentForeignKeys(
         existingStudent.companyId,

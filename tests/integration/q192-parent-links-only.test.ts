@@ -288,6 +288,9 @@ describe('Q192 route events use links only', () => {
     const [dp] = await h.db.select().from(users).where(eq(users.id, directParentId));
     expect(dp).toMatchObject({ role: 'parent', companyId: h.ids.companyA });
     expect(await studentRow(linkedKid)).toMatchObject({ companyId: h.ids.companyA, routeId: h.ids.routeA, schoolId: h.ids.schoolA });
+    // Q201: the positive control's link, and no leftover arrival rows.
+    expect((await linksOf(linkedParentId)).map((l) => l.studentId)).toContain(linkedKid);
+    expect(await h.db.select().from(systemNotifications).where(eq(systemNotifications.title, TITLE))).toHaveLength(0);
 
     const res = await driverA.post('/api/driver-school-arrival').send({ schoolId: h.ids.schoolA });
     expect(res.status).toBe(200);
@@ -300,7 +303,7 @@ describe('Q192 route events use links only', () => {
 describe('Q192 (2A) parents can\'t add students', () => {
   const body = (parentId: string, name: string) => ({ firstName: name, lastName: 'Seed', parentId });
 
-  it('a parent POST /api/students → 403 "Parents can\'t add students" and no new row (red if parents can create students again)', async () => {
+  it('a parent POST /api/students → 403 "Parents can\'t add students" and no new row (red if parents can create students again; the message tells it from the admin-gate 403)', async () => {
     const before = await studentCount();
     const res = await linkedParent.post('/api/students').send(body(linkedParentId, 'Q192-ParentAdd'));
     expect(res.status).toBe(403);
