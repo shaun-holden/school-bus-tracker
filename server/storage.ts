@@ -2721,6 +2721,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   // Student check-in operations (Bluetooth boarding)
+  // One row per child per tenant day, shared by the child's linked parents.
+  // Q199: enabling over today's `waiting` row moves it to the latest enabling
+  // parent (their parentId and device, so the boarded / arrived notices go to
+  // them) and to the student's current route; a `boarded` row is returned
+  // unchanged (never knocked back to waiting); after `dropped_off`, or with no
+  // row, a new row is inserted. companyId stays as stored.
   async enableStudentCheckIn(studentId: string, parentId: string, deviceId: string, companyId?: string, timezone: string = 'UTC'): Promise<StudentCheckIn> {
     // Get student's route
     const student = await this.getStudentById(studentId);
@@ -2741,12 +2747,14 @@ export class DatabaseStorage implements IStorage {
       )
       .orderBy(desc(studentCheckIns.createdAt));
     
-    if (existing.length > 0 && existing[0].status !== 'dropped_off') {
-      // Update existing check-in
+    const current = existing[0];
+    if (current && current.status === 'boarded') return current;
+    if (current && current.status !== 'dropped_off') {
+      // Update today's waiting check-in: it follows the latest enabling parent
       const [updated] = await db
         .update(studentCheckIns)
-        .set({ deviceId, status: 'waiting' })
-        .where(eq(studentCheckIns.id, existing[0].id))
+        .set({ deviceId, parentId, routeId: student?.routeId ?? null, status: 'waiting' })
+        .where(eq(studentCheckIns.id, current.id))
         .returning();
       return updated;
     }
