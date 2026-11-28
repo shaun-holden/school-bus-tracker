@@ -236,7 +236,7 @@ export default function StudentStatusCard({ student }: StudentStatusCardProps) {
           <div className="flex justify-between">
             <span className="text-gray-600">Bus:</span>
             <span className="font-medium" data-testid={`text-bus-${student.id}`}>
-              {student.bus?.busNumber ? `#${student.bus.busNumber}` : 'Bus not assigned'}
+              {student.bus?.busNumber ? `#${student.bus.busNumber}` : 'No bus assigned'}
             </span>
           </div>
           {student.stop?.name && (

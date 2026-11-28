@@ -57,7 +57,7 @@ describe('Q196 POST /api/students: parentId is always the caller', () => {
     expect(row.parentId).not.toBe(h.ids.parentA);
   });
 
-  it("an impersonating master POST with no parentId → 201 in the impersonated school, parentId = the master's own id (red if userId is swapped for a getCaller field)", async () => {
+  it("an impersonating master POST with no parentId → 201 in the impersonated school, parentId = the master's own id (red if the caller's id leaves checkStudentForeignKeys' always-allowed parent list: 404 Parent not found)", async () => {
     expect(await userRow(h.ids.master)).toMatchObject({ role: 'master_admin', companyId: null });
     const imp = await master.post(`/api/master-admin/impersonate/${h.ids.companyA}`).send({});
     expect(imp.status).toBe(200);
