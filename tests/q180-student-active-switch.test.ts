@@ -83,6 +83,13 @@ describe('Q180 Delete offers Mark inactive instead', () => {
     expect(mut).toMatch(/invalidateQueries\(\{\s*queryKey:\s*\["\/api\/students"\]\s*\}\)/);
   });
 
+  it('Q195: the mark-inactive toast names the full student (red if it goes back to the first name only)', () => {
+    const mut = declBlock('markStudentInactiveMutation');
+    const onSuccess = mut.slice(mut.indexOf('onSuccess:'), mut.indexOf('onError:'));
+    expect(onSuccess).toMatch(/title:\s*"Marked inactive"/);
+    expect(onSuccess).toMatch(/description:\s*`\$\{student\.firstName\} \$\{student\.lastName\} is now inactive`/);
+  });
+
   it('the edit mutation logs no student data (red if the logs come back)', () => {
     const mut = declBlock('editStudentMutation');
     expect(mut).not.toMatch(/console\.log\(/);
