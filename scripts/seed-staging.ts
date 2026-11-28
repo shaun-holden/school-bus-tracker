@@ -25,6 +25,7 @@ import {
   schools,
   routes,
   routeStops,
+  routeSchools,
   buses,
   students,
   parentChildLinks,
@@ -246,6 +247,11 @@ async function seed() {
           }
           routeIds.push(route.id);
           bump('routes');
+          // Q197: link the route to its school (the admin Add/Edit student
+          // check reads route_schools). unique(route_id, school_id) keeps a
+          // re-run from duplicating it and leaves an admin-added row alone.
+          await tx.insert(routeSchools).values({ routeId: route.id, schoolId: school.id, order: 0 }).onConflictDoNothing();
+          bump('routeSchools');
 
           const ids: string[] = [];
           for (const order of [1, 2, 3]) {
