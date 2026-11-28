@@ -19,20 +19,46 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+// Q190: a request that never answers gives up, so dialogs and "Saving…"
+// buttons can't stay stuck. The signal aborts the fetch; the race settles the
+// promise even if the native layer (iOS CapacitorHttp) ignores the signal.
+// A timed-out write may still have reached the server.
+export const API_REQUEST_TIMEOUT_MS = 30000;
+export const API_TIMEOUT_MESSAGE = "Timed out. Check your connection, then refresh.";
+
 export async function apiRequest(
   url: string,
   method: string,
   data?: unknown | undefined,
+  options: { timeoutMs?: number } = {},
 ): Promise<any> {
-  const res = await fetch(apiUrl(url), {
-    method,
-    headers: data ? { "Content-Type": "application/json" } : {},
-    body: data ? JSON.stringify(data) : undefined,
-    credentials: "include",
+  const timeoutMs = options.timeoutMs ?? API_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      reject(new Error(API_TIMEOUT_MESSAGE));
+    }, timeoutMs);
   });
+  const request = (async () => {
+    const res = await fetch(apiUrl(url), {
+      method,
+      headers: data ? { "Content-Type": "application/json" } : {},
+      body: data ? JSON.stringify(data) : undefined,
+      credentials: "include",
+      signal: controller.signal,
+    });
 
-  await throwIfResNotOk(res);
-  return await res.json();
+    await throwIfResNotOk(res);
+    return await res.json();
+  })();
+
+  try {
+    return await Promise.race([request, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";

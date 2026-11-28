@@ -176,7 +176,7 @@ function TotalStopsDisplay({ routes }: { routes: any }) {
           if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
             return 0;
           }
-          console.error(`Error fetching schools for route ${route.id}:`, error);
+          console.error("Error fetching schools for route");
           return 0;
         }
       });
@@ -1332,7 +1332,7 @@ export default function AdminDashboard() {
         description: "School moved up successfully",
       });
     } catch (error) {
-      console.error("Error moving school up:", error);
+      console.error("Error moving school up");
       toast({
         title: "Error",
         description: "Failed to move school up",
@@ -1360,7 +1360,7 @@ export default function AdminDashboard() {
         description: "School moved down successfully",
       });
     } catch (error) {
-      console.error("Error moving school down:", error);
+      console.error("Error moving school down");
       toast({
         title: "Error",
         description: "Failed to move school down",
@@ -1382,8 +1382,6 @@ export default function AdminDashboard() {
       const stops = await stopsResponse.json();
       const routeSchoolsList = await schoolsResponse.json();
 
-      console.log("Route stops fetched:", stops?.length || 0);
-      console.log("Route schools fetched:", routeSchoolsList?.length || 0);
 
       // Use schools as stops if we have more schools than route_stops, or if stops are empty
       let routeData: any[] = [];
@@ -1409,7 +1407,6 @@ export default function AdminDashboard() {
 
       // Calculate duration from addresses
       const duration = await calculateRouteFromStops(routeData);
-      console.log("Calculated duration:", duration);
       setCalculatedDuration(duration);
 
       // Update the route with calculated duration
@@ -1427,7 +1424,7 @@ export default function AdminDashboard() {
       });
 
     } catch (error) {
-      console.error("Error calculating route duration:", error);
+      console.error("Error calculating route duration");
       toast({
         title: "Error",
         description: "Failed to calculate route duration",
@@ -1569,7 +1566,6 @@ export default function AdminDashboard() {
   // Route creation mutation
   const createRouteMutation = useMutation({
     mutationFn: async (data: z.infer<typeof routeSchema>) => {
-      console.log('Route data:', data);
       // Transform the data to match the database schema
       const routeData = {
         name: data.name,
@@ -1580,7 +1576,6 @@ export default function AdminDashboard() {
         isActive: true,
         estimatedDuration: calculatedDuration || null,
       };
-      console.log('Transformed route data:', routeData);
       return await apiRequest("/api/routes", "POST", routeData);
     },
     onSuccess: () => {
@@ -1596,7 +1591,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error) => {
-      console.error("Error creating route:", error);
+      console.error("Error creating route");
       if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -1641,7 +1636,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error) => {
-      console.error("Error updating route:", error);
+      console.error("Error updating route");
       if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -1686,7 +1681,7 @@ export default function AdminDashboard() {
         setCalculatedDuration(duration);
       }
     } catch (error) {
-      console.error("Error calculating duration:", error);
+      console.error("Error calculating duration");
     } finally {
       setIsCalculatingDuration(false);
     }
@@ -2058,7 +2053,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error: any) => {
-      console.error("Create driver error:", error);
+      console.error("Create driver error");
       toast({
         title: "Error",
         description: error?.message || "Failed to add driver",
@@ -2085,7 +2080,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error: any) => {
-      console.error("Edit driver error:", error);
+      console.error("Edit driver error");
       toast({
         title: "Error",
         description: error?.message || "Failed to update driver",
@@ -2134,7 +2129,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error: any) => {
-      console.error("Deactivate driver error:", error);
+      console.error("Deactivate driver error");
       toast({
         title: "Error",
         description: error?.message || "Failed to deactivate driver",
@@ -2157,7 +2152,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error: any) => {
-      console.error("Reactivate driver error:", error);
+      console.error("Reactivate driver error");
       toast({
         title: "Error",
         description: error?.message || "Failed to reactivate driver",
@@ -2177,7 +2172,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error: any) => {
-      console.error("Send invitation error:", error);
+      console.error("Send invitation error");
       toast({
         title: "Error",
         description: error?.message || "Failed to send invitation",
@@ -2217,7 +2212,7 @@ export default function AdminDashboard() {
       }
     },
     onError: (error) => {
-      console.error("Error creating school:", error);
+      console.error("Error creating school");
       if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -2327,7 +2322,7 @@ export default function AdminDashboard() {
       }
     },
     onError: (error) => {
-      console.error("Error updating bus:", error);
+      console.error("Error updating bus");
       if (isUnauthorizedError(error)) {
         toast({
           title: "Unauthorized",
@@ -2422,7 +2417,7 @@ export default function AdminDashboard() {
       });
     },
     onError: (error) => {
-      console.error("Error deleting bus:", error);
+      console.error("Error deleting bus");
       
       if (isUnauthorizedError(error)) {
         toast({
@@ -2662,7 +2657,7 @@ export default function AdminDashboard() {
         return Array.isArray(schools) ? schools.length : 0;
       }
     } catch (error) {
-      console.error('Error fetching route schools:', error);
+      console.error("Error fetching route schools");
     }
     return 0;
   };
@@ -2750,25 +2745,18 @@ export default function AdminDashboard() {
   // Add bus mutation with comprehensive error handling
   const addBusMutation = useMutation({
     mutationFn: async (data: z.infer<typeof addBusSchema>) => {
-      console.log('Frontend: Submitting bus data:', data);
-      
       try {
         const result = await apiRequest("/api/buses", "POST", data);
-        console.log('Frontend: API response:', result);
         return result;
       } catch (error) {
-        console.error('Frontend: API request failed:', error);
+        console.error("Frontend: API request failed");
         throw error;
       }
     },
     onSuccess: (newBus) => {
-      console.log('Frontend: Bus creation successful:', newBus);
-      
       // Immediately update the local cache with the new bus
       queryClient.setQueryData(["/api/buses"], (oldData: any) => {
-        console.log('Updating cache. Old data:', oldData?.length || 0, 'buses');
         const newData = oldData ? [...oldData, newBus] : [newBus];
-        console.log('New data:', newData.length, 'buses');
         return newData;
       });
       
@@ -2778,11 +2766,8 @@ export default function AdminDashboard() {
       
       // Immediate refetch with promise chain for reliability
       refetchBuses().then(() => {
-        console.log('First refetch completed');
         setTimeout(() => {
-          refetchBuses().then(() => {
-            console.log('Second refetch completed - UI should now show updated data');
-          });
+          refetchBuses();
         }, 50);
       });
       
@@ -2795,7 +2780,7 @@ export default function AdminDashboard() {
       setShowSuccessDialog(true);
     },
     onError: (error: any) => {
-      console.error("Frontend: Error adding bus:", error);
+      console.error("Frontend: Error adding bus");
       
       if (isUnauthorizedError(error)) {
         toast({
@@ -4270,8 +4255,8 @@ export default function AdminDashboard() {
                               <RouteStopCount routeId={route.id} />
                             </TableCell>
                             <TableCell>
-                              <Badge variant={route.isActive ? 'default' : 'secondary'}>
-                                {route.isActive ? 'Active' : 'Inactive'}
+                              <Badge variant={route.isActive === false ? 'secondary' : 'default'}>
+                                {route.isActive === false ? 'Archived' : 'Active'}
                               </Badge>
                             </TableCell>
                             <TableCell className="text-right">
@@ -5819,9 +5804,9 @@ export default function AdminDashboard() {
                                         <span className="w-16">Status:</span>
                                         <Badge 
                                           variant="secondary" 
-                                          className={`text-xs ${assignedRoute.isActive ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-800'}`}
+                                          className={`text-xs ${assignedRoute.isActive === false ? 'bg-gray-100 text-gray-800' : 'bg-green-100 text-green-800'}`}
                                         >
-                                          {assignedRoute.isActive ? 'Active' : 'Inactive'}
+                                          {assignedRoute.isActive === false ? 'Archived' : 'Active'}
                                         </Badge>
                                       </div>
                                       {assignedRoute.estimatedDuration && (
@@ -7270,10 +7255,6 @@ export default function AdminDashboard() {
                               bus.status !== 'inactive'
                               // Allow reassignment - show all available buses regardless of current assignment
                             );
-                            
-                            console.log('Bus Assignment Dialog - Total buses:', buses.length);
-                            console.log('Bus Assignment Dialog - Available buses:', availableBuses.length);
-                            console.log('Bus Assignment Dialog - Available bus details:', availableBuses.map(b => ({id: b.id, number: b.busNumber, status: b.status, driverId: b.driverId})));
                             
                             if (availableBuses.length === 0) {
                               return (

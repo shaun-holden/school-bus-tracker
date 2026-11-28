@@ -262,7 +262,7 @@ export default function LiveTrackingCard() {
                     </>
                   ) : (
                     <Badge variant="secondary" className="bg-gray-100 text-gray-600">
-                      No Bus Assigned
+                      No bus assigned
                     </Badge>
                   )}
                 </div>
@@ -272,7 +272,7 @@ export default function LiveTrackingCard() {
               {!bus ? (
                 <div className="text-center py-6 text-gray-500">
                   <Bus className="w-10 h-10 mx-auto mb-3 text-gray-300" />
-                  <p>No bus currently assigned to this child's route.</p>
+                  <p>No bus assigned</p>
                 </div>
               ) : isMaintenanceMode ? (
                 <div className="bg-orange-50 border border-orange-200 rounded-lg p-6 mb-4" data-testid="maintenance-notice">
