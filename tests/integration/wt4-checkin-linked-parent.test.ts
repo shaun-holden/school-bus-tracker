@@ -32,7 +32,7 @@ beforeEach(async () => {
 });
 
 describe('WT-4 check-in for a parent linked only by link code', () => {
-  it('enable → 200 and a waiting check-in in company A; disable → 200 and it is gone (red if the lookup goes back to getStudentsByParentId only)', async () => {
+  it('enable → 200 and a waiting check-in in company A; disable → 200 and it is gone (red if the check-in lookup stops reading links)', async () => {
     const on = await parentLinkA.post('/api/check-in/enable').send({ studentId: h.ids.studentA, deviceId: 'wt4-device' });
     expect(on.status).toBe(200);
     const rows = await checkInsFor(h.ids.studentA);

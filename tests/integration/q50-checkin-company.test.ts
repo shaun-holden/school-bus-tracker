@@ -52,7 +52,9 @@ describe('Q50 refusal', () => {
     const res = await parentB.post('/api/check-in/enable').send({ studentId: h.ids.studentA, deviceId: 'q50-dev' });
     expect(res.status).toBe(404);
     expect(res.body).toEqual(NOT_FOUND);
-    expect(await checkInsFor(h.ids.studentA)).toHaveLength(0);
+    // Q198: only parentB's rows, so this holds in any test order.
+    const rows = await h.db.select().from(studentCheckIns).where(and(eq(studentCheckIns.studentId, h.ids.studentA), eq(studentCheckIns.parentId, h.ids.parentB)));
+    expect(rows).toHaveLength(0);
     const dis = await parentB.post('/api/check-in/disable').send({ studentId: h.ids.studentA });
     expect(dis.status).toBe(404);
     expect(dis.body).toEqual(NOT_FOUND);

@@ -15,6 +15,7 @@
 //                 nullDirectKid (company A, routeA), NO link row.
 //   nullLinked    role parent, company NULL; linked to linkedKid (control).
 //   masterKid     company A, students.parentId = master, NO link row.
+//   masterLinkedKid company A, linked to master (the master's control).
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { eq, inArray, sql } from 'drizzle-orm';
 import { attendance, parentChildLinks, studentAttendance, studentCheckIns, students, systemNotifications, users } from '@shared/schema';
@@ -160,7 +161,7 @@ describe('Q192 parent screens use links only', () => {
   ] as const;
 
   for (const site of lists) {
-    const why = site.former ? SHORTCUT : 'regression pin: this read was already link-only';
+    const why = site.former ? SHORTCUT : 'red if `getParentChildren` reads `students.parentId` again';
     it(`a direct-only parent's ${site.name} leaves out the child; the linked parent's lists it (${why})`, async () => {
       const direct = await directParent.get(site.url);
       expect(direct.status).toBe(200);
@@ -171,10 +172,26 @@ describe('Q192 parent screens use links only', () => {
     });
   }
 
-  it(`a master who is students.parentId of a student (no link) doesn't get it from GET /api/parent/children-buses (${SHORTCUT})`, async () => {
-    const res = await master.get('/api/parent/children-buses');
-    expect(res.status).toBe(200);
-    expect(ids(res.body)).not.toContain(masterKid);
+  describe('a master on GET /api/parent/children-buses', () => {
+    let masterLinkedKid: string;
+
+    beforeAll(async () => {
+      // Q198 positive control: the master is linked to a second student.
+      masterLinkedKid = await mkKid('Q192-MasterLinkedKid', h.ids.adminA);
+      createdStudents.push(masterLinkedKid);
+      await h.db.insert(parentChildLinks).values({ parentId: h.ids.master, studentId: masterLinkedKid });
+    });
+
+    it(`a master who is students.parentId of a student (no link) doesn't get it, but does get its linked student (${SHORTCUT})`, async () => {
+      expect((await linksOf(h.ids.master)).map((l) => l.studentId)).toEqual([masterLinkedKid]);
+      expect(await studentRow(masterKid)).toMatchObject({ companyId: h.ids.companyA, parentId: h.ids.master });
+      const me = await master.get('/api/auth/user');
+      expect(me.body).toMatchObject({ role: 'master_admin', companyId: null });
+      const res = await master.get('/api/parent/children-buses');
+      expect(res.status).toBe(200);
+      expect(ids(res.body)).toContain(masterLinkedKid);
+      expect(ids(res.body)).not.toContain(masterKid);
+    });
   });
 
   it(`a direct-only parent: POST absence → 404 "Student not found", no row; the linked parent → 200 (${SHORTCUT})`, async () => {
@@ -244,6 +261,39 @@ describe('Q192 storage paths use links only', () => {
   it('filterPushRecipients for company A drops the NULL-company direct-only parent and keeps the NULL-company linked parent (red if the students.parentId OR comes back in filterPushRecipients)', async () => {
     const kept = await storage.filterPushRecipients([nullDirectId, nullLinkedId], h.ids.companyA);
     expect(kept).toEqual([nullLinkedId]);
+  });
+});
+
+describe('Q192 route events use links only', () => {
+  const TITLE = 'Bus Arrived at School';
+  let driverA: Agent;
+
+  beforeAll(async () => {
+    // Q114: shift writes need the driver on duty (seeded off duty).
+    await h.db.update(users).set({ isOnDuty: true, dutyStartTime: new Date() }).where(eq(users.id, h.ids.driverA));
+    // 5th login (MAX_LOGINS_PER_FILE is 8).
+    driverA = await h.loginAs('driverA');
+  });
+
+  afterAll(async () => {
+    await h.db.delete(systemNotifications).where(eq(systemNotifications.title, TITLE));
+    await h.db.update(users).set({ isOnDuty: false, dutyStartTime: null }).where(eq(users.id, h.ids.driverA));
+  });
+
+  it('a driver arrival at schoolA on routeA writes a row for the linked parent and none for the same-company direct-only parent (red if `routeParentRows` reads `students.parentId` again)', async () => {
+    const [drv] = await h.db.select().from(users).where(eq(users.id, h.ids.driverA));
+    expect(drv).toMatchObject({ companyId: h.ids.companyA, assignedRouteId: h.ids.routeA, isOnDuty: true });
+    expect(await studentRow(directKid)).toMatchObject({ companyId: h.ids.companyA, routeId: h.ids.routeA, schoolId: h.ids.schoolA, parentId: directParentId });
+    expect(await linksOf(directParentId)).toHaveLength(0);
+    const [dp] = await h.db.select().from(users).where(eq(users.id, directParentId));
+    expect(dp).toMatchObject({ role: 'parent', companyId: h.ids.companyA });
+    expect(await studentRow(linkedKid)).toMatchObject({ companyId: h.ids.companyA, routeId: h.ids.routeA, schoolId: h.ids.schoolA });
+
+    const res = await driverA.post('/api/driver-school-arrival').send({ schoolId: h.ids.schoolA });
+    expect(res.status).toBe(200);
+    const rows = await h.db.select().from(systemNotifications).where(eq(systemNotifications.title, TITLE));
+    expect(rows.filter((r) => r.recipientId === linkedParentId)).toHaveLength(1);
+    expect(rows.filter((r) => r.recipientId === directParentId)).toHaveLength(0);
   });
 });
 

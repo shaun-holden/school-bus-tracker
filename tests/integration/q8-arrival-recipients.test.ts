@@ -143,7 +143,7 @@ describe('Q8 A2 + A5 recipients of an arrival at schoolA on routeA', () => {
     expect(rows.map((r) => r.message)).toEqual(['The bus has arrived at A-School for A-Student']);
   });
 
-  it('adminA, the students.parentId of A-Student4, gets 0 rows (red if a `students.parentId` branch comes back)', async () => {
+  it('adminA, the students.parentId of A-Student4, gets 0 rows (red if a `students.parentId` branch comes back without its role/company checks; the links-only pin is q89 B4)', async () => {
     expect((await arrivalRows()).filter((r) => r.recipientId === h.ids.adminA)).toHaveLength(0);
   });
 });
@@ -165,7 +165,7 @@ describe('Q8 round 2: arrival recipients, parent company and role', () => {
   const titled = (res: { body: Array<{ title: string; message: string }> }, name: string) =>
     res.body.filter((n) => n.title === TITLE && n.message.includes(name));
 
-  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if a `students.parentId` branch comes back)', async () => {
+  it('parentB (company B) as students.parentId of A-ShortB, no link, gets 0 rows in the DB and in GET (red if a `students.parentId` branch comes back without its role/company checks; the links-only pin is q89 B4)', async () => {
     const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.parentB);
     expect(rows).toHaveLength(0);
     const res = await parentB.get('/api/system-notifications');
@@ -174,7 +174,7 @@ describe('Q8 round 2: arrival recipients, parent company and role', () => {
     expect(r2.studentShortB).toBeTruthy();
   });
 
-  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if a `students.parentId` branch comes back)', async () => {
+  it('null-company parentNull as students.parentId of A-ShortNull, no link, gets no A-ShortNull row in the DB or in GET (red if a `students.parentId` branch comes back without its role/company checks; the links-only pin is q89 B4)', async () => {
     const rows = (await arrivalRows()).filter((r) => r.recipientId === h.ids.parentNull && r.message.includes('A-ShortNull'));
     expect(rows).toHaveLength(0);
     const res = await parentNull.get('/api/system-notifications');
