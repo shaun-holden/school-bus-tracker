@@ -158,13 +158,13 @@ All share the password you entered as `STAGING_SEED_PASSWORD`. It isn't stored a
 | `driver_admin-1@staging-alpha.example.invalid` | driver_admin | A | drives route A2 / bus A-02 |
 | `driver-1@staging-alpha.example.invalid` | driver | A | drives route A1 / bus A-01 |
 | `driver-2@staging-alpha.example.invalid` | driver | A | **inactive** |
-| `parent-1@staging-alpha.example.invalid` | parent | A | direct parent of all 3 students |
+| `parent-1@staging-alpha.example.invalid` | parent | A | `students.parentId` of all 3 students, which grants nothing since Q192: sees no children until it redeems a link code |
 | `parent-2@staging-alpha.example.invalid` | parent | A | linked to 1 student ONLY via a parent-child link |
 | `admin-1@staging-bravo.example.invalid` | admin | B, Staging Bravo (America/Los_Angeles) | |
 | `driver_admin-1@staging-bravo.example.invalid` | driver_admin | B | drives route B2 / bus B-02 |
 | `driver-1@staging-bravo.example.invalid` | driver | B | drives route B1 / bus B-01 |
 | `driver-2@staging-bravo.example.invalid` | driver | B | **inactive** |
-| `parent-1@staging-bravo.example.invalid` | parent | B | direct parent of all 3 students |
+| `parent-1@staging-bravo.example.invalid` | parent | B | `students.parentId` of all 3 students, which grants nothing since Q192: sees no children until it redeems a link code |
 | `parent-2@staging-bravo.example.invalid` | parent | B | linked to 1 student ONLY via a parent-child link |
 | `admin-1@staging-pending.example.invalid` | admin | C, pending approval | should land on the pending page |
 | `admin-1@staging-suspended.example.invalid` | admin | D, suspended | should be logged out / blocked |
@@ -174,6 +174,7 @@ All share the password you entered as `STAGING_SEED_PASSWORD`. It isn't stored a
 Districts A and B each also get:
 - 1 school;
 - 2 routes with 3 stops each;
+- each route linked to its school (route_schools);
 - 2 buses (`A-01`/`A-02`, `B-01`/`B-02`);
 - 3 students;
 - 1 active link code (`STA-000001` / `STB-000001`, valid 365 days). Each reseed resets it to active and 0 uses.
