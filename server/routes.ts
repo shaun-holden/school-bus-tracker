@@ -3116,7 +3116,10 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(403).json({ message: "Unauthorized - admin access required" });
       }
 
-      const validatedData = insertStudentSchema.parse(req.body);
+      // Q196: parentId is always the caller's own id; a body parentId is ignored.
+      // So checkStudentForeignKeys' parentId branch can no longer fire on POST
+      // (PUT still uses it).
+      const validatedData = insertStudentSchema.parse({ ...req.body, parentId: userId });
 
       // Force tenant scope from session; never trust client-supplied companyId.
       // (Previously this only set companyId when absent — attacker could supply

@@ -61,12 +61,12 @@ describe('Q188 (a) no student data in the browser console', () => {
 describe('Q188 (b) labelled row buttons', () => {
   it('Edit and Delete on the student row have aria-label and title (red if an icon button loses its label)', () => {
     const edit = openTagTo(SRC, 'data-testid={`button-edit-student-${student.id}`}');
-    expect(edit.startsWith('<Button')).toBe(true);
+    expect(edit).toMatch(/^<Button\s/);
     expect(edit).toMatch(/aria-label="Edit student"/);
     expect(edit).toMatch(/title="Edit student"/);
 
     const del = openTagTo(SRC, 'data-testid={`button-delete-student-${student.id}`}');
-    expect(del.startsWith('<Button')).toBe(true);
+    expect(del).toMatch(/^<Button\s/);
     expect(del).toMatch(/aria-label="Delete student"/);
     expect(del).toMatch(/title="Delete student"/);
   });
@@ -78,7 +78,7 @@ describe('Q188 (c) the Delete dialog waits for the answer', () => {
     expect(dlg).not.toMatch(/<AlertDialogAction\b/);
 
     const btn = openTagTo(dlg, 'data-testid="button-delete-student-permanently"');
-    expect(btn.startsWith('<Button')).toBe(true);
+    expect(btn).toMatch(/^<Button\s/);
     expect(btn).toMatch(/deleteStudentMutation\.mutate\(/);
     expect(btn).not.toMatch(/setStudentToDelete\(null\)/);
     expect(dlg).toMatch(/deleteStudentMutation\.isPending \? "Deleting\.\.\." : "Delete permanently"/);
@@ -91,5 +91,30 @@ describe('Q188 (c) the Delete dialog waits for the answer', () => {
     expect(root).toMatch(/onOpenChange=/);
     expect(root).toMatch(/!deleteStudentMutation\.isPending/);
     expect(root).toMatch(/!markStudentInactiveMutation\.isPending/);
+  });
+
+  // Q191: pins SHELL's Q188 gaps.
+  it('delete onError has no setStudentToDelete( (red if a refused delete closes the dialog)', () => {
+    const del = declBlock('deleteStudentMutation');
+    expect(del.indexOf('onError:'), 'no onError').toBeGreaterThan(-1);
+    const onError = del.slice(del.indexOf('onError:'));
+    expect(onError).toMatch(/toast\(/);
+    expect(onError).not.toMatch(/setStudentToDelete\(/);
+  });
+
+  it('Cancel, Mark inactive and Delete permanently are each disabled while either mutation is pending (red if a button loses an isPending name in disabled)', () => {
+    const dlg = dialogBlock('Delete Student Dialog');
+    for (const id of [
+      'button-cancel-delete-student',
+      'button-mark-inactive-instead',
+      'button-delete-student-permanently',
+    ]) {
+      const tag = openTagTo(dlg, `data-testid="${id}"`);
+      expect(tag, id).toMatch(/^<Button\s/);
+      const disabled = tag.match(/disabled=\{([^}]*)\}/);
+      expect(disabled, `${id}: no disabled`).not.toBeNull();
+      expect(disabled![1], id).toMatch(/deleteStudentMutation\.isPending/);
+      expect(disabled![1], id).toMatch(/markStudentInactiveMutation\.isPending/);
+    }
   });
 });

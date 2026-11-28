@@ -68,7 +68,6 @@ const studentSchema = z.object({
   firstName: z.string().min(1, "First name is required"),
   lastName: z.string().min(1, "Last name is required"),
   grade: z.string().optional(),
-  parentId: z.string().min(1, "Parent ID is required"),
   schoolId: z.string().optional(),
   routeId: z.string().optional(),
   isActive: z.boolean().default(true),
@@ -1508,7 +1507,6 @@ export default function AdminDashboard() {
       firstName: "",
       lastName: "",
       grade: "",
-      parentId: user?.id || "demo-parent-id",
       schoolId: "",
       routeId: "",
       isActive: true,
@@ -1521,7 +1519,6 @@ export default function AdminDashboard() {
       firstName: "",
       lastName: "",
       grade: "",
-      parentId: "",
       schoolId: "",
       routeId: "",
       isActive: true,
@@ -1809,7 +1806,6 @@ export default function AdminDashboard() {
         firstName: "",
         lastName: "",
         grade: "",
-        parentId: user?.id || "demo-parent-id",
         schoolId: "",
         routeId: "",
         isActive: true,
@@ -1993,8 +1989,8 @@ export default function AdminDashboard() {
       queryClient.invalidateQueries({ queryKey: ["/api/students"] });
       setStudentToDelete(null);
       toast({
-        title: "Student updated",
-        description: `${student.firstName} marked inactive`,
+        title: "Marked inactive",
+        description: `${student.firstName} ${student.lastName} is now inactive`,
       });
     },
     onError: (error) => {
@@ -2024,7 +2020,6 @@ export default function AdminDashboard() {
       firstName: student.firstName,
       lastName: student.lastName,
       grade: student.grade || "",
-      parentId: student.parentId,
       schoolId: student.schoolId || "",
       routeId: student.routeId || "",
       // Q180: NULL counts as active (the column is nullable), so the form never fails silently
@@ -2954,7 +2949,7 @@ export default function AdminDashboard() {
 
         {/* Main Content Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="flex flex-wrap gap-1 h-auto p-1 sticky top-16 z-40 bg-background shadow-sm">
+          <TabsList className="flex flex-wrap gap-1 h-auto p-1 md:sticky md:top-16 z-40 bg-background shadow-sm">
             <TabsTrigger value="fleet">Fleet Management</TabsTrigger>
             <TabsTrigger value="live-map" className="flex items-center">
               <MapPin className="w-4 h-4 mr-1" />
@@ -4564,20 +4559,51 @@ export default function AdminDashboard() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>Name</TableHead>
+                        <TableHead className="sticky left-0 z-10 bg-background">Name</TableHead>
+                        <TableHead>Actions</TableHead>
                         <TableHead>Grade</TableHead>
                         <TableHead>School</TableHead>
                         <TableHead>Route</TableHead>
                         <TableHead>Status</TableHead>
-                        <TableHead>Actions</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {Array.isArray(students) && students.length > 0 ? (
                         students.map((student: any) => (
                           <TableRow key={student.id}>
-                            <TableCell className="font-medium" data-testid={`student-name-${student.id}`}>
+                            <TableCell className="font-medium sticky left-0 z-10 bg-background" data-testid={`student-name-${student.id}`}>
                               {student.firstName} {student.lastName}
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex space-x-2">
+                                <LinkCodeButton student={student} />
+                                <Button 
+                                  variant="outline" 
+                                  size="sm"
+                                  onClick={() => handleEditStudent(student)}
+                                  aria-label="Edit student"
+                                  title="Edit student"
+                                  data-testid={`button-edit-student-${student.id}`}
+                                >
+                                  <Edit className="w-4 h-4" />
+                                </Button>
+                                <Button 
+                                  variant="outline" 
+                                  size="sm"
+                                  onClick={() => handleDeleteStudent(student)}
+                                  aria-label="Delete student"
+                                  title="Delete student"
+                                  disabled={deleteStudentMutation.isPending}
+                                  className="text-red-500 hover:text-red-700"
+                                  data-testid={`button-delete-student-${student.id}`}
+                                >
+                                  {deleteStudentMutation.isPending && deleteStudentMutation.variables === student.id ? (
+                                    <Loader2 className="w-4 h-4 animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-4 h-4" />
+                                  )}
+                                </Button>
+                              </div>
                             </TableCell>
                             <TableCell>{student.grade || 'N/A'}</TableCell>
                             <TableCell>
@@ -4614,37 +4640,6 @@ export default function AdminDashboard() {
                               <Badge variant={student.isActive !== false ? "default" : "secondary"} data-testid={`badge-student-status-${student.id}`}>
                                 {student.isActive !== false ? "Active" : "Inactive"}
                               </Badge>
-                            </TableCell>
-                            <TableCell>
-                              <div className="flex space-x-2">
-                                <LinkCodeButton student={student} />
-                                <Button 
-                                  variant="outline" 
-                                  size="sm"
-                                  onClick={() => handleEditStudent(student)}
-                                  aria-label="Edit student"
-                                  title="Edit student"
-                                  data-testid={`button-edit-student-${student.id}`}
-                                >
-                                  <Edit className="w-4 h-4" />
-                                </Button>
-                                <Button 
-                                  variant="outline" 
-                                  size="sm"
-                                  onClick={() => handleDeleteStudent(student)}
-                                  aria-label="Delete student"
-                                  title="Delete student"
-                                  disabled={deleteStudentMutation.isPending}
-                                  className="text-red-500 hover:text-red-700"
-                                  data-testid={`button-delete-student-${student.id}`}
-                                >
-                                  {deleteStudentMutation.isPending && deleteStudentMutation.variables === student.id ? (
-                                    <Loader2 className="w-4 h-4 animate-spin" />
-                                  ) : (
-                                    <Trash2 className="w-4 h-4" />
-                                  )}
-                                </Button>
-                              </div>
                             </TableCell>
                           </TableRow>
                         ))
@@ -6740,37 +6735,19 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <FormField
-                  control={studentForm.control}
-                  name="grade"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Grade (Optional)</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="e.g. 5th Grade" data-testid="input-student-grade" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={studentForm.control}
-                  name="parentId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Parent ID *</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="Parent's user ID" data-testid="input-student-parent-id" />
-                      </FormControl>
-                      <FormMessage />
-                      <p className="text-xs text-muted-foreground">
-                        Current user ID: {user?.id || 'Not logged in'}
-                      </p>
-                    </FormItem>
-                  )}
-                />
-              </div>
+              <FormField
+                control={studentForm.control}
+                name="grade"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Grade (Optional)</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder="e.g. 5th Grade" data-testid="input-student-grade" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <FormField
                 control={studentForm.control}
@@ -6893,34 +6870,19 @@ export default function AdminDashboard() {
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
-                <FormField
-                  control={editStudentForm.control}
-                  name="grade"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Grade (Optional)</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="e.g. 5th Grade" data-testid="edit-input-student-grade" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-                <FormField
-                  control={editStudentForm.control}
-                  name="parentId"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel>Parent ID *</FormLabel>
-                      <FormControl>
-                        <Input {...field} placeholder="Parent's user ID" data-testid="edit-input-student-parent-id" />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
+              <FormField
+                control={editStudentForm.control}
+                name="grade"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Grade (Optional)</FormLabel>
+                    <FormControl>
+                      <Input {...field} placeholder="e.g. 5th Grade" data-testid="edit-input-student-grade" />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
 
               <FormField
                 control={editStudentForm.control}
